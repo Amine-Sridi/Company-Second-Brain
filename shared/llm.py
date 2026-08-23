@@ -7,6 +7,7 @@ Prompt text is intentionally excluded from error messages to avoid PII leakage.
 """
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import os
@@ -34,6 +35,12 @@ class LLMProvider(ABC):
         self, prompt: str, schema: type[T], *, model: str | None = None
     ) -> T:
         """Return a validated Pydantic model instance from the model's JSON output."""
+
+    @abstractmethod
+    async def embed_text(
+        self, text: str, *, model: str | None = None, dimensions: int = 768
+    ) -> list[float]:
+        """Return an embedding vector for text."""
 
 
 class GeminiProvider(LLMProvider):
@@ -139,4 +146,27 @@ class GeminiProvider(LLMProvider):
         except Exception as exc:
             raise LLMProviderError(
                 f"Gemini ({target}) generate_structured failed: {type(exc).__name__}: {exc}"
+            ) from exc
+
+    async def embed_text(
+        self, text: str, *, model: str | None = None, dimensions: int = 768
+    ) -> list[float]:
+        target = model or "gemini-embedding-001"
+        try:
+            loop = asyncio.get_running_loop()
+            result = await loop.run_in_executor(
+                None,
+                lambda: self._client.models.embed_content(
+                    model=target,
+                    contents=text,
+                    config=self._types.EmbedContentConfig(output_dimensionality=dimensions),
+                ),
+            )
+            values = result.embeddings[0].values
+            return list(values)
+        except LLMProviderError:
+            raise
+        except Exception as exc:
+            raise LLMProviderError(
+                f"Gemini ({target}) embed_text failed: {type(exc).__name__}: {exc}"
             ) from exc

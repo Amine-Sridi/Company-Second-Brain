@@ -24,7 +24,8 @@ services:
 
   resume-intelligence:
     build:
-      context: ../services/resume-intelligence
+      context: ..
+      dockerfile: services/resume-intelligence/Dockerfile
     container_name: csb-resume-intelligence
     env_file:
       - ../services/resume-intelligence/.env
@@ -42,7 +43,8 @@ services:
 
   second-brain:
     build:
-      context: ../services/second-brain
+      context: ..
+      dockerfile: services/second-brain/Dockerfile
     container_name: csb-second-brain
     env_file:
       - ../services/second-brain/.env
@@ -60,7 +62,8 @@ services:
 
   recruitment-workflow:
     build:
-      context: ../services/recruitment-workflow
+      context: ..
+      dockerfile: services/recruitment-workflow/Dockerfile
     container_name: csb-recruitment-workflow
     env_file:
       - ../services/recruitment-workflow/.env

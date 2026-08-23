@@ -26,20 +26,45 @@ implementation — see the bootstrap instructions.
 - FastAPI skeletons (`GET /health` x4): **DONE** for resume-intelligence, second-brain,
   recruitment-workflow. `GET /health` added to VoiceHR's existing main.py. All three new
   services built, started, and returned `{"status":"ok","service":"<name>"}` on `GET /health`
-  against the live Docker stack. VoiceHR Dockerfile created and syntactically correct, but
-  `docker compose up --build voicehr` causes Docker daemon to crash (OOM / disk pressure —
-  only 18.5 GB free; pipecat-ai pulls ~4–5 GB of PyTorch layers). VoiceHR container is NOT
-  yet verified running. All other verification targets met.
-- Shared Pydantic schemas (`extra="forbid"`): **NOT STARTED**
+  against the live Docker stack. VoiceHR container also built and running —
+  `GET /health` returns `{"status":"ok","service":"voicehr"}` confirmed via container exec.
+  All verification targets met.
+- Shared Pydantic schemas (`extra="forbid"`): **DONE** — `shared/schemas/__init__.py`:
+  `CandidateSummary`, `ContactLookupResponse`, `RetrieveCandidatesRequest/Response`,
+  `CandidateMatch`, `InvitationRequest/Response`, `InterviewAssessment`, `WebhookPayload`.
+  All models use `ConfigDict(extra="forbid")`. PII fields (name, email, phone) present only in
+  `ContactLookupResponse` and `InvitationRequest`; all other schemas reject them.
+  41 schema unit tests in `tests/unit/test_schemas.py`; all 63 unit tests pass.
 - Gemini API key wiring: **NOT STARTED**
 - `LLMProvider` interface: **DONE** — `shared/llm.py`: `LLMProviderError`, abstract `LLMProvider`
-  (`generate_text`, `generate_structured`), `GeminiProvider` (Gemini 2.5 Flash default, mirrors
-  `google-genai==2.18.0` pattern from VoiceHR). 18 unit tests pass (`tests/unit/test_llm.py`);
-  `py_compile` clean. **Live Gemini API not verified** — no `GEMINI_API_KEY` in the authoring
-  environment. `google-genai` is not yet in the three new services' `requirements.txt` — will be
-  added during the FastAPI skeleton step.
-- Resume Intelligence candidates table + dedup + contact endpoint: **NOT STARTED**
-- Second Brain knowledge upsert + pgvector embedding: **NOT STARTED**
+  (`generate_text`, `generate_structured`, `embed_text`), `GeminiProvider` (Gemini 2.5 Flash
+  default for text; `gemini-embedding-001` for embeddings via `loop.run_in_executor` wrapping
+  the sync `client.models.embed_content`). 22 unit tests pass (`tests/unit/test_llm.py`).
+  **Live Gemini API not verified** — `GEMINI_API_KEY` is empty in all service `.env` files.
+- Resume Intelligence candidates table + dedup + contact endpoint: **DONE** — `resume_intel.candidates`
+  table created by Alembic migration `0002` (UUID PK, `email_normalized TEXT UNIQUE`, JSONB,
+  TIMESTAMPTZ). `store_candidate` in `db.py` does normalized-email dedup (strip + lower). FastAPI
+  `api.py` exposes `POST /v1/resumes` (upload + parse + store) and
+  `GET /v1/candidates/{candidate_id}/contact` (service-key auth via `x-api-key` header).
+  `ContactLookupResponse` from shared schemas is the response model. Migration confirmed running
+  inside container. All 20 integration tests pass inside the container (`pytest` run in
+  `csb-resume-intelligence`). Limitations: host-side psycopg cannot reach Docker Postgres due to
+  Docker Desktop WSL2 network intercepting port 5432 before pg_hba.conf applies — tests must run
+  inside the container. VoiceHR container still not built (disk constraint, see Known Limitations).
+- Second Brain knowledge upsert + pgvector embedding: **DONE** — `second_brain.candidate_knowledge`
+  table created by Alembic migration `0002` (`candidate_id UUID PK`, `skills/job_titles JSONB`,
+  `raw_text TEXT`, `source_version TEXT`, `embedding vector(768) NOT NULL`, timestamps). HNSW
+  index on `embedding` using `vector_cosine_ops`. `db.py`: `CandidateKnowledge` ORM model,
+  `upsert_candidate_knowledge` via PostgreSQL `ON CONFLICT DO UPDATE` (preserves `created_at`,
+  refreshes `updated_at`). `main.py`: `POST /v1/knowledge/candidates` with service-key auth,
+  validates `CandidateSummary` (PII rejected via `extra="forbid"` → 422), calls
+  `get_llm_provider()` (lazy singleton, 503 if no key), embeds `raw_text` via `embed_text`
+  (502 on failure), upserts to DB. 17 integration tests pass in `csb-second-brain` container
+  (valid ingestion, DB persistence, embedding stored, upsert idempotency, `created_at`
+  preserved, PII rejection for email/name/phone, missing/invalid payload, auth, embedding
+  failure 502). **Live Gemini embedding verified** — `POST /v1/knowledge/candidates` returned
+  200 with a real `gemini-embedding-001` key; `second_brain.vector_dims(embedding) = 768`
+  confirmed in the DB. The `vector(768)` column dimension is correct.
 - Nothing is BLOCKED.
 
 ## Known Limitations (discovered this session)
@@ -49,26 +74,23 @@ implementation — see the bootstrap instructions.
   will be placed into `services/resume-intelligence/` and `services/voicehr/` respectively.
   Per Rule 1, their actual code must be inspected once present, before Step 7 (extend Resume
   Intelligence) and before any VoiceHR API additions. This does not block earlier steps.
-- VoiceHR Docker build (`docker compose up --build voicehr`) crashes Docker Desktop due to
-  disk pressure: only 18.5 GB free, pipecat-ai[whisper,kokoro,ollama,elevenlabs] requires
-  ~4–5 GB of image layers (PyTorch, ctranslate2, etc.). Must free at least 10 GB before
-  attempting. VoiceHR Dockerfile and the `GET /health` route are correct — this is purely
-  a host resource constraint.
 - GEMINI_API_KEY has not been provided. Live `GeminiProvider` smoke test remains pending.
+- Host-side psycopg cannot reach Docker Postgres via `localhost:5432`: Docker Desktop's WSL2
+  network proxy intercepts port 5432 before pg_hba.conf applies, causing SCRAM-SHA-256 auth
+  failure regardless of pg_hba.conf settings. Integration tests must be run inside the container
+  via `docker exec csb-resume-intelligence python -m pytest /app/test_resume_intelligence.py -v`.
+  Workaround for migrations: `docker exec csb-resume-intelligence alembic upgrade head`.
 
 ## Exact Next Steps
 
-1. **[NEXT]** Define shared Pydantic schemas in `/shared/schemas`: `CandidateSummary`,
-   `ContactLookupResponse`, `RetrieveCandidatesRequest/Response`, `InvitationRequest/Response`,
-   `WebhookPayload` — all `extra="forbid"`. These are the cross-service contracts needed before
-   implementing any real endpoints.
-2. Resume Intelligence: candidates table, normalized-email dedup, `GET
-   /v1/candidates/{candidate_id}/contact` (service-key auth). **Requires actual ResumeParser
-   source — drop it into `services/resume-intelligence/` before this step.**
-3. Second Brain: `POST /v1/knowledge/candidates` (upsert, embed via gemini-embedding-001 into
-   a pgvector column with an HNSW index).
-4. **Deferred — free at least 10 GB disk before attempting:** `docker compose up --build voicehr`
-   to verify VoiceHR's container. The Dockerfile and `/health` addition are ready; the build
-   crashes Docker Desktop due to insufficient free disk (~18.5 GB free, pipecat-ai needs ~4–5 GB).
-   Run a live `GeminiProvider` smoke test once a `GEMINI_API_KEY` is available (neither has
-   been provided yet).
+1. **[NEXT]** Recruitment Workflow Service: JD structuring endpoint (`POST /v1/jobs`), hybrid
+   matching engine (deterministic + semantic scoring), `MatchResult` persistence (immutable,
+   with candidate_snapshot and scoring config version), recruiter decision endpoints
+   (`POST /v1/matches/{id}/accept`, `/reject`). JWT auth for recruiter endpoints; service-key
+   auth for internal RWS→Second Brain calls.
+2. VoiceHR integration: `external_reference_id` column on VoiceHR's session table, invitation
+   endpoint (`POST /v1/interviews/invite`), outbound HMAC-SHA256 signed webhook to RWS on
+   interview completion.
+3. **Deferred:** VoiceHR integration — `external_reference_id` on session table, invitation
+   endpoint, outbound HMAC-SHA256 signed webhook from VoiceHR to RWS. Inspect
+   `services/voicehr/` source before starting.

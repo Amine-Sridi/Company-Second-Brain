@@ -186,5 +186,54 @@ class TestGenerateStructured(unittest.TestCase):
         self.assertIn("properties", str(config_call_kwargs.get("response_json_schema", "")))
 
 
+class TestEmbedText(unittest.TestCase):
+    def _make_embed_provider(self, values: list[float] | None = None):
+        """Return (GeminiProvider, mock_client) wired for embed_text."""
+        from shared.llm import GeminiProvider
+
+        if values is None:
+            values = [0.1] * 768
+
+        mock_embedding = MagicMock()
+        mock_embedding.values = values
+
+        mock_embed_response = MagicMock()
+        mock_embed_response.embeddings = [mock_embedding]
+
+        mock_client = MagicMock()
+        mock_client.models.embed_content = MagicMock(return_value=mock_embed_response)
+
+        mock_types = MagicMock()
+        mock_types.EmbedContentConfig = MagicMock(return_value=MagicMock())
+
+        provider = GeminiProvider(api_key="test-key", _client=mock_client, _types=mock_types)
+        return provider, mock_client
+
+    def test_returns_list_of_floats(self):
+        provider, _ = self._make_embed_provider([0.5, 0.3, 0.2])
+        result = asyncio.run(provider.embed_text("hello"))
+        self.assertEqual(result, [0.5, 0.3, 0.2])
+        self.assertIsInstance(result, list)
+
+    def test_passes_model_to_api(self):
+        provider, mock_client = self._make_embed_provider()
+        asyncio.run(provider.embed_text("hello", model="gemini-embedding-001"))
+        call_kwargs = mock_client.models.embed_content.call_args.kwargs
+        self.assertEqual(call_kwargs["model"], "gemini-embedding-001")
+
+    def test_passes_dimensions_via_config(self):
+        provider, mock_client = self._make_embed_provider()
+        asyncio.run(provider.embed_text("hello", dimensions=512))
+        provider._types.EmbedContentConfig.assert_called_once_with(output_dimensionality=512)
+
+    def test_wraps_api_exception(self):
+        from shared.llm import LLMProviderError
+        provider, mock_client = self._make_embed_provider()
+        mock_client.models.embed_content = MagicMock(side_effect=RuntimeError("quota exceeded"))
+        with self.assertRaises(LLMProviderError) as ctx:
+            asyncio.run(provider.embed_text("hello"))
+        self.assertIn("embed_text failed", str(ctx.exception))
+
+
 if __name__ == "__main__":
     unittest.main()
