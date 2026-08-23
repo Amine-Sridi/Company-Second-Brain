@@ -1,0 +1,98 @@
+services:
+  postgres:
+    image: pgvector/pgvector:pg16
+    container_name: csb-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB}
+      # Read by infra/postgres/init/03_roles_and_grants.sh at first container init only.
+      RESUME_INTEL_ROLE_PASSWORD: ${RESUME_INTEL_ROLE_PASSWORD}
+      SECOND_BRAIN_ROLE_PASSWORD: ${SECOND_BRAIN_ROLE_PASSWORD}
+      RECRUITMENT_ROLE_PASSWORD: ${RECRUITMENT_ROLE_PASSWORD}
+    ports:
+      - "${POSTGRES_PORT:-5432}:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./postgres/init:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  resume-intelligence:
+    build:
+      context: ../services/resume-intelligence
+    container_name: csb-resume-intelligence
+    env_file:
+      - ../services/resume-intelligence/.env
+    depends_on:
+      postgres:
+        condition: service_healthy
+    ports:
+      - "${RESUME_INTELLIGENCE_PORT:-8001}:8000"
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://localhost:8000/health')\""]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 15s
+
+  second-brain:
+    build:
+      context: ../services/second-brain
+    container_name: csb-second-brain
+    env_file:
+      - ../services/second-brain/.env
+    depends_on:
+      postgres:
+        condition: service_healthy
+    ports:
+      - "${SECOND_BRAIN_PORT:-8002}:8000"
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://localhost:8000/health')\""]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 15s
+
+  recruitment-workflow:
+    build:
+      context: ../services/recruitment-workflow
+    container_name: csb-recruitment-workflow
+    env_file:
+      - ../services/recruitment-workflow/.env
+    depends_on:
+      postgres:
+        condition: service_healthy
+    ports:
+      - "${RECRUITMENT_WORKFLOW_PORT:-8003}:8000"
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://localhost:8000/health')\""]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 15s
+
+  voicehr:
+    build:
+      context: ../services/voicehr
+    container_name: csb-voicehr
+    env_file:
+      - ../services/voicehr/.env
+    volumes:
+      - voicehr_data:/app/storage
+    ports:
+      - "${VOICEHR_PORT:-8000}:8000"
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://localhost:8000/health')\""]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+
+volumes:
+  postgres_data:
+  voicehr_data:
