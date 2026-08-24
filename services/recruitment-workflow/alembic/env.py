@@ -18,8 +18,8 @@ config = context.config
 if config.config_file_name is not None:
     fileConfig(config.config_file_name)
 
-# No ORM models exist yet (Step 6 adds the candidates table). This first migration is
-# intentionally empty — it only proves the harness (connection, schema, role) works.
+# Migrations are hand-written raw SQL (see db.py for the matching ORM models used by
+# the application at runtime), so there is nothing to autogenerate against.
 target_metadata = None
 
 SCHEMA = "recruitment"

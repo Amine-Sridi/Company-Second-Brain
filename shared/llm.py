@@ -51,7 +51,7 @@ class GeminiProvider(LLMProvider):
     _client and _types are for unit testing only and are not part of the public API.
     """
 
-    DEFAULT_MODEL = "gemini-2.5-flash"
+    DEFAULT_MODEL = "gemini-3.6-flash"
 
     def __init__(
         self,

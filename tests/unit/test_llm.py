@@ -67,11 +67,11 @@ class TestGeminiProviderInit(unittest.TestCase):
             provider = GeminiProvider(_client=MagicMock(), _types=MagicMock())
         self.assertEqual(provider._default_model, GeminiProvider.DEFAULT_MODEL)
 
-    def test_default_model_is_gemini_25_flash(self):
+    def test_default_model_matches_class_constant(self):
         from shared.llm import GeminiProvider
         provider, _ = _make_provider()
-        self.assertEqual(provider._default_model, "gemini-2.5-flash")
-        self.assertEqual(GeminiProvider.DEFAULT_MODEL, "gemini-2.5-flash")
+        self.assertEqual(provider._default_model, GeminiProvider.DEFAULT_MODEL)
+        self.assertEqual(GeminiProvider.DEFAULT_MODEL, "gemini-3.6-flash")
 
     def test_custom_default_model(self):
         from shared.llm import GeminiProvider

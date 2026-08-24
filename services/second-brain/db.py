@@ -138,6 +138,17 @@ def upsert_candidate_knowledge(
     db.commit()
 
 
+def get_candidate_knowledge(
+    db: Session, candidate_id: uuid.UUID
+) -> Optional[CandidateKnowledge]:
+    """Fetch PII-free candidate knowledge by candidate_id, or None if not found."""
+    return (
+        db.query(CandidateKnowledge)
+        .filter(CandidateKnowledge.candidate_id == candidate_id)
+        .first()
+    )
+
+
 def search_candidates(
     db: Session,
     query_embedding: list[float],

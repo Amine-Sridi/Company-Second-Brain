@@ -8,13 +8,20 @@ this service must never receive, store, or log name/email/phone/address.
 from __future__ import annotations
 
 import logging
+import uuid
 from typing import Annotated
 
 from fastapi import Depends, FastAPI, Header, HTTPException
 from pydantic_settings import BaseSettings, SettingsConfigDict
 from sqlalchemy.orm import Session
 
-from db import EMBEDDING_DIMENSIONS, get_db, search_candidates, upsert_candidate_knowledge
+from db import (
+    EMBEDDING_DIMENSIONS,
+    get_candidate_knowledge,
+    get_db,
+    search_candidates,
+    upsert_candidate_knowledge,
+)
 from shared.schemas import (
     CandidateMatch,
     CandidateSummary,
@@ -111,6 +118,31 @@ async def ingest_candidate_knowledge(
         embedding=embedding,
     )
     return {"candidate_id": str(payload.candidate_id), "status": "ok"}
+
+
+@app.get("/v1/knowledge/candidates/{candidate_id}", response_model=CandidateSummary)
+def get_candidate(
+    candidate_id: uuid.UUID,
+    db: Session = Depends(get_db),
+    _auth: None = Depends(require_service_key),
+):
+    """
+    Return PII-free candidate knowledge by candidate_id. Used by RWS to fetch the
+    skills/experience/titles needed for deterministic scoring after semantic
+    retrieval has narrowed down candidates. Requires X-Api-Key service key.
+    """
+    row = get_candidate_knowledge(db, candidate_id)
+    if row is None:
+        raise HTTPException(status_code=404, detail="Candidate not found")
+
+    return CandidateSummary(
+        candidate_id=row.candidate_id,
+        skills=row.skills,
+        years_of_experience=row.years_of_experience,
+        job_titles=row.job_titles,
+        raw_text=row.raw_text,
+        source_version=row.source_version,
+    )
 
 
 @app.post("/v1/retrieve/candidates", response_model=RetrieveCandidatesResponse)

@@ -6,3 +6,5 @@ alembic==1.13.2
 sqlalchemy==2.0.32
 psycopg[binary]==3.2.1
 google-genai==2.18.0
+httpx
+pytest

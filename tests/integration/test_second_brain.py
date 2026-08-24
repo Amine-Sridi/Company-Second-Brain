@@ -263,6 +263,47 @@ def test_embedding_failure_returns_502(client_failing_llm):
 
 
 # ===========================================================================
+# Candidate detail lookup — GET /v1/knowledge/candidates/{candidate_id}
+# ===========================================================================
+
+_KNOWLEDGE_URL = "/v1/knowledge/candidates"
+
+
+def test_get_candidate_returns_stored_knowledge(client):
+    cid = str(uuid.uuid4())
+    client.post(
+        _INGEST_URL,
+        json=_make_payload(
+            candidate_id=cid,
+            skills=["Python", "SQL"],
+            years=4.0,
+            titles=["Backend Developer"],
+        ),
+        headers={"x-api-key": _VALID_KEY},
+    )
+
+    resp = client.get(f"{_KNOWLEDGE_URL}/{cid}", headers={"x-api-key": _VALID_KEY})
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["candidate_id"] == cid
+    assert body["skills"] == ["Python", "SQL"]
+    assert body["years_of_experience"] == 4.0
+    assert body["job_titles"] == ["Backend Developer"]
+
+
+def test_get_candidate_not_found_returns_404(client):
+    resp = client.get(
+        f"{_KNOWLEDGE_URL}/{uuid.uuid4()}", headers={"x-api-key": _VALID_KEY}
+    )
+    assert resp.status_code == 404
+
+
+def test_get_candidate_missing_key_returns_401(client):
+    resp = client.get(f"{_KNOWLEDGE_URL}/{uuid.uuid4()}")
+    assert resp.status_code == 401
+
+
+# ===========================================================================
 # Retrieval — POST /v1/retrieve/candidates
 # ===========================================================================
 
