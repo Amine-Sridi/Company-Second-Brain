@@ -65,6 +65,18 @@ implementation — see the bootstrap instructions.
   failure 502). **Live Gemini embedding verified** — `POST /v1/knowledge/candidates` returned
   200 with a real `gemini-embedding-001` key; `second_brain.vector_dims(embedding) = 768`
   confirmed in the DB. The `vector(768)` column dimension is correct.
+- Second Brain semantic retrieval: **DONE** — `search_candidates()` in `db.py` executes cosine
+  distance query via pgvector `<=>` operator with HNSW index, similarity = `GREATEST(0, LEAST(1,
+  1 - distance))`, supports `candidate_ids` filter. `main.py`: `POST /v1/retrieve/candidates`
+  validates `RetrieveCandidatesRequest` (PII rejected via `extra="forbid"` → 422), embeds
+  `query_text` via live Gemini (502 on failure), calls `search_candidates`, returns
+  `RetrieveCandidatesResponse` with `CandidateMatch` list. SQL uses vector literal embedded in
+  f-string (safe: model output, not user input) to avoid psycopg3 + `::vector` bind parameter
+  conflict. 34/34 integration tests pass in `csb-second-brain` (all 17 ingestion + 17 retrieval
+  tests including empty KB, top-k, ordering, clamping, `candidate_ids` filter, PII rejection,
+  auth, embedding failure). Conftest adds session-scoped `TRUNCATE` to prevent smoke-test row
+  leakage. **Live smoke test verified**: ingest → retrieve returns `similarity_score: 0.733`
+  from real `gemini-embedding-001` + pgvector cosine search.
 - Nothing is BLOCKED.
 
 ## Known Limitations (discovered this session)
@@ -83,7 +95,7 @@ implementation — see the bootstrap instructions.
 
 ## Exact Next Steps
 
-1. **[NEXT]** Recruitment Workflow Service: JD structuring endpoint (`POST /v1/jobs`), hybrid
+1. **[NEXT]** Recruitment Workflow Service (RWS): JD structuring endpoint (`POST /v1/jobs`), hybrid
    matching engine (deterministic + semantic scoring), `MatchResult` persistence (immutable,
    with candidate_snapshot and scoring config version), recruiter decision endpoints
    (`POST /v1/matches/{id}/accept`, `/reject`). JWT auth for recruiter endpoints; service-key

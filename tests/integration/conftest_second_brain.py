@@ -42,6 +42,16 @@ def test_engine():
     return create_engine(_TEST_DB_URL, pool_pre_ping=True)
 
 
+@pytest.fixture(scope="session", autouse=True)
+def truncate_candidate_knowledge(test_engine):
+    """Wipe any rows committed by previous smoke tests before the suite runs."""
+    from sqlalchemy import text
+    with test_engine.connect() as conn:
+        conn.execute(text("TRUNCATE second_brain.candidate_knowledge"))
+        conn.commit()
+    yield
+
+
 @pytest.fixture
 def db_session(test_engine):
     """Per-test transactional session — rolls back after each test."""

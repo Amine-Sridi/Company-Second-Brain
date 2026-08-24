@@ -14,8 +14,13 @@ from fastapi import Depends, FastAPI, Header, HTTPException
 from pydantic_settings import BaseSettings, SettingsConfigDict
 from sqlalchemy.orm import Session
 
-from db import EMBEDDING_DIMENSIONS, get_db, upsert_candidate_knowledge
-from shared.schemas import CandidateSummary
+from db import EMBEDDING_DIMENSIONS, get_db, search_candidates, upsert_candidate_knowledge
+from shared.schemas import (
+    CandidateMatch,
+    CandidateSummary,
+    RetrieveCandidatesRequest,
+    RetrieveCandidatesResponse,
+)
 from shared.llm import LLMProvider, LLMProviderError
 
 logging.basicConfig(level="INFO")
@@ -106,3 +111,41 @@ async def ingest_candidate_knowledge(
         embedding=embedding,
     )
     return {"candidate_id": str(payload.candidate_id), "status": "ok"}
+
+
+@app.post("/v1/retrieve/candidates", response_model=RetrieveCandidatesResponse)
+async def retrieve_candidates(
+    payload: RetrieveCandidatesRequest,
+    db: Session = Depends(get_db),
+    llm: LLMProvider = Depends(get_llm_provider),
+    _auth: None = Depends(require_service_key),
+):
+    """
+    Semantic recall: embed query_text and return top-k candidates by cosine similarity.
+
+    Responsibility is recall only — no qualification or scoring. Caller (RWS) applies
+    the hybrid scoring and threshold logic on top of these results.
+    RetrieveCandidatesRequest has extra="forbid", so PII fields are rejected at 422.
+    """
+    try:
+        query_embedding = await llm.embed_text(
+            payload.query_text,
+            model=settings.gemini_embedding_model,
+            dimensions=EMBEDDING_DIMENSIONS,
+        )
+    except LLMProviderError as exc:
+        raise HTTPException(status_code=502, detail=f"Embedding failed: {exc}")
+
+    matches = search_candidates(
+        db,
+        query_embedding=query_embedding,
+        top_k=payload.top_k,
+        candidate_ids=payload.candidate_ids,
+    )
+
+    return RetrieveCandidatesResponse(
+        matches=[
+            CandidateMatch(candidate_id=cid, similarity_score=score)
+            for cid, score in matches
+        ]
+    )

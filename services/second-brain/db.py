@@ -136,3 +136,53 @@ def upsert_candidate_knowledge(
     )
     db.execute(stmt)
     db.commit()
+
+
+def search_candidates(
+    db: Session,
+    query_embedding: list[float],
+    top_k: int,
+    candidate_ids: list[uuid.UUID] | None = None,
+) -> list[tuple[uuid.UUID, float]]:
+    """
+    Return up to top_k candidates ordered by cosine similarity (descending).
+
+    Uses the HNSW index on embedding via the <=> cosine-distance operator.
+    Similarity = 1 - cosine_distance, clamped to [0, 1] so negative cosine
+    similarities (anti-parallel embeddings) are floored to 0.
+
+    candidate_ids: when provided, restricts the search to that subset.
+    An empty list returns nothing immediately.
+    """
+    if candidate_ids is not None and len(candidate_ids) == 0:
+        return []
+
+    # Embed the query vector as a literal in the SQL string. This is safe
+    # because the values come from our own embedding model (a Python list of
+    # floats), not from user input. str(float) never produces quotes or SQL
+    # metacharacters. This avoids a psycopg3 + SQLAlchemy text() conflict
+    # where ::vector casts on bound parameters fail to compile.
+    vec_literal = "[" + ",".join(map(str, query_embedding)) + "]"
+
+    if candidate_ids:
+        # UUIDs are Pydantic-validated hex strings — safe to format directly.
+        placeholders = ", ".join(f"'{cid}'" for cid in candidate_ids)
+        sql = text(f"""
+            SELECT candidate_id,
+                   GREATEST(0.0, LEAST(1.0, 1.0 - (embedding <=> '{vec_literal}'::vector))) AS similarity
+            FROM second_brain.candidate_knowledge
+            WHERE candidate_id IN ({placeholders})
+            ORDER BY embedding <=> '{vec_literal}'::vector
+            LIMIT :top_k
+        """)
+    else:
+        sql = text(f"""
+            SELECT candidate_id,
+                   GREATEST(0.0, LEAST(1.0, 1.0 - (embedding <=> '{vec_literal}'::vector))) AS similarity
+            FROM second_brain.candidate_knowledge
+            ORDER BY embedding <=> '{vec_literal}'::vector
+            LIMIT :top_k
+        """)
+
+    rows = db.execute(sql, {"top_k": top_k}).fetchall()
+    return [(uuid.UUID(str(row.candidate_id)), float(row.similarity)) for row in rows]
