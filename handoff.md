@@ -145,6 +145,62 @@ implementation — see the bootstrap instructions.
     (`hard_gate_passed: false`, `qualified: false`) despite a `0.579` semantic score. Verified
     persisted correctly in `recruitment.match_results` via direct `psql` query and via
     `GET /v1/jobs/{job_id}/matches`.
+- Recruiter authentication + candidate selection/decision workflow: **DONE**.
+  - `services/recruitment-workflow/auth.py`: `hash_password`/`verify_password` (bcrypt),
+    `create_access_token`/`decode_access_token` (PyJWT, HS256, `exp`+`iat` claims). Fully
+    independent of `require_service_key` — a JWT is read from `Authorization: Bearer` and
+    verified against `JWT_SECRET`; a service key is read from `X-Api-Key` and compared
+    against `SERVICE_API_KEY`. Neither can satisfy the other's check (verified by tests in
+    both directions — see below).
+  - Migration `0003`: `recruiters` (email UNIQUE, `password_hash`, `name`), `applications`
+    (state machine: `selected` → `accepted` | `rejected`, `UNIQUE(job_id, candidate_id)`,
+    `UNIQUE(match_result_id)`, CHECK on `status`), `recruiter_decisions` (append-only audit
+    log, no update path anywhere in the code — only inserts). One recruiter is seeded by the
+    migration itself: it reads `SEED_RECRUITER_EMAIL`/`SEED_RECRUITER_PASSWORD` from the
+    environment, hashes the password with bcrypt at migration time, and inserts the row — no
+    plaintext or hash is ever hardcoded in the migration file. Ran clean against the live
+    Postgres container; confirmed via `\dt recruitment.*` (8 tables now) and a direct
+    `SELECT` on `recruiters`.
+  - `POST /v1/auth/login`: verifies bcrypt hash, issues a JWT with `JWT_EXPIRY_MINUTES`
+    expiry (default 45). Never accepts or checks `X-Api-Key`.
+  - `require_recruiter` dependency: parses `Authorization: Bearer`, decodes+verifies the
+    JWT, loads the `Recruiter` row by `sub` (401 if the token is missing/malformed/
+    expired/wrong-signature, or if the recruiter no longer exists).
+  - `POST /v1/jobs` and `GET /v1/jobs/{job_id}/matches` now require `require_recruiter`
+    (moved off `require_service_key`, per this session's task — closes the gap flagged in
+    the previous session's Known Limitations). `POST /v1/scoring-configs` deliberately
+    stays on `require_service_key`: it's a system/admin configuration action, not part of
+    the recruiter's day-to-day selection/decision workflow.
+  - Candidate selection + decisions (new `Application` state machine, forward-compatible
+    with the future VoiceHR-driven states — not implemented yet):
+    `POST /v1/matches/{match_id}/select` (creates an `Application` in `selected` state;
+    422 if the match isn't qualified; 409 on a duplicate selection for the same
+    `(job_id, candidate_id)`, enforced by a DB UNIQUE constraint rather than a
+    check-then-act race), `POST /v1/applications/{id}/accept` and `/reject` (atomic
+    conditional `UPDATE ... WHERE status = 'selected'`, so a duplicate/concurrent decision
+    call always gets 409 regardless of timing — the same code path is exercised whether the
+    two calls are truly simultaneous or sequential), `GET /v1/jobs/{job_id}/applications`
+    (recruiter-facing listing). Every successful accept/reject is recorded in
+    `recruiter_decisions` (recruiter_id, decision, previous/new status, timestamp) —
+    verified both by direct `psql` query and by dedicated tests.
+  - Tests: 10 unit tests for `auth.py` (`tests/unit/test_auth.py` — hash/verify roundtrip,
+    salting, JWT roundtrip, expiry, wrong secret, malformed/empty token) + 49 integration
+    tests in `tests/integration/test_recruitment_workflow.py` (up from 21 — added login
+    success/failure, expired/malformed/wrong-signature JWT rejection, protected-endpoint-
+    without-JWT, valid recruiter authorization, both directions of JWT-vs-service-key
+    separation, select/accept/reject happy paths, decision persistence + audit content,
+    disqualified-match selection rejected, duplicate selection 409, all four invalid state
+    transitions (accept-after-accept, reject-after-accept, accept-after-reject,
+    reject-after-reject), and an explicit check that a duplicate accept call does not
+    create a second audit row). All pass inside `csb-recruitment-workflow`. Full regression
+    after this work: 100/100 unit tests, 37/37 second-brain integration tests, 20/20
+    resume-intelligence integration tests, 49/49 RWS integration tests.
+  - **Live end-to-end smoke test verified** against real Postgres (no mocks): logged in as
+    the seeded recruiter, submitted a JD with a valid JWT (rejected with `x-api-key` alone
+    and with no auth at all), selected the qualified candidate's match, accepted the
+    application, confirmed the `recruiter_decisions` row via `psql`, and confirmed that a
+    second `accept` call, a `reject` after accept, and a duplicate `select` all correctly
+    returned 409. Selecting the disqualified candidate's match correctly returned 422.
 - Nothing is BLOCKED.
 
 ## Known Limitations (discovered this session)
@@ -172,11 +228,31 @@ implementation — see the bootstrap instructions.
 - No lint or type-check tooling (ruff/mypy/flake8/pylint) is configured anywhere in this repo —
   none was set up in prior sessions either. This session verified all new/changed files with
   `python -m py_compile` (syntax only) since no linter/type checker was available to run.
-- RWS's `POST /v1/jobs` uses `x-api-key` service-key auth, not JWT. The demo narrative describes
-  this as a recruiter action, so JWT auth (one seeded account, per CLAUDE.md) should be added
-  when the recruiter-decision-endpoints step is implemented — at that point it likely makes sense
-  to move JD submission behind JWT too, rather than leaving it on a different auth scheme than
-  `/v1/matches/{id}/accept`.
+- **Resolved this session**: RWS's `POST /v1/jobs` and `GET /v1/jobs/{job_id}/matches` now
+  require recruiter JWT (`require_recruiter`), not `x-api-key`. See the recruiter
+  authentication entry above.
+- Pydantic's `EmailStr` rejects the `.test` TLD as a "special-use or reserved name" (RFC 2606) —
+  the first seed-recruiter email chosen (`recruiter@company.test`) failed validation on every
+  login attempt with a 422 before this was caught by a live smoke test. Fixed by using
+  `recruiter@example.com` instead (a `.com` domain is not on Pydantic's reserved-TLD list, even
+  though `example.com` itself is also RFC-2606-reserved for documentation — Pydantic's `EmailStr`
+  only checks syntax/reserved-TLD, it does not do DNS deliverability checks, so this passes).
+  Worth remembering for any future seeded/placeholder email addresses in this project: avoid
+  `.test`, `.example`, `.invalid`, `.localhost` as TLDs.
+- The migration-seeded recruiter's plaintext password (`SEED_RECRUITER_PASSWORD` in `.env`) must
+  match exactly what integration tests use to log in (`SEED_RECRUITER_EMAIL`/`_PASSWORD` constants
+  in `tests/integration/conftest_recruitment_workflow.py`). If `.env`'s seed password is ever
+  changed, migration `0003` must be re-run against a fresh/downgraded database for the new hash
+  to take effect (`alembic downgrade 0002 && alembic upgrade head` — this drops and re-seeds
+  `recruiters`/`applications`/`recruiter_decisions`), and the test constants must be updated to
+  match, or login-dependent tests will fail with 401.
+- `services/second-brain`'s integration test suite truncates `second_brain.candidate_knowledge`
+  on every run (session-scoped autouse fixture, added last session to prevent smoke-test row
+  leakage between test runs). Running those tests wipes any live-smoke-test candidates ingested
+  earlier in the same session — discovered when a live RWS smoke test's candidates disappeared
+  after re-running Second Brain's test suite for regression-checking. Not a bug, just a reminder:
+  re-ingest live smoke-test candidates into Second Brain *after* running its test suite, not
+  before, if a subsequent RWS live smoke test needs them.
 - Second Brain's `RetrieveCandidatesResponse` was deliberately left unchanged (still only
   `candidate_id` + `similarity_score`); a new `GET /v1/knowledge/candidates/{candidate_id}`
   endpoint was added instead so RWS fetches candidate attributes in a second call. This means
@@ -186,13 +262,19 @@ implementation — see the bootstrap instructions.
 
 ## Exact Next Steps
 
-1. **[NEXT]** Recruiter decision endpoints + JWT auth: seed one recruiter account, JWT login,
-   `POST /v1/matches/{id}/accept` / `/reject`, and workflow state on `MatchResult`/`Application`.
-   Consider moving `POST /v1/jobs` behind JWT at the same time (see Known Limitations above).
-2. VoiceHR integration: `external_reference_id` column on VoiceHR's session table, invitation
-   endpoint (`POST /v1/interviews/invite`), outbound HMAC-SHA256 signed webhook to RWS on
-   interview completion. Inspect `services/voicehr/` source before starting (internals must not
-   be rewritten, only its API surface extended).
-3. LLM-generated match explanation (advisory only, generated *after* `final_score`/`qualified`
+1. **[NEXT]** VoiceHR integration: `external_reference_id` column on VoiceHR's session table
+   (should store/echo RWS's `application_id`), invitation endpoint (`POST /v1/interviews/invite`,
+   called by RWS once an `Application` is `selected` — this is the natural point in the state
+   machine to trigger it), outbound HMAC-SHA256 signed webhook from VoiceHR to RWS on interview
+   completion (`{application_id, interview_id, status, assessment}`, no audio/transcript). On the
+   RWS side this will likely mean adding `invited`/`interviewed` states to the `Application` state
+   machine between `selected` and the final `accepted`/`rejected` decision (the state machine was
+   deliberately designed to leave room for this — see `services/recruitment-workflow/db.py`'s
+   `Application` docstring). Inspect `services/voicehr/` source before starting — its internals
+   must not be rewritten, only its API surface extended.
+2. LLM-generated match explanation (advisory only, generated *after* `final_score`/`qualified`
    are persisted — per the architectural rule that the LLM never determines the score itself).
    Not yet started; not required until the recruiter-facing match view needs it.
+3. Knowledge feedback loop (per the end-to-end story: recruiter decision → knowledge feedback)
+   — not yet designed. Revisit once VoiceHR integration and real recruiter decisions exist to
+   feed back from.

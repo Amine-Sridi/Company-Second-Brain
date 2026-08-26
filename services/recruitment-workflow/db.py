@@ -22,6 +22,7 @@ from sqlalchemy import (
     create_engine,
     func,
     text,
+    update,
 )
 from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import DeclarativeBase, Session, sessionmaker
@@ -172,6 +173,87 @@ class MatchResult(Base):
     )
 
 
+class Recruiter(Base):
+    __tablename__ = "recruiters"
+    __table_args__ = {"schema": "recruitment"}
+
+    id: uuid.UUID = Column(
+        UUID(as_uuid=True), primary_key=True, server_default=text("gen_random_uuid()")
+    )
+    email: str = Column(Text, nullable=False, unique=True)
+    password_hash: str = Column(Text, nullable=False)
+    name: str = Column(Text, nullable=False)
+    created_at: datetime = Column(
+        DateTime(timezone=True), server_default=text("now()"), nullable=False
+    )
+
+
+class Application(Base):
+    """
+    Tracks one candidate's pipeline for one job, starting from a recruiter's selection
+    of a qualified MatchResult. State machine: selected -> accepted | rejected (terminal).
+    Future VoiceHR integration will add invited/interviewed states between selected and
+    the final decision -- not implemented yet, per current scope.
+    """
+
+    __tablename__ = "applications"
+    __table_args__ = {"schema": "recruitment"}
+
+    id: uuid.UUID = Column(
+        UUID(as_uuid=True), primary_key=True, server_default=text("gen_random_uuid()")
+    )
+    job_id: uuid.UUID = Column(
+        UUID(as_uuid=True), ForeignKey("recruitment.jobs.id"), nullable=False
+    )
+    match_result_id: uuid.UUID = Column(
+        UUID(as_uuid=True),
+        ForeignKey("recruitment.match_results.id"),
+        nullable=False,
+        unique=True,
+    )
+    candidate_id: uuid.UUID = Column(UUID(as_uuid=True), nullable=False)
+    status: str = Column(Text, nullable=False, server_default=text("'selected'"))
+    selected_by: uuid.UUID = Column(
+        UUID(as_uuid=True), ForeignKey("recruitment.recruiters.id"), nullable=False
+    )
+    selected_at: datetime = Column(
+        DateTime(timezone=True), server_default=text("now()"), nullable=False
+    )
+    decided_by: Optional[uuid.UUID] = Column(
+        UUID(as_uuid=True), ForeignKey("recruitment.recruiters.id"), nullable=True
+    )
+    decided_at: Optional[datetime] = Column(DateTime(timezone=True), nullable=True)
+    created_at: datetime = Column(
+        DateTime(timezone=True), server_default=text("now()"), nullable=False
+    )
+    updated_at: datetime = Column(
+        DateTime(timezone=True), server_default=text("now()"), nullable=False
+    )
+
+
+class RecruiterDecision(Base):
+    """Append-only audit log of every successful accept/reject transition."""
+
+    __tablename__ = "recruiter_decisions"
+    __table_args__ = {"schema": "recruitment"}
+
+    id: uuid.UUID = Column(
+        UUID(as_uuid=True), primary_key=True, server_default=text("gen_random_uuid()")
+    )
+    application_id: uuid.UUID = Column(
+        UUID(as_uuid=True), ForeignKey("recruitment.applications.id"), nullable=False
+    )
+    recruiter_id: uuid.UUID = Column(
+        UUID(as_uuid=True), ForeignKey("recruitment.recruiters.id"), nullable=False
+    )
+    decision: str = Column(Text, nullable=False)
+    previous_status: str = Column(Text, nullable=False)
+    new_status: str = Column(Text, nullable=False)
+    decided_at: datetime = Column(
+        DateTime(timezone=True), server_default=text("now()"), nullable=False
+    )
+
+
 # ---------------------------------------------------------------------------
 # Business logic
 # ---------------------------------------------------------------------------
@@ -303,3 +385,113 @@ def list_match_results_for_job(db: Session, job_id: uuid.UUID) -> list[MatchResu
         .order_by(MatchResult.final_score.desc())
         .all()
     )
+
+
+def get_match_result(db: Session, match_id: uuid.UUID) -> Optional[MatchResult]:
+    return db.query(MatchResult).filter(MatchResult.id == match_id).first()
+
+
+# ---------------------------------------------------------------------------
+# Recruiters
+# ---------------------------------------------------------------------------
+
+def get_recruiter_by_email(db: Session, email: str) -> Optional[Recruiter]:
+    return db.query(Recruiter).filter(Recruiter.email == email).first()
+
+
+def get_recruiter_by_id(db: Session, recruiter_id: uuid.UUID) -> Optional[Recruiter]:
+    return db.query(Recruiter).filter(Recruiter.id == recruiter_id).first()
+
+
+# ---------------------------------------------------------------------------
+# Applications (candidate selection + recruiter decisions)
+# ---------------------------------------------------------------------------
+
+def create_application(
+    db: Session,
+    job_id: uuid.UUID,
+    match_result_id: uuid.UUID,
+    candidate_id: uuid.UUID,
+    selected_by: uuid.UUID,
+) -> Application:
+    """
+    Create a new Application in the 'selected' state. Raises sqlalchemy.exc.IntegrityError
+    if this candidate was already selected for this job (job_id, candidate_id unique) or if
+    this match_result was already used to create an application (match_result_id unique) --
+    callers should catch this and translate it to a 409 Conflict rather than a check-then-act
+    race, since the uniqueness is enforced atomically by the database, not by application code.
+    """
+    application = Application(
+        job_id=job_id,
+        match_result_id=match_result_id,
+        candidate_id=candidate_id,
+        selected_by=selected_by,
+    )
+    db.add(application)
+    db.commit()
+    db.refresh(application)
+    return application
+
+
+def get_application(db: Session, application_id: uuid.UUID) -> Optional[Application]:
+    return db.query(Application).filter(Application.id == application_id).first()
+
+
+def list_applications_for_job(db: Session, job_id: uuid.UUID) -> list[Application]:
+    return (
+        db.query(Application)
+        .filter(Application.job_id == job_id)
+        .order_by(Application.selected_at.desc())
+        .all()
+    )
+
+
+def transition_application(
+    db: Session,
+    application_id: uuid.UUID,
+    recruiter_id: uuid.UUID,
+    decision: str,
+) -> Optional[Application]:
+    """
+    Atomically transition an application from 'selected' to 'accepted' or 'rejected',
+    recording an audit row on success.
+
+    Returns None if the application does not exist, or if it is not currently in the
+    'selected' state (already decided). The transition itself is a single conditional
+    UPDATE ... WHERE status = 'selected' -- this is what makes it safe under concurrent
+    duplicate requests: if two requests race, the database guarantees only one UPDATE
+    matches the WHERE clause and affects a row, regardless of request timing. The other
+    gets rowcount 0 and this function returns None for it.
+    """
+    current = get_application(db, application_id)
+    if current is None:
+        return None
+    previous_status = current.status
+
+    new_status = "accepted" if decision == "accept" else "rejected"
+    result = db.execute(
+        update(Application)
+        .where(Application.id == application_id, Application.status == "selected")
+        .values(
+            status=new_status,
+            decided_by=recruiter_id,
+            decided_at=func.now(),
+            updated_at=func.now(),
+        )
+    )
+    if result.rowcount == 0:
+        db.rollback()
+        return None
+
+    db.add(
+        RecruiterDecision(
+            application_id=application_id,
+            recruiter_id=recruiter_id,
+            decision=decision,
+            previous_status=previous_status,
+            new_status=new_status,
+        )
+    )
+    db.commit()
+    db.refresh(current)
+    return current

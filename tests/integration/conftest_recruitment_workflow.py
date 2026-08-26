@@ -35,6 +35,11 @@ _TEST_DB_URL = os.environ["DATABASE_URL"]
 
 _TEST_SERVICE_KEY = "test-service-key"
 
+# Must match SEED_RECRUITER_EMAIL / SEED_RECRUITER_PASSWORD used when the 0003 migration
+# was run against this database -- see services/recruitment-workflow/.env.
+SEED_RECRUITER_EMAIL = "recruiter@example.com"
+SEED_RECRUITER_PASSWORD = "ChangeMe123!"
+
 
 # ── Fixtures ──────────────────────────────────────────────────────────────────
 
@@ -45,11 +50,19 @@ def test_engine():
 
 @pytest.fixture(scope="session", autouse=True)
 def truncate_recruitment_tables(test_engine):
-    """Wipe matches/jobs before the suite runs; keep the seeded scoring_configs row."""
+    """
+    Wipe applications/matches/jobs before the suite runs; keep the seeded scoring_configs
+    row and the seeded recruiter (login tests depend on it). All tables with FKs into each
+    other must be listed in one TRUNCATE ... CASCADE, or Postgres rejects it.
+    """
     with test_engine.connect() as conn:
-        conn.execute(text("TRUNCATE recruitment.match_results"))
-        conn.execute(text("TRUNCATE recruitment.job_descriptions CASCADE"))
-        conn.execute(text("TRUNCATE recruitment.jobs CASCADE"))
+        conn.execute(
+            text(
+                "TRUNCATE recruitment.recruiter_decisions, recruitment.applications, "
+                "recruitment.match_results, recruitment.job_descriptions, recruitment.jobs "
+                "CASCADE"
+            )
+        )
         conn.commit()
     yield
 
@@ -138,6 +151,31 @@ def client_failing_llm(db_session):
 
     app.dependency_overrides.clear()
     settings.service_api_key = original_key
+
+
+@pytest.fixture
+def auth_headers(db_session) -> dict:
+    """
+    Returns {"Authorization": "Bearer <token>"} for the seeded recruiter.
+
+    Mints the token directly via auth.create_access_token rather than going through the
+    real HTTP /v1/auth/login endpoint, because this fixture only depends on db_session --
+    not on the `client` fixture -- so it works uniformly whether a test uses `client` or
+    `client_failing_llm` (both mutate the same module-level app.dependency_overrides, so
+    depending on `client` here would clobber overrides set by `client_failing_llm` in
+    tests that need both). The real login endpoint is exercised end-to-end by the
+    dedicated login tests below.
+    """
+    from auth import create_access_token
+    from db import get_recruiter_by_email
+    from main import settings
+
+    recruiter = get_recruiter_by_email(db_session, SEED_RECRUITER_EMAIL)
+    assert recruiter is not None, "seeded recruiter not found -- did migration 0003 run?"
+    token, _ = create_access_token(
+        recruiter.id, recruiter.email, settings.jwt_secret, settings.jwt_expiry_minutes
+    )
+    return {"Authorization": f"Bearer {token}"}
 
 
 @pytest.fixture

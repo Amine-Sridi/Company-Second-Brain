@@ -16,23 +16,36 @@ from typing import Annotated
 
 from fastapi import Depends, FastAPI, Header, HTTPException
 from pydantic_settings import BaseSettings, SettingsConfigDict
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 import clients
+from auth import InvalidTokenError, create_access_token, decode_access_token, verify_password
 from db import (
+    Recruiter,
+    create_application,
     create_job_with_description,
     create_match_result,
     create_scoring_config,
+    get_application,
     get_db,
     get_job,
     get_latest_scoring_config,
+    get_match_result,
+    get_recruiter_by_email,
+    get_recruiter_by_id,
     get_scoring_config_by_version,
+    list_applications_for_job,
     list_match_results_for_job,
+    transition_application,
 )
 from clients import SecondBrainClientError
 from schemas import (
+    ApplicationResponse,
     JobResponse,
     JobSubmissionRequest,
+    LoginRequest,
+    LoginResponse,
     MatchResultResponse,
     ScoringConfigRequest,
     ScoringConfigResponse,
@@ -56,8 +69,10 @@ class Settings(BaseSettings):
     second_brain_api_key: str = "changeme-second-brain-key"
     second_brain_url: str = "http://second-brain:8000"
     gemini_api_key: str = ""
-    gemini_model: str = "gemini-2.5-flash"
+    gemini_model: str = "gemini-3.6-flash"
     embedding_model_version: str = "gemini-embedding-001"
+    jwt_secret: str = "changeme-jwt-secret"
+    jwt_expiry_minutes: int = 45
     log_level: str = "INFO"
 
 
@@ -73,6 +88,38 @@ app = FastAPI(title="Recruitment Workflow Service")
 def require_service_key(x_api_key: Annotated[str | None, Header()] = None) -> None:
     if x_api_key != settings.service_api_key:
         raise HTTPException(status_code=401, detail="Invalid or missing service API key")
+
+
+def require_recruiter(
+    authorization: Annotated[str | None, Header()] = None,
+    db: Session = Depends(get_db),
+) -> Recruiter:
+    """
+    Recruiter-facing auth: a short-lived JWT in the Authorization: Bearer header.
+
+    Deliberately independent of require_service_key -- this reads a different header
+    (Authorization vs X-Api-Key) and verifies against a different secret (JWT_SECRET vs
+    SERVICE_API_KEY), so a service API key can never satisfy this check and a recruiter
+    JWT can never satisfy require_service_key.
+    """
+    if not authorization or not authorization.startswith("Bearer "):
+        raise HTTPException(status_code=401, detail="Missing or invalid Authorization header")
+
+    token = authorization.removeprefix("Bearer ").strip()
+    try:
+        payload = decode_access_token(token, settings.jwt_secret)
+    except InvalidTokenError:
+        raise HTTPException(status_code=401, detail="Invalid or expired token")
+
+    try:
+        recruiter_id = uuid.UUID(payload["sub"])
+    except (KeyError, ValueError):
+        raise HTTPException(status_code=401, detail="Invalid token payload")
+
+    recruiter = get_recruiter_by_id(db, recruiter_id)
+    if recruiter is None:
+        raise HTTPException(status_code=401, detail="Recruiter not found")
+    return recruiter
 
 
 _llm_provider: LLMProvider | None = None
@@ -121,12 +168,29 @@ def health():
     return {"status": "ok", "service": "recruitment-workflow"}
 
 
+@app.post("/v1/auth/login", response_model=LoginResponse)
+def login(payload: LoginRequest, db: Session = Depends(get_db)):
+    """
+    Recruiter login. One seeded account, no registration system (per architecture).
+    Returns a short-lived JWT (JWT_EXPIRY_MINUTES) -- never a service API key, and this
+    endpoint never accepts or checks X-Api-Key.
+    """
+    recruiter = get_recruiter_by_email(db, payload.email)
+    if recruiter is None or not verify_password(payload.password, recruiter.password_hash):
+        raise HTTPException(status_code=401, detail="Invalid email or password")
+
+    token, expires_at = create_access_token(
+        recruiter.id, recruiter.email, settings.jwt_secret, settings.jwt_expiry_minutes
+    )
+    return LoginResponse(access_token=token, expires_at=expires_at)
+
+
 @app.post("/v1/jobs", response_model=JobResponse, status_code=200)
 async def submit_job(
     payload: JobSubmissionRequest,
     db: Session = Depends(get_db),
     llm: LLMProvider = Depends(get_llm_provider),
-    _auth: None = Depends(require_service_key),
+    recruiter: Recruiter = Depends(require_recruiter),
 ):
     """
     Full JD-to-matches pipeline:
@@ -281,9 +345,9 @@ async def submit_job(
 def get_job_matches(
     job_id: uuid.UUID,
     db: Session = Depends(get_db),
-    _auth: None = Depends(require_service_key),
+    recruiter: Recruiter = Depends(require_recruiter),
 ):
-    """Read-only inspection of previously persisted MatchResults for a job."""
+    """Recruiter-facing: browse persisted MatchResults for a job before selecting one."""
     if get_job(db, job_id) is None:
         raise HTTPException(status_code=404, detail="Job not found")
 
@@ -336,3 +400,115 @@ def submit_scoring_config(
         title_weight=config.title_weight,
         created_at=config.created_at,
     )
+
+
+# ---------------------------------------------------------------------------
+# Candidate selection + recruiter decisions
+#
+# State machine: a MatchResult with qualified=True can be selected once, creating an
+# Application in the 'selected' state. From there a recruiter accepts or rejects it --
+# both are terminal. Future VoiceHR integration will insert invited/interviewed states
+# between selection and decision; not implemented yet, per current scope.
+# ---------------------------------------------------------------------------
+
+def _application_response(application) -> ApplicationResponse:
+    return ApplicationResponse(
+        application_id=application.id,
+        job_id=application.job_id,
+        match_result_id=application.match_result_id,
+        candidate_id=application.candidate_id,
+        status=application.status,
+        selected_at=application.selected_at,
+        decided_at=application.decided_at,
+    )
+
+
+@app.post(
+    "/v1/matches/{match_id}/select", response_model=ApplicationResponse, status_code=201
+)
+def select_candidate(
+    match_id: uuid.UUID,
+    db: Session = Depends(get_db),
+    recruiter: Recruiter = Depends(require_recruiter),
+):
+    """
+    Recruiter selects a qualified candidate to move forward, creating an Application.
+    Only qualified matches can be selected -- the hard gate and threshold decision made
+    at scoring time is not second-guessed here. One application per (job, candidate):
+    a duplicate selection (including a concurrent one -- see the applications_job_candidate_unique
+    constraint) is rejected as a conflict, not silently merged.
+    """
+    match = get_match_result(db, match_id)
+    if match is None:
+        raise HTTPException(status_code=404, detail="Match not found")
+    if not match.qualified:
+        raise HTTPException(
+            status_code=422, detail="Cannot select a candidate that did not qualify"
+        )
+
+    try:
+        application = create_application(
+            db,
+            job_id=match.job_id,
+            match_result_id=match.id,
+            candidate_id=match.candidate_id,
+            selected_by=recruiter.id,
+        )
+    except IntegrityError:
+        db.rollback()
+        raise HTTPException(
+            status_code=409, detail="This candidate has already been selected for this job"
+        )
+
+    return _application_response(application)
+
+
+def _decide(
+    db: Session, application_id: uuid.UUID, recruiter: Recruiter, decision: str
+) -> ApplicationResponse:
+    existing = get_application(db, application_id)
+    if existing is None:
+        raise HTTPException(status_code=404, detail="Application not found")
+
+    updated = transition_application(db, application_id, recruiter.id, decision)
+    if updated is None:
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                "Application is not in a decidable state "
+                f"(current status: {existing.status})"
+            ),
+        )
+    return _application_response(updated)
+
+
+@app.post("/v1/applications/{application_id}/accept", response_model=ApplicationResponse)
+def accept_application(
+    application_id: uuid.UUID,
+    db: Session = Depends(get_db),
+    recruiter: Recruiter = Depends(require_recruiter),
+):
+    """Terminal transition: selected -> accepted. Recorded in recruiter_decisions."""
+    return _decide(db, application_id, recruiter, "accept")
+
+
+@app.post("/v1/applications/{application_id}/reject", response_model=ApplicationResponse)
+def reject_application(
+    application_id: uuid.UUID,
+    db: Session = Depends(get_db),
+    recruiter: Recruiter = Depends(require_recruiter),
+):
+    """Terminal transition: selected -> rejected. Recorded in recruiter_decisions."""
+    return _decide(db, application_id, recruiter, "reject")
+
+
+@app.get("/v1/jobs/{job_id}/applications", response_model=list[ApplicationResponse])
+def get_job_applications(
+    job_id: uuid.UUID,
+    db: Session = Depends(get_db),
+    recruiter: Recruiter = Depends(require_recruiter),
+):
+    """Recruiter-facing: review selections and decisions made so far for a job."""
+    if get_job(db, job_id) is None:
+        raise HTTPException(status_code=404, detail="Job not found")
+    return [_application_response(a) for a in list_applications_for_job(db, job_id)]

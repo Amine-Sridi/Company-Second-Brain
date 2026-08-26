@@ -6,9 +6,9 @@ cross-service contracts, which live in /shared/schemas.
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Optional
+from typing import Literal, Optional
 
-from pydantic import UUID4, BaseModel, ConfigDict, Field, model_validator
+from pydantic import UUID4, BaseModel, ConfigDict, EmailStr, Field, model_validator
 
 _WEIGHT_SUM_TOLERANCE = 1e-6
 
@@ -113,3 +113,38 @@ class ScoringConfigResponse(BaseModel):
     experience_weight: float
     title_weight: float
     created_at: datetime
+
+
+# ---------------------------------------------------------------------------
+# Recruiter authentication
+# ---------------------------------------------------------------------------
+
+class LoginRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    email: EmailStr
+    password: str = Field(min_length=1, max_length=200)
+
+
+class LoginResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    access_token: str
+    token_type: Literal["bearer"] = "bearer"
+    expires_at: datetime
+
+
+# ---------------------------------------------------------------------------
+# Candidate selection + recruiter decisions (Application state machine)
+# ---------------------------------------------------------------------------
+
+class ApplicationResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    application_id: UUID4
+    job_id: UUID4
+    match_result_id: UUID4
+    candidate_id: UUID4
+    status: Literal["selected", "accepted", "rejected"]
+    selected_at: datetime
+    decided_at: Optional[datetime]

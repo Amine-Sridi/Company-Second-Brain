@@ -8,3 +8,5 @@ psycopg[binary]==3.2.1
 google-genai==2.18.0
 httpx
 pytest
+bcrypt==4.2.0
+PyJWT==2.9.0

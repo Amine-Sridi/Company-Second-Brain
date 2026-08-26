@@ -1,0 +1,44 @@
+# Local configuration & secret keys
+AGENT.local.md
+.env
+.env.local
+*.env
+
+# Python bytecode & cache
+__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
+.coverage
+htmlcov/
+.mypy_cache/
+
+# Virtual environment
+venv/
+.venv/
+env/
+ENV/
+
+# Output files & generated spreadsheets (keep directory structure)
+output/*
+!output/.gitkeep
+*.xlsx
+*.csv
+
+# Sensitive / Binary Input Resumes (keep directory structure)
+tests/sample_resumes/*
+!tests/sample_resumes/.gitkeep
+*.pdf
+*.docx
+*.doc
+
+# IDE & OS files
+.idea/
+.vscode/
+*.swp
+*.swo
+.DS_Store
+Thumbs.db
+
+# Log files
+*.log
