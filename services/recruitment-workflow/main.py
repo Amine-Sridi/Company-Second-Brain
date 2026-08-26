@@ -10,16 +10,21 @@ deterministically, from data already persisted or fetched over HTTP.
 """
 from __future__ import annotations
 
+import hashlib
+import hmac
 import logging
 import uuid
 from typing import Annotated
 
-from fastapi import Depends, FastAPI, Header, HTTPException
+from fastapi import Depends, FastAPI, Header, HTTPException, Request
+from pydantic import ValidationError
 from pydantic_settings import BaseSettings, SettingsConfigDict
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 import clients
+import resume_intelligence_client
+import voicehr_client
 from auth import InvalidTokenError, create_access_token, decode_access_token, verify_password
 from db import (
     Recruiter,
@@ -35,13 +40,19 @@ from db import (
     get_recruiter_by_email,
     get_recruiter_by_id,
     get_scoring_config_by_version,
+    insert_webhook_event,
     list_applications_for_job,
     list_match_results_for_job,
+    mark_webhook_event_processed,
+    record_interview_result,
+    record_invite_attempt,
     transition_application,
 )
 from clients import SecondBrainClientError
+from resume_intelligence_client import ResumeIntelligenceClientError
 from schemas import (
     ApplicationResponse,
+    InviteApplicationRequest,
     JobResponse,
     JobSubmissionRequest,
     LoginRequest,
@@ -53,6 +64,8 @@ from schemas import (
 )
 from scoring import CandidateScoringInput, JobRequirements, ScoringWeights, score_candidate
 from shared.llm import LLMProvider, LLMProviderError
+from shared.schemas import WebhookPayload
+from voicehr_client import VoiceHRClientError
 
 logging.basicConfig(level="INFO")
 logger = logging.getLogger(__name__)
@@ -68,6 +81,11 @@ class Settings(BaseSettings):
     service_api_key: str = "changeme-recruitment-workflow-key"
     second_brain_api_key: str = "changeme-second-brain-key"
     second_brain_url: str = "http://second-brain:8000"
+    resume_intelligence_api_key: str = "changeme-resume-intelligence-key"
+    resume_intelligence_url: str = "http://resume-intelligence:8000"
+    voicehr_api_key: str = "changeme-voicehr-key"
+    voicehr_url: str = "http://voicehr:8000"
+    webhook_hmac_secret: str = "changeme-webhook-secret"
     gemini_api_key: str = ""
     gemini_model: str = "gemini-3.6-flash"
     embedding_model_version: str = "gemini-embedding-001"
@@ -419,6 +437,11 @@ def _application_response(application) -> ApplicationResponse:
         candidate_id=application.candidate_id,
         status=application.status,
         selected_at=application.selected_at,
+        invite_attempt_number=application.invite_attempt_number,
+        invited_at=application.invited_at,
+        interview_status=application.interview_status,
+        interview_assessment=application.interview_assessment,
+        interview_completed_at=application.interview_completed_at,
         decided_at=application.decided_at,
     )
 
@@ -512,3 +535,150 @@ def get_job_applications(
     if get_job(db, job_id) is None:
         raise HTTPException(status_code=404, detail="Job not found")
     return [_application_response(a) for a in list_applications_for_job(db, job_id)]
+
+
+# ---------------------------------------------------------------------------
+# Interview invitation -- RWS -> Resume Intelligence (contact lookup) -> VoiceHR
+#
+# The contact lookup is a hard pre-flight gate: VoiceHR is never called if it fails,
+# since VoiceHR needs a real name and email to create an interview. See
+# resume_intelligence_client.get_contact and voicehr_client.invite_candidate.
+# ---------------------------------------------------------------------------
+
+@app.post("/v1/applications/{application_id}/invite", response_model=ApplicationResponse)
+async def invite_application(
+    application_id: uuid.UUID,
+    payload: InviteApplicationRequest,
+    db: Session = Depends(get_db),
+    recruiter: Recruiter = Depends(require_recruiter),
+):
+    """
+    Invite (or re-invite) an application's candidate to a VoiceHR interview.
+
+    Callable when the application is 'selected' (first invite) or 'invited' (resend --
+    e.g. the candidate never received the link). invite_attempt_number is computed as
+    current + 1 and is only persisted after VoiceHR responds successfully: if VoiceHR
+    is called but its response never reaches RWS, the next call recomputes the same
+    attempt number, so the same idempotency key is reused and VoiceHR's own idempotency
+    check (not a new duplicate interview) is what protects the retry.
+    """
+    application = get_application(db, application_id)
+    if application is None:
+        raise HTTPException(status_code=404, detail="Application not found")
+    if application.status not in ("selected", "invited"):
+        raise HTTPException(
+            status_code=409,
+            detail=f"Application is not invitable (current status: {application.status})",
+        )
+
+    try:
+        contact = await resume_intelligence_client.get_contact(
+            settings.resume_intelligence_url,
+            settings.resume_intelligence_api_key,
+            application.candidate_id,
+        )
+    except ResumeIntelligenceClientError as exc:
+        raise HTTPException(status_code=502, detail=f"Contact lookup failed: {exc}")
+    if contact is None:
+        raise HTTPException(
+            status_code=422,
+            detail="Candidate contact information not found; cannot invite to interview",
+        )
+
+    attempt_number = application.invite_attempt_number + 1
+    idempotency_key = f"{application_id}:{attempt_number}"
+
+    try:
+        await voicehr_client.invite_candidate(
+            settings.voicehr_url,
+            settings.voicehr_api_key,
+            idempotency_key=idempotency_key,
+            candidate_name=contact["name"],
+            candidate_email=contact["email"],
+            language=payload.language,
+            external_reference_id=str(application_id),
+        )
+    except VoiceHRClientError as exc:
+        raise HTTPException(status_code=502, detail=f"VoiceHR invitation failed: {exc}")
+
+    updated = record_invite_attempt(db, application_id, attempt_number)
+    if updated is None:
+        # The application's state changed between our check above and now (e.g. a
+        # concurrent decision landed while the VoiceHR call was in flight). VoiceHR did
+        # create the interview; RWS's own state just couldn't advance to reflect it.
+        raise HTTPException(
+            status_code=409,
+            detail="Application state changed during invitation and could not be updated",
+        )
+    return _application_response(updated)
+
+
+# ---------------------------------------------------------------------------
+# VoiceHR -> RWS interview-result webhook
+#
+# Authenticated by HMAC-SHA256 signature only (X-Signature) -- deliberately not
+# require_service_key or require_recruiter, per the architecture's three distinct auth
+# mechanisms (recruiter JWT, service API keys, webhook signatures). X-Delivery-Id is the
+# dedup key: a duplicate delivery is rejected by interview_webhook_events' UNIQUE
+# constraint before any application state is touched, so a duplicate can never be
+# double-applied even under a true race between two deliveries of the same event.
+# ---------------------------------------------------------------------------
+
+@app.post("/v1/webhooks/voicehr")
+async def voicehr_webhook(
+    request: Request,
+    db: Session = Depends(get_db),
+    x_signature: Annotated[str | None, Header(alias="X-Signature")] = None,
+    x_delivery_id: Annotated[str | None, Header(alias="X-Delivery-Id")] = None,
+):
+    body = await request.body()
+
+    if not x_signature:
+        raise HTTPException(status_code=401, detail="Missing signature")
+    expected_signature = hmac.new(
+        settings.webhook_hmac_secret.encode("utf-8"), body, hashlib.sha256
+    ).hexdigest()
+    if not hmac.compare_digest(x_signature, expected_signature):
+        raise HTTPException(status_code=401, detail="Invalid signature")
+    if not x_delivery_id:
+        raise HTTPException(status_code=422, detail="Missing X-Delivery-Id header")
+
+    try:
+        payload = WebhookPayload.model_validate_json(body)
+    except ValidationError as exc:
+        raise HTTPException(status_code=422, detail=f"Invalid webhook payload: {exc}")
+
+    try:
+        application_id = uuid.UUID(payload.external_reference_id)
+    except ValueError:
+        application_id = None
+
+    try:
+        event = insert_webhook_event(
+            db,
+            delivery_id=x_delivery_id,
+            application_id=application_id,
+            external_reference_id=payload.external_reference_id,
+            interview_status=payload.interview_status,
+            assessment=payload.assessment.model_dump(),
+            processed=False,
+        )
+    except IntegrityError:
+        # Same X-Delivery-Id as a previously recorded event: this is a retried delivery
+        # of something already handled. Stop here -- no application state is touched.
+        db.rollback()
+        return {"status": "duplicate_ignored"}
+
+    if application_id is None:
+        return {"status": "unknown_application"}
+
+    updated = record_interview_result(
+        db, application_id, payload.interview_status, payload.assessment.model_dump()
+    )
+    if updated is None:
+        # Not an error: the application doesn't exist, or isn't currently 'invited'
+        # (already interviewed/decided, or never invited). Nothing more to do.
+        return {"status": "no_op"}
+
+    mark_webhook_event_processed(db, event.id, True)
+    return {"status": "processed"}

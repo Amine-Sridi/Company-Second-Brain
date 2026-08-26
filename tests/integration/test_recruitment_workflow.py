@@ -10,19 +10,32 @@ conftest_recruitment_workflow.py as /app/conftest.py and this file as
 """
 import uuid
 
+import pytest
+
 try:
     from conftest_recruitment_workflow import (
         SEED_RECRUITER_EMAIL,
         SEED_RECRUITER_PASSWORD,
         make_candidate,
+        make_webhook_payload,
+        select_and_invite,
+        sign_webhook_body,
     )
 except ImportError:
-    from conftest import SEED_RECRUITER_EMAIL, SEED_RECRUITER_PASSWORD, make_candidate
+    from conftest import (
+        SEED_RECRUITER_EMAIL,
+        SEED_RECRUITER_PASSWORD,
+        make_candidate,
+        make_webhook_payload,
+        select_and_invite,
+        sign_webhook_body,
+    )
 
 _VALID_KEY = "test-service-key"
 _JOBS_URL = "/v1/jobs"
 _SCORING_CONFIGS_URL = "/v1/scoring-configs"
 _LOGIN_URL = "/v1/auth/login"
+_WEBHOOK_URL = "/v1/webhooks/voicehr"
 
 
 def _submit_job(client, auth_headers, **overrides) -> dict:
@@ -726,3 +739,357 @@ def test_get_job_applications_lists_selections(client, auth_headers, mock_second
 def test_get_job_applications_without_auth_returns_401(client):
     resp = client.get(f"{_JOBS_URL}/{uuid.uuid4()}/applications")
     assert resp.status_code == 401
+
+
+# ===========================================================================
+# Interview invitation -- POST /v1/applications/{id}/invite
+# ===========================================================================
+
+def _select_one_candidate(client, auth_headers, mock_second_brain, candidate=None) -> tuple[str, str]:
+    """Submit a job and select its one qualified candidate. Returns (job_id, application_id)
+    with the application left in 'selected' (not yet invited)."""
+    candidate = candidate or make_candidate(skills=["Python"], similarity_score=0.9)
+    mock_second_brain.set_candidates([candidate])
+    resp = _submit_job(client, auth_headers, threshold=0.1)
+    job_id = resp.json()["job_id"]
+    match_id = resp.json()["matches"][0]["match_id"]
+    application_id = client.post(
+        f"/v1/matches/{match_id}/select", headers=auth_headers
+    ).json()["application_id"]
+    return job_id, application_id
+
+
+def test_invite_application_success(
+    client, auth_headers, mock_second_brain, mock_resume_intelligence, mock_voicehr
+):
+    candidate = make_candidate(skills=["Python"], similarity_score=0.9)
+    _, application_id = _select_one_candidate(client, auth_headers, mock_second_brain, candidate)
+    mock_resume_intelligence.set_contact(
+        candidate["candidate_id"],
+        {"candidate_id": candidate["candidate_id"], "name": "Alice", "email": "alice@example.com", "phone": None},
+    )
+
+    resp = client.post(
+        f"/v1/applications/{application_id}/invite",
+        json={"language": "en"},
+        headers=auth_headers,
+    )
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["status"] == "invited"
+    assert body["invite_attempt_number"] == 1
+    assert body["invited_at"] is not None
+
+    assert len(mock_voicehr.calls) == 1
+    call = mock_voicehr.calls[0]
+    assert call["candidate_name"] == "Alice"
+    assert call["candidate_email"] == "alice@example.com"
+    assert call["language"] == "en"
+    assert call["external_reference_id"] == application_id
+    assert call["idempotency_key"] == f"{application_id}:1"
+
+
+def test_invite_application_defaults_to_english(
+    client, auth_headers, mock_second_brain, mock_resume_intelligence, mock_voicehr
+):
+    candidate = make_candidate(skills=["Python"], similarity_score=0.9)
+    _, application_id = _select_one_candidate(client, auth_headers, mock_second_brain, candidate)
+    mock_resume_intelligence.set_contact(
+        candidate["candidate_id"],
+        {"candidate_id": candidate["candidate_id"], "name": "Alice", "email": "alice@example.com", "phone": None},
+    )
+
+    resp = client.post(f"/v1/applications/{application_id}/invite", json={}, headers=auth_headers)
+    assert resp.status_code == 200
+    assert mock_voicehr.calls[0]["language"] == "en"
+
+
+def test_invite_application_missing_contact_returns_422_without_calling_voicehr(
+    client, auth_headers, mock_second_brain, mock_resume_intelligence, mock_voicehr
+):
+    """Pre-flight contact lookup must gate the VoiceHR call: if Resume Intelligence has
+    no contact record, VoiceHR must never be contacted."""
+    candidate = make_candidate(skills=["Python"], similarity_score=0.9)
+    _, application_id = _select_one_candidate(client, auth_headers, mock_second_brain, candidate)
+    # Deliberately not calling mock_resume_intelligence.set_contact -- no record exists.
+
+    resp = client.post(
+        f"/v1/applications/{application_id}/invite",
+        json={"language": "en"},
+        headers=auth_headers,
+    )
+    assert resp.status_code == 422
+    assert mock_voicehr.calls == []
+
+
+def test_invite_application_voicehr_unavailable_returns_502(
+    client, auth_headers, mock_second_brain, mock_resume_intelligence, mock_voicehr
+):
+    candidate = make_candidate(skills=["Python"], similarity_score=0.9)
+    _, application_id = _select_one_candidate(client, auth_headers, mock_second_brain, candidate)
+    mock_resume_intelligence.set_contact(
+        candidate["candidate_id"],
+        {"candidate_id": candidate["candidate_id"], "name": "Alice", "email": "alice@example.com", "phone": None},
+    )
+    mock_voicehr.fail()
+
+    resp = client.post(
+        f"/v1/applications/{application_id}/invite",
+        json={"language": "en"},
+        headers=auth_headers,
+    )
+    assert resp.status_code == 502
+
+
+def test_reinvite_increments_attempt_number(
+    client, auth_headers, mock_second_brain, mock_resume_intelligence, mock_voicehr
+):
+    candidate = make_candidate(skills=["Python"], similarity_score=0.9)
+    _, application_id = _select_one_candidate(client, auth_headers, mock_second_brain, candidate)
+    mock_resume_intelligence.set_contact(
+        candidate["candidate_id"],
+        {"candidate_id": candidate["candidate_id"], "name": "Alice", "email": "alice@example.com", "phone": None},
+    )
+
+    first = client.post(
+        f"/v1/applications/{application_id}/invite", json={"language": "en"}, headers=auth_headers
+    )
+    second = client.post(
+        f"/v1/applications/{application_id}/invite", json={"language": "en"}, headers=auth_headers
+    )
+
+    assert first.status_code == 200
+    assert second.status_code == 200
+    assert first.json()["invite_attempt_number"] == 1
+    assert second.json()["invite_attempt_number"] == 2
+
+    assert mock_voicehr.calls[0]["idempotency_key"] == f"{application_id}:1"
+    assert mock_voicehr.calls[1]["idempotency_key"] == f"{application_id}:2"
+
+
+def test_invite_unknown_application_returns_404(client, auth_headers):
+    resp = client.post(
+        f"/v1/applications/{uuid.uuid4()}/invite", json={"language": "en"}, headers=auth_headers
+    )
+    assert resp.status_code == 404
+
+
+def test_invite_already_decided_application_returns_409(
+    client, auth_headers, mock_second_brain, mock_resume_intelligence, mock_voicehr
+):
+    candidate = make_candidate(skills=["Python"], similarity_score=0.9)
+    _, application_id = _select_one_candidate(client, auth_headers, mock_second_brain, candidate)
+    client.post(f"/v1/applications/{application_id}/reject", headers=auth_headers)
+
+    resp = client.post(
+        f"/v1/applications/{application_id}/invite", json={"language": "en"}, headers=auth_headers
+    )
+    assert resp.status_code == 409
+    assert mock_voicehr.calls == []
+
+
+def test_invite_requires_jwt_not_service_key(
+    client, auth_headers, mock_second_brain, mock_resume_intelligence, mock_voicehr
+):
+    candidate = make_candidate(skills=["Python"], similarity_score=0.9)
+    _, application_id = _select_one_candidate(client, auth_headers, mock_second_brain, candidate)
+
+    resp = client.post(
+        f"/v1/applications/{application_id}/invite",
+        json={"language": "en"},
+        headers={"x-api-key": _VALID_KEY},
+    )
+    assert resp.status_code == 401
+    assert mock_voicehr.calls == []
+
+
+# ===========================================================================
+# VoiceHR -> RWS webhook -- POST /v1/webhooks/voicehr
+# ===========================================================================
+
+def test_webhook_valid_assessment_transitions_to_interviewed(
+    client, auth_headers, db_session, mock_second_brain, mock_resume_intelligence, mock_voicehr
+):
+    _, application_id = select_and_invite(
+        client, auth_headers, mock_second_brain, mock_resume_intelligence, mock_voicehr
+    )
+
+    body, headers = make_webhook_payload(application_id, interview_status="completed")
+    resp = client.post(_WEBHOOK_URL, content=body, headers=headers)
+    assert resp.status_code == 200
+    assert resp.json()["status"] == "processed"
+
+    from db import Application
+
+    application = (
+        db_session.query(Application).filter(Application.id == uuid.UUID(application_id)).first()
+    )
+    assert application.status == "interviewed"
+    assert application.interview_status == "completed"
+    assert application.interview_assessment["overall_score"] == 78
+    assert application.interview_completed_at is not None
+
+
+def test_webhook_invalid_signature_returns_401(client, auth_headers, mock_second_brain, mock_resume_intelligence, mock_voicehr):
+    _, application_id = select_and_invite(
+        client, auth_headers, mock_second_brain, mock_resume_intelligence, mock_voicehr
+    )
+    body, headers = make_webhook_payload(application_id)
+    headers["X-Signature"] = "0" * 64  # well-formed hex, wrong value
+
+    resp = client.post(_WEBHOOK_URL, content=body, headers=headers)
+    assert resp.status_code == 401
+
+
+def test_webhook_missing_signature_returns_401(client, auth_headers, mock_second_brain, mock_resume_intelligence, mock_voicehr):
+    _, application_id = select_and_invite(
+        client, auth_headers, mock_second_brain, mock_resume_intelligence, mock_voicehr
+    )
+    body, headers = make_webhook_payload(application_id)
+    del headers["X-Signature"]
+
+    resp = client.post(_WEBHOOK_URL, content=body, headers=headers)
+    assert resp.status_code == 401
+
+
+def test_webhook_duplicate_delivery_id_is_idempotent(
+    client, auth_headers, db_session, mock_second_brain, mock_resume_intelligence, mock_voicehr
+):
+    _, application_id = select_and_invite(
+        client, auth_headers, mock_second_brain, mock_resume_intelligence, mock_voicehr
+    )
+    body, headers = make_webhook_payload(application_id)
+
+    first = client.post(_WEBHOOK_URL, content=body, headers=headers)
+    second = client.post(_WEBHOOK_URL, content=body, headers=headers)
+
+    assert first.status_code == 200
+    assert first.json()["status"] == "processed"
+    assert second.status_code == 200
+    assert second.json()["status"] == "duplicate_ignored"
+
+    from db import Application
+
+    application = (
+        db_session.query(Application).filter(Application.id == uuid.UUID(application_id)).first()
+    )
+    assert application.status == "interviewed"  # unaffected by the duplicate
+
+
+def test_webhook_unknown_application_returns_200_noop(client, auth_headers):
+    body, headers = make_webhook_payload(str(uuid.uuid4()))
+    resp = client.post(_WEBHOOK_URL, content=body, headers=headers)
+    assert resp.status_code == 200
+    assert resp.json()["status"] == "no_op"
+
+
+def test_webhook_malformed_external_reference_id_returns_200_noop(client, auth_headers):
+    body, headers = make_webhook_payload("not-a-uuid")
+    resp = client.post(_WEBHOOK_URL, content=body, headers=headers)
+    assert resp.status_code == 200
+    assert resp.json()["status"] == "unknown_application"
+
+
+def test_webhook_missing_delivery_id_returns_422(client, auth_headers, mock_second_brain, mock_resume_intelligence, mock_voicehr):
+    _, application_id = select_and_invite(
+        client, auth_headers, mock_second_brain, mock_resume_intelligence, mock_voicehr
+    )
+    body, headers = make_webhook_payload(application_id)
+    del headers["X-Delivery-Id"]
+
+    resp = client.post(_WEBHOOK_URL, content=body, headers=headers)
+    assert resp.status_code == 422
+
+
+def test_webhook_invalid_payload_shape_returns_422(client):
+    import json as _json
+    body = _json.dumps({"not": "a valid webhook payload"}).encode()
+    headers = {
+        "Content-Type": "application/json",
+        "X-Signature": sign_webhook_body(body),
+        "X-Delivery-Id": str(uuid.uuid4()),
+    }
+    resp = client.post(_WEBHOOK_URL, content=body, headers=headers)
+    assert resp.status_code == 422
+
+
+def test_webhook_for_application_not_yet_invited_is_noop(
+    client, auth_headers, mock_second_brain
+):
+    """A webhook referencing an application that is still 'selected' (never invited) --
+    e.g. a stale/out-of-order delivery -- must not be treated as an error."""
+    _, application_id = _select_one_candidate(client, auth_headers, mock_second_brain)
+    body, headers = make_webhook_payload(application_id)
+
+    resp = client.post(_WEBHOOK_URL, content=body, headers=headers)
+    assert resp.status_code == 200
+    assert resp.json()["status"] == "no_op"
+
+
+def test_webhook_inconclusive_status_persisted(
+    client, auth_headers, db_session, mock_second_brain, mock_resume_intelligence, mock_voicehr
+):
+    _, application_id = select_and_invite(
+        client, auth_headers, mock_second_brain, mock_resume_intelligence, mock_voicehr
+    )
+    body, headers = make_webhook_payload(
+        application_id, interview_status="inconclusive", inconclusive=True, overall_score=None
+    )
+    resp = client.post(_WEBHOOK_URL, content=body, headers=headers)
+    assert resp.status_code == 200
+
+    from db import Application
+
+    application = (
+        db_session.query(Application).filter(Application.id == uuid.UUID(application_id)).first()
+    )
+    assert application.interview_status == "inconclusive"
+    assert application.interview_assessment["inconclusive"] is True
+
+
+def test_webhook_unexpected_error_returns_500(
+    client, auth_headers, mock_second_brain, mock_resume_intelligence, mock_voicehr, monkeypatch
+):
+    """
+    A genuine unexpected failure (e.g. a DB error) must propagate rather than be
+    silently swallowed into a 200 no-op -- the distinction matters for VoiceHR's
+    caller-side observability even though this project doesn't retry on it.
+
+    The shared `client` fixture uses TestClient(raise_server_exceptions=True), which
+    re-raises an unhandled exception in the test process instead of converting it to an
+    HTTP 500 (a debugging convenience). That re-raise IS the signal this test checks:
+    it proves the error is not caught anywhere in the handler and would reach uvicorn's
+    default exception handling in production, which returns 500.
+    """
+    _, application_id = select_and_invite(
+        client, auth_headers, mock_second_brain, mock_resume_intelligence, mock_voicehr
+    )
+    import main
+
+    def _boom(*args, **kwargs):
+        raise RuntimeError("simulated transient database failure")
+
+    monkeypatch.setattr(main, "record_interview_result", _boom)
+
+    body, headers = make_webhook_payload(application_id)
+    with pytest.raises(RuntimeError, match="simulated transient database failure"):
+        client.post(_WEBHOOK_URL, content=body, headers=headers)
+
+
+# ===========================================================================
+# Decision after interview -- accept/reject can follow 'interviewed', not just 'selected'
+# ===========================================================================
+
+def test_accept_application_after_interview(
+    client, auth_headers, mock_second_brain, mock_resume_intelligence, mock_voicehr
+):
+    _, application_id = select_and_invite(
+        client, auth_headers, mock_second_brain, mock_resume_intelligence, mock_voicehr
+    )
+    body, headers = make_webhook_payload(application_id)
+    client.post(_WEBHOOK_URL, content=body, headers=headers)
+
+    resp = client.post(f"/v1/applications/{application_id}/accept", headers=auth_headers)
+    assert resp.status_code == 200
+    assert resp.json()["status"] == "accepted"
+    assert resp.json()["interview_status"] == "completed"

@@ -201,6 +201,146 @@ implementation — see the bootstrap instructions.
     application, confirmed the `recruiter_decisions` row via `psql`, and confirmed that a
     second `accept` call, a `reject` after accept, and a duplicate `select` all correctly
     returned 409. Selecting the disqualified candidate's match correctly returned 422.
+- VoiceHR integration (invitation + signed completion webhook): **DONE**. VoiceHR's real
+  source was already present (not a skeleton, despite `services/voicehr/README.md` still
+  saying so — that file is stale and should be updated). Its `POST /api/invite` endpoint
+  and `process_interview()` (Vapi webhook handler → evaluate → email report) already
+  existed; both were extended, not rewritten. Its SQLite persistence and interview
+  engine were not touched beyond adding columns via the existing
+  ALTER-TABLE-if-missing pattern in `backend/database.py`.
+  - **VoiceHR side** (`services/voicehr/`):
+    - `backend/database.py`: added `external_reference_id`, `idempotency_key`,
+      `webhook_delivery_id`, `webhook_delivered_at` columns to `interviews`.
+    - `backend/core/config.py`: added `rws_service_api_key`, `rws_webhook_hmac_secret`,
+      `rws_webhook_url` (the `.env`/`.env.example` values for these already existed from
+      an earlier session — `RWS_SERVICE_API_KEY`, `RWS_WEBHOOK_HMAC_SECRET`,
+      `RWS_WEBHOOK_URL=http://recruitment-workflow:8000/v1/webhooks/voicehr` — only the
+      `Settings` fields to read them were missing).
+    - `backend/api/routes/invite.py`: `POST /api/invite` now requires `X-Api-Key`
+      (`require_rws_service_key`), accepts an optional `external_reference_id` (so
+      non-RWS callers like the admin UI are unaffected) and an optional
+      `Idempotency-Key` header. A repeated call with the same idempotency key returns
+      the existing interview instead of creating a duplicate; a new key (new attempt
+      number) creates a new one. Response gained `interview_link` (alongside the
+      existing `link`, kept for backward compatibility) and echoes
+      `external_reference_id`.
+    - `backend/services/rws_client.py` (new): `build_assessment_payload()` shapes the
+      evaluator's full result dict down to exactly `InterviewAssessment`'s fields (that
+      schema is `extra="forbid"` on the RWS side); `interview_status_for()` maps to
+      `completed`/`inconclusive`/`failed`; `notify_rws_interview_result()` signs the
+      JSON body with HMAC-SHA256 and POSTs it with `X-Signature` + `X-Delivery-Id`
+      headers. Best-effort, single attempt, never raises — a failure to reach RWS is
+      logged and swallowed so it can never break VoiceHR's own report-email flow.
+    - `backend/api/routes/webhook.py`'s `process_interview()`: after the existing
+      status/report/recording persistence (unchanged), if the interview has an
+      `external_reference_id` it now calls `notify_rws_interview_result()` and records
+      `webhook_delivery_id`/`webhook_delivered_at` on the interview row. Interviews with
+      no `external_reference_id` (non-RWS-originated) never trigger this.
+    - Tests: existing `tests/test_invite.py`/`test_integration.py` calls updated with the
+      new required `x-api-key` header (8 + 3 call sites); `tests/conftest.py`'s
+      `mock_settings` and `create_interview()` extended; `tests/test_database.py`'s
+      exact-schema assertion updated to include the new columns (it was already stale —
+      missing the pre-existing `invite_sent` column — before this session touched it).
+      13 new tests added (external_reference_id persistence, missing/wrong API key,
+      duplicate-invitation idempotency, re-invitation with incremented attempt creates a
+      new interview, outbound webhook fired only when `external_reference_id` is set and
+      with the correct `completed`/`inconclusive`/`failed` mapping, RWS-unreachable
+      doesn't break the report email). Full VoiceHR suite: 119/121 pass — the 2 failures
+      (`test_report.py::test_health_check`, `test_session.py::...gemini_live...`) are
+      confirmed pre-existing and unrelated (verified by reading the actual `/health`
+      route and the gemini_live pipeline code, neither touched this session).
+  - **RWS side** (`services/recruitment-workflow/`):
+    - Migration `0004`: extends `applications.status`'s CHECK constraint to
+      `selected → invited → interviewed → accepted | rejected` (accept/reject now valid
+      from any of the first three, not just `selected` — the interview is informative
+      for the recruiter's decision, not a mandatory gate). Adds `invite_attempt_number`,
+      `invited_at`, `interview_status`, `interview_assessment`, `interview_completed_at`
+      to `applications`. Adds `interview_webhook_events` (append-only, `delivery_id
+      UNIQUE` — this is the dedup mechanism). **Found and fixed a real bug during live
+      testing**: the first version of this migration made
+      `interview_webhook_events.application_id` a foreign key into `applications`, which
+      caused a genuinely-unknown `external_reference_id` to raise `IntegrityError` on
+      insert (FK violation) — indistinguishable from the *intended* `IntegrityError`
+      (duplicate `delivery_id`), so every "unknown application" webhook was
+      misclassified as "duplicate" until this was caught live. Fixed by making
+      `application_id` a plain UUID column, not a FK: this table is a receipt log, and
+      must be able to record a reference that doesn't resolve to a real row.
+    - `db.py`: `Recruiter`... unchanged; `Application` gains the columns above;
+      `transition_application()` now accepts the decision from `('selected', 'invited',
+      'interviewed')` instead of only `'selected'`; new `record_invite_attempt()`
+      (atomic `UPDATE ... WHERE status IN ('selected','invited')`, sets `invited`) and
+      `record_interview_result()` (atomic `UPDATE ... WHERE status = 'invited'`, sets
+      `interviewed` + assessment) — both return `None` (a no-op, not an error) on no
+      matching row, exactly like the existing decision-transition pattern. New
+      `InterviewWebhookEvent` model + `insert_webhook_event()` /
+      `mark_webhook_event_processed()`.
+    - `voicehr_client.py` (new): `invite_candidate()` — POSTs to VoiceHR's `/api/invite`
+      with `Idempotency-Key: "{application_id}:{attempt_number}"`.
+    - `resume_intelligence_client.py` (new): `get_contact()` — the pre-flight lookup;
+      returns `None` on 404, never persists the PII-bearing response (passes it straight
+      through to VoiceHR, per the architecture's "transient use only" rule for
+      `ContactLookupResponse`).
+    - `shared/http_client.py`: added an `extra_headers` param to `call_service()` (used
+      for `Idempotency-Key`) — additive, backward compatible.
+    - `POST /v1/applications/{id}/invite` (JWT-protected): loads the application (404 if
+      missing, 409 if not in `selected`/`invited`), calls the Resume Intelligence contact
+      lookup — **422 immediately, without ever calling VoiceHR, if no contact record
+      exists** — then calls VoiceHR with `attempt_number = current + 1`, persisting that
+      number only after VoiceHR responds successfully. This ordering is deliberate: if
+      VoiceHR is called but RWS never receives the response, retrying recomputes the
+      *same* attempt number (nothing was persisted), so the retry reuses the same
+      idempotency key and VoiceHR's own dedup — not a fresh duplicate interview — is what
+      protects it. 502 if VoiceHR is unreachable.
+    - `POST /v1/webhooks/voicehr` (no JWT, no `x-api-key` — HMAC-SHA256 signature only,
+      the third and deliberately separate auth mechanism per CLAUDE.md): verifies
+      `X-Signature` over the raw request body (401 if missing/invalid), requires
+      `X-Delivery-Id` (422 if missing), validates the body against `WebhookPayload`
+      (`shared.schemas`, 422 on malformed), then inserts into
+      `interview_webhook_events` **before any state mutation** — a duplicate
+      `delivery_id` raises `IntegrityError` here and short-circuits to `200
+      duplicate_ignored` with the application untouched, which is what makes dedup safe
+      even under a true race between two deliveries of the same event. Only after that
+      insert succeeds does it resolve `external_reference_id` to an application and call
+      `record_interview_result()`; an unresolvable/malformed reference or an application
+      not currently `invited` both return `200` (no-op, not an error) rather than 404/409
+      — VoiceHR should never retry-storm on either condition. Any genuinely unexpected
+      exception is not caught and surfaces as the framework's default 500.
+    - Auth summary (all three mechanisms now in use and verified mutually exclusive by
+      tests): recruiter JWT (`Authorization: Bearer`) for `/v1/jobs`,
+      `/v1/jobs/{id}/matches`, `/v1/applications/{id}/invite`,
+      `/v1/matches/{id}/select`, `/v1/applications/{id}/accept|reject`; service API key
+      (`X-Api-Key`) for `/v1/scoring-configs` and outbound RWS→Second Brain/Resume
+      Intelligence/VoiceHR calls; HMAC-SHA256 signature (`X-Signature`) for the inbound
+      VoiceHR webhook only.
+    - Tests: 69 integration tests in `tests/integration/test_recruitment_workflow.py`
+      (up from 49) — successful invitation, missing-contact 422 without calling VoiceHR,
+      VoiceHR-unavailable 502, re-invitation incrementing attempt number, duplicate
+      invitation, invite requires JWT not service key, invalid/missing HMAC signature,
+      duplicate webhook delivery (idempotent), unknown/malformed `external_reference_id`
+      (200 no-op), malformed webhook payload (422), webhook for an application not yet
+      invited (200 no-op), inconclusive assessment persisted, a genuinely unexpected
+      error propagating rather than being swallowed, and accept/reject now working from
+      `interviewed`. 3 new unit tests for `shared/http_client.py`'s `extra_headers`
+      (httpx `MockTransport`, no real network).
+    - Full regression after this work: 103/103 unit tests (100 + 3 new), 37/37
+      second-brain, 20/20 resume-intelligence, 69/69 RWS integration, 119/121 VoiceHR
+      (2 pre-existing/unrelated).
+  - **Live end-to-end smoke test verified**, real Postgres + real VoiceHR (no mocks on
+    either side): logged in → submitted a real JD → selected the qualified match →
+    invited (pre-flight contact lookup hit a real `resume_intel.candidates` row, then a
+    real `POST /api/invite` call to the live VoiceHR container) → confirmed the
+    interview row in VoiceHR's actual SQLite DB had the correct `external_reference_id`
+    and `idempotency_key = "{application_id}:1"` → re-invited, confirmed
+    `invite_attempt_number` became 2 and a second interview row was created with
+    `idempotency_key` ending `:2` → hand-crafted a correctly HMAC-signed webhook payload
+    and POSTed it to `/v1/webhooks/voicehr`, confirmed the application transitioned to
+    `interviewed` with the assessment persisted → accepted the application, confirmed
+    `interview_status`/`interview_assessment` were still present on the final
+    `accepted` response → separately confirmed: replaying the same delivery returns
+    `duplicate_ignored`; a wrong or missing `X-Signature` returns 401; a syntactically
+    valid but nonexistent `external_reference_id` returns `no_op` (this is where the FK
+    bug above was caught); inviting a candidate with no Resume Intelligence contact
+    record returns 422 and VoiceHR's interviews table gets zero new rows for it.
 - Nothing is BLOCKED.
 
 ## Known Limitations (discovered this session)
@@ -259,22 +399,41 @@ implementation — see the bootstrap instructions.
   scoring a large retrieved set costs N+1 HTTP calls to Second Brain. Acceptable for this
   project's scale (demo, small candidate pool) — flagged here in case a future session considers
   batching or embedding the attributes directly in the retrieval response instead.
+- `services/voicehr/README.md` still says "Status: skeleton only. Not yet implemented" and
+  references a planned `POST /v1/interviews` endpoint name — both are stale. The real source was
+  already present this session (invite/webhook routes, SQLite persistence, evaluator, all
+  working), and the actual integration point is the existing `POST /api/invite`, extended in
+  place rather than replaced. Worth updating that README in a future session; not done now to
+  keep this session's diff focused on the integration itself.
+- A foreign key from an append-only receipt/log table to the entity it references is the wrong
+  default in this project whenever the log's job includes recording *unresolvable* references
+  (see the `interview_webhook_events.application_id` bug above, caught only by live-testing the
+  "unknown application_id" case — no unit or mocked-integration test would have caught it, since
+  mocks don't enforce real FK constraints). Worth remembering if a similar audit-log table is
+  added later (e.g. for a future reconciliation mechanism, if one is ever built).
+- VoiceHR's outbound webhook delivery is genuinely best-effort/single-attempt (per this task's
+  explicit "no reconciliation polling, no message brokers" constraint): if RWS is down or
+  unreachable at the moment `process_interview()` runs, that interview's result is never
+  retried and `webhook_delivered_at` stays `NULL` forever (verified this stores correctly and
+  doesn't crash anything, but nothing currently surfaces "this interview finished but RWS never
+  found out" for a human to notice). Acceptable for this project's scope; would need a
+  reconciliation step to close if ever revisited, which is explicitly deferred.
+- The `Idempotency-Key` header value is never itself validated for shape (RWS always sends
+  `"{application_id}:{attempt_number}"`, but VoiceHR's `/api/invite` accepts any string). Not a
+  problem for this integration (VoiceHR is only ever called by RWS in this architecture), but
+  worth knowing if `/api/invite` is ever exposed to other callers.
 
 ## Exact Next Steps
 
-1. **[NEXT]** VoiceHR integration: `external_reference_id` column on VoiceHR's session table
-   (should store/echo RWS's `application_id`), invitation endpoint (`POST /v1/interviews/invite`,
-   called by RWS once an `Application` is `selected` — this is the natural point in the state
-   machine to trigger it), outbound HMAC-SHA256 signed webhook from VoiceHR to RWS on interview
-   completion (`{application_id, interview_id, status, assessment}`, no audio/transcript). On the
-   RWS side this will likely mean adding `invited`/`interviewed` states to the `Application` state
-   machine between `selected` and the final `accepted`/`rejected` decision (the state machine was
-   deliberately designed to leave room for this — see `services/recruitment-workflow/db.py`'s
-   `Application` docstring). Inspect `services/voicehr/` source before starting — its internals
-   must not be rewritten, only its API surface extended.
-2. LLM-generated match explanation (advisory only, generated *after* `final_score`/`qualified`
-   are persisted — per the architectural rule that the LLM never determines the score itself).
-   Not yet started; not required until the recruiter-facing match view needs it.
-3. Knowledge feedback loop (per the end-to-end story: recruiter decision → knowledge feedback)
-   — not yet designed. Revisit once VoiceHR integration and real recruiter decisions exist to
-   feed back from.
+1. **[NEXT]** LLM-generated match explanation (advisory only, generated *after*
+   `final_score`/`qualified` are persisted — per the architectural rule that the LLM never
+   determines the score itself). Not yet started; natural next point to surface it is the
+   recruiter-facing match/application view (`GET /v1/jobs/{job_id}/matches` or
+   `/applications`), as an additional field computed on read rather than stored, or stored once
+   and cached — worth a deliberate choice rather than defaulting to one.
+2. Knowledge feedback loop (per the end-to-end story: recruiter decision → knowledge feedback)
+   — not yet designed. Now that real recruiter decisions and VoiceHR assessments both exist and
+   are persisted, this is unblocked; still needs its own design pass (what exactly feeds back
+   into Second Brain, and how "PII-free" and "no shadow candidate database" constraints apply).
+3. `services/voicehr/README.md` cleanup (see Known Limitations above) — low priority, doesn't
+   block anything.

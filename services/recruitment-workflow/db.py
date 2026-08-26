@@ -191,9 +191,14 @@ class Recruiter(Base):
 class Application(Base):
     """
     Tracks one candidate's pipeline for one job, starting from a recruiter's selection
-    of a qualified MatchResult. State machine: selected -> accepted | rejected (terminal).
-    Future VoiceHR integration will add invited/interviewed states between selected and
-    the final decision -- not implemented yet, per current scope.
+    of a qualified MatchResult.
+
+    State machine: selected -> invited -> interviewed -> accepted | rejected (terminal).
+    A recruiter may accept/reject from selected, invited, or interviewed -- the interview
+    is informative, not a mandatory gate. invite_attempt_number and invited_at track the
+    RWS -> VoiceHR invitation; interview_status/interview_assessment/interview_completed_at
+    are populated by the VoiceHR -> RWS webhook once the interview reaches a terminal
+    evaluation outcome.
     """
 
     __tablename__ = "applications"
@@ -219,6 +224,11 @@ class Application(Base):
     selected_at: datetime = Column(
         DateTime(timezone=True), server_default=text("now()"), nullable=False
     )
+    invite_attempt_number: int = Column(Integer, nullable=False, server_default=text("0"))
+    invited_at: Optional[datetime] = Column(DateTime(timezone=True), nullable=True)
+    interview_status: Optional[str] = Column(Text, nullable=True)
+    interview_assessment: Optional[dict] = Column(JSONB, nullable=True)
+    interview_completed_at: Optional[datetime] = Column(DateTime(timezone=True), nullable=True)
     decided_by: Optional[uuid.UUID] = Column(
         UUID(as_uuid=True), ForeignKey("recruitment.recruiters.id"), nullable=True
     )
@@ -250,6 +260,35 @@ class RecruiterDecision(Base):
     previous_status: str = Column(Text, nullable=False)
     new_status: str = Column(Text, nullable=False)
     decided_at: datetime = Column(
+        DateTime(timezone=True), server_default=text("now()"), nullable=False
+    )
+
+
+class InterviewWebhookEvent(Base):
+    """
+    Append-only receipt log for every VoiceHR -> RWS webhook delivery, keyed by
+    delivery_id (UNIQUE). A duplicate delivery_id fails to insert (IntegrityError) --
+    that IS the dedup mechanism, enforced by the database rather than a check-then-act
+    read. application_id is a plain UUID column (not a foreign key): a webhook can
+    legitimately reference an external_reference_id that doesn't correspond to a real
+    application (unknown/malformed/stale), and this table must still be able to log
+    that fact -- a FK here would make the insert itself fail for exactly the case this
+    table exists to record.
+    """
+
+    __tablename__ = "interview_webhook_events"
+    __table_args__ = {"schema": "recruitment"}
+
+    id: uuid.UUID = Column(
+        UUID(as_uuid=True), primary_key=True, server_default=text("gen_random_uuid()")
+    )
+    delivery_id: str = Column(Text, nullable=False, unique=True)
+    application_id: Optional[uuid.UUID] = Column(UUID(as_uuid=True), nullable=True)
+    external_reference_id: str = Column(Text, nullable=False)
+    interview_status: str = Column(Text, nullable=False)
+    assessment: dict = Column(JSONB, nullable=False)
+    processed: bool = Column(Boolean, nullable=False)
+    received_at: datetime = Column(
         DateTime(timezone=True), server_default=text("now()"), nullable=False
     )
 
@@ -446,6 +485,9 @@ def list_applications_for_job(db: Session, job_id: uuid.UUID) -> list[Applicatio
     )
 
 
+_DECIDABLE_STATUSES = ("selected", "invited", "interviewed")
+
+
 def transition_application(
     db: Session,
     application_id: uuid.UUID,
@@ -453,12 +495,13 @@ def transition_application(
     decision: str,
 ) -> Optional[Application]:
     """
-    Atomically transition an application from 'selected' to 'accepted' or 'rejected',
-    recording an audit row on success.
+    Atomically transition an application to 'accepted' or 'rejected', recording an audit
+    row on success. Allowed from 'selected', 'invited', or 'interviewed' -- the interview
+    is informative for the recruiter's decision, not a mandatory gate before deciding.
 
-    Returns None if the application does not exist, or if it is not currently in the
-    'selected' state (already decided). The transition itself is a single conditional
-    UPDATE ... WHERE status = 'selected' -- this is what makes it safe under concurrent
+    Returns None if the application does not exist, or if it is not currently in a
+    decidable state (already decided). The transition itself is a single conditional
+    UPDATE ... WHERE status IN (...) -- this is what makes it safe under concurrent
     duplicate requests: if two requests race, the database guarantees only one UPDATE
     matches the WHERE clause and affects a row, regardless of request timing. The other
     gets rowcount 0 and this function returns None for it.
@@ -471,7 +514,7 @@ def transition_application(
     new_status = "accepted" if decision == "accept" else "rejected"
     result = db.execute(
         update(Application)
-        .where(Application.id == application_id, Application.status == "selected")
+        .where(Application.id == application_id, Application.status.in_(_DECIDABLE_STATUSES))
         .values(
             status=new_status,
             decided_by=recruiter_id,
@@ -495,3 +538,113 @@ def transition_application(
     db.commit()
     db.refresh(current)
     return current
+
+
+def record_invite_attempt(
+    db: Session, application_id: uuid.UUID, attempt_number: int
+) -> Optional[Application]:
+    """
+    Atomically record a successful VoiceHR invitation. Allowed from 'selected' (first
+    invite) or 'invited' (re-invite/resend) -- both leave the application in 'invited'.
+
+    Returns None if the application is not in one of those two states (e.g. it has
+    already progressed to interviewed/accepted/rejected). attempt_number is computed by
+    the caller as current_attempt_number + 1 *before* calling VoiceHR, and is only
+    persisted here after VoiceHR's response is known -- see main.py's invite endpoint
+    for why this ordering is what makes VoiceHR's own idempotency check effective.
+    """
+    result = db.execute(
+        update(Application)
+        .where(
+            Application.id == application_id,
+            Application.status.in_(("selected", "invited")),
+        )
+        .values(
+            status="invited",
+            invite_attempt_number=attempt_number,
+            invited_at=func.now(),
+            updated_at=func.now(),
+        )
+    )
+    if result.rowcount == 0:
+        db.rollback()
+        return None
+    db.commit()
+    return get_application(db, application_id)
+
+
+def record_interview_result(
+    db: Session,
+    application_id: uuid.UUID,
+    interview_status: str,
+    assessment: dict,
+) -> Optional[Application]:
+    """
+    Atomically transition an application from 'invited' to 'interviewed', storing the
+    assessment. Returns None (a no-op, not an error) if the application is not currently
+    'invited' -- e.g. a duplicate/out-of-order webhook delivered after the recruiter
+    already made a decision, or before an invite was ever recorded. The caller (the
+    webhook route) treats None as "nothing to do, respond 200" rather than a failure.
+    """
+    result = db.execute(
+        update(Application)
+        .where(Application.id == application_id, Application.status == "invited")
+        .values(
+            status="interviewed",
+            interview_status=interview_status,
+            interview_assessment=assessment,
+            interview_completed_at=func.now(),
+            updated_at=func.now(),
+        )
+    )
+    if result.rowcount == 0:
+        db.rollback()
+        return None
+    db.commit()
+    return get_application(db, application_id)
+
+
+def get_application_by_id(db: Session, application_id: uuid.UUID) -> Optional[Application]:
+    return get_application(db, application_id)
+
+
+# ---------------------------------------------------------------------------
+# Interview webhook events (VoiceHR -> RWS delivery log + dedup)
+# ---------------------------------------------------------------------------
+
+def insert_webhook_event(
+    db: Session,
+    delivery_id: str,
+    application_id: Optional[uuid.UUID],
+    external_reference_id: str,
+    interview_status: str,
+    assessment: dict,
+    processed: bool,
+) -> InterviewWebhookEvent:
+    """
+    Insert a webhook receipt row. Raises sqlalchemy.exc.IntegrityError if delivery_id was
+    already recorded -- callers must catch this and treat it as a duplicate delivery
+    (200 no-op), not an error, since the database's UNIQUE constraint is the actual
+    dedup mechanism, not a check-then-act read beforehand.
+    """
+    event = InterviewWebhookEvent(
+        delivery_id=delivery_id,
+        application_id=application_id,
+        external_reference_id=external_reference_id,
+        interview_status=interview_status,
+        assessment=assessment,
+        processed=processed,
+    )
+    db.add(event)
+    db.commit()
+    db.refresh(event)
+    return event
+
+
+def mark_webhook_event_processed(db: Session, event_id: uuid.UUID, processed: bool) -> None:
+    db.execute(
+        update(InterviewWebhookEvent)
+        .where(InterviewWebhookEvent.id == event_id)
+        .values(processed=processed)
+    )
+    db.commit()

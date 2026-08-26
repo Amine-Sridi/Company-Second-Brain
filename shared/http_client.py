@@ -25,10 +25,16 @@ async def call_service(
     api_key: str,
     json: dict | None = None,
     params: dict | None = None,
+    extra_headers: dict | None = None,
     timeout: float = DEFAULT_TIMEOUT_SECONDS,
 ) -> httpx.Response:
-    """Make an authenticated service-to-service HTTP call and return the raw response."""
-    headers = {"x-api-key": api_key}
+    """Make an authenticated service-to-service HTTP call and return the raw response.
+
+    extra_headers is merged on top of the x-api-key header -- e.g. an Idempotency-Key
+    for calls that need attempt-scoped idempotency (it cannot itself be the auth
+    mechanism, so it is always sent alongside, never instead of, x-api-key).
+    """
+    headers = {"x-api-key": api_key, **(extra_headers or {})}
     try:
         async with httpx.AsyncClient(timeout=timeout) as client:
             return await client.request(

@@ -145,6 +145,21 @@ class ApplicationResponse(BaseModel):
     job_id: UUID4
     match_result_id: UUID4
     candidate_id: UUID4
-    status: Literal["selected", "accepted", "rejected"]
+    status: Literal["selected", "invited", "interviewed", "accepted", "rejected"]
     selected_at: datetime
+    invite_attempt_number: int
+    invited_at: Optional[datetime]
+    interview_status: Optional[Literal["completed", "inconclusive", "failed"]]
+    interview_assessment: Optional[dict]
+    interview_completed_at: Optional[datetime]
     decided_at: Optional[datetime]
+
+
+# ---------------------------------------------------------------------------
+# Interview invitation (RWS -> VoiceHR, gated on a Resume Intelligence contact lookup)
+# ---------------------------------------------------------------------------
+
+class InviteApplicationRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    language: Literal["en", "fr"] = "en"

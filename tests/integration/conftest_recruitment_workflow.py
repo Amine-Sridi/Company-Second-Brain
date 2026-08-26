@@ -4,6 +4,9 @@ Integration test configuration for Recruitment Workflow Service.
 Copy this file as /app/conftest.py inside the csb-recruitment-workflow container, then
 run tests with: python -m pytest /app/test_recruitment_workflow.py -v
 """
+import hashlib
+import hmac
+import json
 import os
 import sys
 import uuid
@@ -12,6 +15,47 @@ from pathlib import Path
 import pytest
 from sqlalchemy import create_engine, text
 from sqlalchemy.orm import sessionmaker
+
+TEST_WEBHOOK_HMAC_SECRET = "test-webhook-secret"
+
+
+def sign_webhook_body(body: bytes, secret: str = TEST_WEBHOOK_HMAC_SECRET) -> str:
+    return hmac.new(secret.encode("utf-8"), body, hashlib.sha256).hexdigest()
+
+
+def make_webhook_payload(
+    external_reference_id: str,
+    interview_status: str = "completed",
+    delivery_id: str | None = None,
+    **assessment_overrides,
+) -> tuple[bytes, dict]:
+    """Returns (raw_body_bytes, headers) for a correctly-signed webhook POST."""
+    assessment = {
+        "overall_score": 78,
+        "cefr_level": "B2",
+        "fluency_score": 80,
+        "vocabulary_score": 75,
+        "grammar_score": 72,
+        "pronunciation_score": 82,
+        "comprehension_score": 85,
+        "inconclusive": False,
+        "evaluation_status": "completed",
+    }
+    assessment.update(assessment_overrides)
+    payload = {
+        "delivery_id": delivery_id or str(uuid.uuid4()),
+        "external_reference_id": external_reference_id,
+        "interview_status": interview_status,
+        "assessment": assessment,
+        "completed_at": "2026-08-26T00:00:00Z",
+    }
+    body = json.dumps(payload).encode("utf-8")
+    headers = {
+        "Content-Type": "application/json",
+        "X-Signature": sign_webhook_body(body),
+        "X-Delivery-Id": payload["delivery_id"],
+    }
+    return body, headers
 
 
 # ── Path setup (host-side only) ───────────────────────────────────────────────
@@ -58,7 +102,8 @@ def truncate_recruitment_tables(test_engine):
     with test_engine.connect() as conn:
         conn.execute(
             text(
-                "TRUNCATE recruitment.recruiter_decisions, recruitment.applications, "
+                "TRUNCATE recruitment.interview_webhook_events, "
+                "recruitment.recruiter_decisions, recruitment.applications, "
                 "recruitment.match_results, recruitment.job_descriptions, recruitment.jobs "
                 "CASCADE"
             )
@@ -116,7 +161,9 @@ def client(db_session, monkeypatch):
     from db import get_db
 
     original_key = settings.service_api_key
+    original_webhook_secret = settings.webhook_hmac_secret
     settings.service_api_key = _TEST_SERVICE_KEY
+    settings.webhook_hmac_secret = TEST_WEBHOOK_HMAC_SECRET
 
     def _override_get_db():
         yield db_session
@@ -129,6 +176,7 @@ def client(db_session, monkeypatch):
 
     app.dependency_overrides.clear()
     settings.service_api_key = original_key
+    settings.webhook_hmac_secret = original_webhook_secret
 
 
 @pytest.fixture
@@ -138,7 +186,9 @@ def client_failing_llm(db_session):
     from db import get_db
 
     original_key = settings.service_api_key
+    original_webhook_secret = settings.webhook_hmac_secret
     settings.service_api_key = _TEST_SERVICE_KEY
+    settings.webhook_hmac_secret = TEST_WEBHOOK_HMAC_SECRET
 
     def _override_get_db():
         yield db_session
@@ -151,6 +201,7 @@ def client_failing_llm(db_session):
 
     app.dependency_overrides.clear()
     settings.service_api_key = original_key
+    settings.webhook_hmac_secret = original_webhook_secret
 
 
 @pytest.fixture
@@ -230,3 +281,122 @@ def make_candidate(
         "job_titles": job_titles if job_titles is not None else ["Software Engineer"],
         "similarity_score": similarity_score,
     }
+
+
+@pytest.fixture
+def mock_resume_intelligence(monkeypatch):
+    """
+    Patches resume_intelligence_client.get_contact (as imported by main.py's
+    `import resume_intelligence_client`) so tests never make a real HTTP call.
+
+    Usage: mock_resume_intelligence.set_contact(candidate_id, {"name": ..., "email": ...})
+    Not calling set_contact for a candidate_id means "no contact record" (404 -> None),
+    which is the default for every candidate_id unless explicitly set.
+    """
+    import resume_intelligence_client
+
+    state = {"contacts": {}}
+
+    async def _get_contact(base_url, api_key, candidate_id):
+        return state["contacts"].get(str(candidate_id))
+
+    monkeypatch.setattr(resume_intelligence_client, "get_contact", _get_contact)
+
+    class _Controller:
+        def set_contact(self, candidate_id, contact: dict) -> None:
+            state["contacts"][str(candidate_id)] = contact
+
+    return _Controller()
+
+
+@pytest.fixture
+def mock_voicehr(monkeypatch):
+    """
+    Patches voicehr_client.invite_candidate (as imported by main.py's
+    `import voicehr_client`) so tests never make a real HTTP call to VoiceHR.
+
+    Records every call in .calls for assertion. Call .fail() to make subsequent calls
+    raise VoiceHRClientError (simulates VoiceHR being unreachable).
+    """
+    import voicehr_client
+    from voicehr_client import VoiceHRClientError
+
+    calls = []
+
+    async def _invite_candidate(
+        base_url, api_key, idempotency_key, candidate_name, candidate_email,
+        language, external_reference_id,
+    ):
+        calls.append({
+            "idempotency_key": idempotency_key,
+            "candidate_name": candidate_name,
+            "candidate_email": candidate_email,
+            "language": language,
+            "external_reference_id": external_reference_id,
+        })
+        return {
+            "interview_link": "http://voicehr.test/interview?token=abc",
+            "expires_at": "2026-09-01T00:00:00Z",
+            "external_reference_id": external_reference_id,
+        }
+
+    async def _failing_invite_candidate(*args, **kwargs):
+        raise VoiceHRClientError("simulated VoiceHR network failure")
+
+    monkeypatch.setattr(voicehr_client, "invite_candidate", _invite_candidate)
+
+    class _Controller:
+        def __init__(self):
+            self.calls = calls
+
+        def fail(self) -> None:
+            monkeypatch.setattr(voicehr_client, "invite_candidate", _failing_invite_candidate)
+
+    return _Controller()
+
+
+def select_and_invite(
+    client, auth_headers, mock_second_brain, mock_resume_intelligence,
+    mock_voicehr, candidate=None,
+) -> tuple[str, str]:
+    """
+    Test helper: submits a job, selects the one qualified candidate, sets up a
+    passing contact lookup, and invites it. Returns (job_id, application_id) with the
+    application left in the 'invited' state -- the common starting point for webhook
+    and decision tests.
+    """
+    candidate = candidate or make_candidate(skills=["Python"], similarity_score=0.9)
+    mock_second_brain.set_candidates([candidate])
+    mock_resume_intelligence.set_contact(
+        candidate["candidate_id"],
+        {
+            "candidate_id": candidate["candidate_id"],
+            "name": "Test Candidate",
+            "email": "candidate@example.com",
+            "phone": None,
+        },
+    )
+
+    submit_resp = client.post(
+        "/v1/jobs",
+        json={
+            "title": "Backend Engineer",
+            "raw_description": "We need a backend engineer skilled in Python.",
+            "threshold": 0.1,
+            "top_k": 20,
+        },
+        headers=auth_headers,
+    )
+    job_id = submit_resp.json()["job_id"]
+    match_id = submit_resp.json()["matches"][0]["match_id"]
+
+    application_id = client.post(
+        f"/v1/matches/{match_id}/select", headers=auth_headers
+    ).json()["application_id"]
+
+    client.post(
+        f"/v1/applications/{application_id}/invite",
+        json={"language": "en"},
+        headers=auth_headers,
+    )
+    return job_id, application_id
