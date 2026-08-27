@@ -629,6 +629,107 @@ def test_decide_unknown_application_returns_404(client, auth_headers):
     assert resp.status_code == 404
 
 
+# ===========================================================================
+# Recruiter-decision feedback write-back -- RWS -> Second Brain
+# ===========================================================================
+
+def test_accept_triggers_feedback_write_back(client, auth_headers, mock_second_brain):
+    """Accepting an application must fire a knowledge feedback write-back to Second
+    Brain with the correct PII-free content, and it must have already completed by the
+    time the response comes back (BackgroundTasks run within the same ASGI response
+    cycle in TestClient, so no polling/sleep is needed here)."""
+    candidate = make_candidate(skills=["Python"], years_of_experience=5.0, similarity_score=0.9)
+    mock_second_brain.set_candidates([candidate])
+    resp = _submit_job(client, auth_headers, title="Backend Engineer", threshold=0.1)
+    match_id = resp.json()["matches"][0]["match_id"]
+    application_id = client.post(
+        f"/v1/matches/{match_id}/select", headers=auth_headers
+    ).json()["application_id"]
+
+    accept_resp = client.post(f"/v1/applications/{application_id}/accept", headers=auth_headers)
+    assert accept_resp.status_code == 200
+
+    assert len(mock_second_brain.feedback_calls) == 1
+    call = mock_second_brain.feedback_calls[0]
+    assert call["candidate_id"] == candidate["candidate_id"]
+    assert call["application_id"] == application_id
+    assert call["decision"] == "accepted"
+    assert call["job_title"] == "Backend Engineer"
+    assert call["matched_requirements"] == ["Python"]
+    assert call["missing_requirements"] == []
+    assert 0.0 <= call["final_score"] <= 1.0
+    assert call["decided_at"] is not None
+
+
+def test_reject_triggers_feedback_write_back_with_rejected_decision(
+    client, auth_headers, mock_second_brain
+):
+    _, match_id = _submit_and_qualify_one_candidate(client, auth_headers, mock_second_brain)
+    application_id = client.post(
+        f"/v1/matches/{match_id}/select", headers=auth_headers
+    ).json()["application_id"]
+
+    client.post(f"/v1/applications/{application_id}/reject", headers=auth_headers)
+
+    assert len(mock_second_brain.feedback_calls) == 1
+    assert mock_second_brain.feedback_calls[0]["decision"] == "rejected"
+
+
+def test_feedback_write_back_uses_this_matchs_score_not_a_recomputed_one(
+    client, auth_headers, mock_second_brain
+):
+    """The write-back's final_score must come from the actual persisted MatchResult
+    for this application, not be recomputed at decision time."""
+    candidate = make_candidate(skills=["Python"], years_of_experience=5.0, similarity_score=0.77)
+    mock_second_brain.set_candidates([candidate])
+    resp = _submit_job(client, auth_headers, threshold=0.1)
+    match_final_score = resp.json()["matches"][0]["final_score"]
+    match_id = resp.json()["matches"][0]["match_id"]
+    application_id = client.post(
+        f"/v1/matches/{match_id}/select", headers=auth_headers
+    ).json()["application_id"]
+
+    client.post(f"/v1/applications/{application_id}/accept", headers=auth_headers)
+
+    assert mock_second_brain.feedback_calls[0]["final_score"] == match_final_score
+
+
+def test_accept_succeeds_even_when_second_brain_write_back_fails(
+    client, auth_headers, mock_second_brain
+):
+    """The write-back is fire-and-forget: if Second Brain is unreachable, the recruiter's
+    accept/reject must still succeed -- the decision itself is already durably
+    persisted before the write-back is even attempted."""
+    _, match_id = _submit_and_qualify_one_candidate(client, auth_headers, mock_second_brain)
+    application_id = client.post(
+        f"/v1/matches/{match_id}/select", headers=auth_headers
+    ).json()["application_id"]
+
+    mock_second_brain.fail_feedback()
+
+    resp = client.post(f"/v1/applications/{application_id}/accept", headers=auth_headers)
+    assert resp.status_code == 200
+    assert resp.json()["status"] == "accepted"
+
+
+def test_feedback_write_back_not_sent_on_failed_decision_attempt(
+    client, auth_headers, mock_second_brain
+):
+    """A 409 (already-decided) attempt must not trigger a second write-back -- only a
+    transition that actually succeeds does."""
+    _, match_id = _submit_and_qualify_one_candidate(client, auth_headers, mock_second_brain)
+    application_id = client.post(
+        f"/v1/matches/{match_id}/select", headers=auth_headers
+    ).json()["application_id"]
+
+    client.post(f"/v1/applications/{application_id}/accept", headers=auth_headers)
+    assert len(mock_second_brain.feedback_calls) == 1
+
+    second = client.post(f"/v1/applications/{application_id}/accept", headers=auth_headers)
+    assert second.status_code == 409
+    assert len(mock_second_brain.feedback_calls) == 1  # unchanged
+
+
 def test_decide_requires_jwt_not_service_key(client, auth_headers, mock_second_brain):
     _, match_id = _submit_and_qualify_one_candidate(client, auth_headers, mock_second_brain)
     application_id = client.post(

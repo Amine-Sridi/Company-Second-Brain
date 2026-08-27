@@ -10,6 +10,7 @@ import pytest
 from pydantic import ValidationError
 
 from shared.schemas import (
+    CandidateFeedbackRequest,
     CandidateMatch,
     CandidateSummary,
     ContactLookupResponse,
@@ -364,3 +365,66 @@ def test_webhook_payload_round_trip_json():
     restored = WebhookPayload.model_validate(data)
     assert restored.delivery_id == payload.delivery_id
     assert restored.assessment.inconclusive is True
+
+
+# ---------------------------------------------------------------------------
+# CandidateFeedbackRequest
+# ---------------------------------------------------------------------------
+
+def _make_feedback(**kwargs) -> dict:
+    base = {
+        "application_id": uuid.uuid4(),
+        "decision": "accepted",
+        "job_title": "Backend Engineer",
+        "matched_requirements": ["Python"],
+        "missing_requirements": [],
+        "final_score": 0.9,
+        "decided_at": NOW,
+    }
+    base.update(kwargs)
+    return base
+
+
+def test_candidate_feedback_valid():
+    feedback = CandidateFeedbackRequest(**_make_feedback())
+    assert feedback.decision == "accepted"
+    assert feedback.final_score == 0.9
+
+
+def test_candidate_feedback_rejected_decision():
+    feedback = CandidateFeedbackRequest(**_make_feedback(decision="rejected"))
+    assert feedback.decision == "rejected"
+
+
+def test_candidate_feedback_invalid_decision_rejected():
+    with pytest.raises(ValidationError):
+        CandidateFeedbackRequest(**_make_feedback(decision="maybe"))
+
+
+def test_candidate_feedback_score_out_of_range_rejected():
+    with pytest.raises(ValidationError):
+        CandidateFeedbackRequest(**_make_feedback(final_score=1.5))
+
+
+def test_candidate_feedback_empty_job_title_rejected():
+    with pytest.raises(ValidationError):
+        CandidateFeedbackRequest(**_make_feedback(job_title=""))
+
+
+def test_candidate_feedback_no_pii():
+    """CandidateFeedbackRequest must not accept any PII fields."""
+    with pytest.raises(ValidationError):
+        CandidateFeedbackRequest(**_make_feedback(candidate_email="x@y.com"))
+
+
+def test_candidate_feedback_extra_field_rejected():
+    with pytest.raises(ValidationError):
+        CandidateFeedbackRequest(**_make_feedback(candidate_name="Alice"))
+
+
+def test_candidate_feedback_round_trip_json():
+    feedback = CandidateFeedbackRequest(**_make_feedback())
+    data = feedback.model_dump(mode="json")
+    restored = CandidateFeedbackRequest.model_validate(data)
+    assert restored.application_id == feedback.application_id
+    assert restored.decision == feedback.decision

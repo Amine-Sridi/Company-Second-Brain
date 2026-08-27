@@ -20,9 +20,11 @@ from db import (
     get_candidate_knowledge,
     get_db,
     search_candidates,
+    upsert_candidate_feedback,
     upsert_candidate_knowledge,
 )
 from shared.schemas import (
+    CandidateFeedbackRequest,
     CandidateMatch,
     CandidateSummary,
     RetrieveCandidatesRequest,
@@ -181,3 +183,32 @@ async def retrieve_candidates(
             for cid, score in matches
         ]
     )
+
+
+@app.post("/v1/knowledge/candidates/{candidate_id}/feedback", status_code=200)
+def submit_candidate_feedback(
+    candidate_id: uuid.UUID,
+    payload: CandidateFeedbackRequest,
+    db: Session = Depends(get_db),
+    _auth: None = Depends(require_service_key),
+):
+    """
+    Recruiter-decision write-back from RWS, sent as a fire-and-forget background task
+    (never blocks the recruiter's accept/reject response). PII-free by construction:
+    CandidateFeedbackRequest has extra="forbid" and carries no name/email/phone.
+
+    Idempotent: upserts on application_id, so a repeated delivery (e.g. RWS retrying
+    after a timed-out response) overwrites the same row instead of duplicating it.
+    """
+    upsert_candidate_feedback(
+        db,
+        candidate_id=candidate_id,
+        application_id=payload.application_id,
+        decision=payload.decision,
+        job_title=payload.job_title,
+        matched_requirements=payload.matched_requirements,
+        missing_requirements=payload.missing_requirements,
+        final_score=payload.final_score,
+        decided_at=payload.decided_at,
+    )
+    return {"application_id": str(payload.application_id), "status": "ok"}

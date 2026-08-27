@@ -1,9 +1,9 @@
 """Cross-service Pydantic contracts.
 
-Privacy rule: CandidateSummary, RetrieveCandidatesRequest/Response, and WebhookPayload
-must never carry PII (name, email, phone, address). Only ContactLookupResponse and
-InvitationRequest are intentionally PII-bearing — they are used transiently by RWS
-and must never be persisted by the receiving service.
+Privacy rule: CandidateSummary, RetrieveCandidatesRequest/Response, WebhookPayload, and
+CandidateFeedbackRequest must never carry PII (name, email, phone, address). Only
+ContactLookupResponse and InvitationRequest are intentionally PII-bearing — they are
+used transiently by RWS and must never be persisted by the receiving service.
 """
 from __future__ import annotations
 
@@ -128,3 +128,24 @@ class WebhookPayload(BaseModel):
     interview_status: Literal["completed", "inconclusive", "failed"]
     assessment: InterviewAssessment
     completed_at: datetime
+
+
+# ---------------------------------------------------------------------------
+# CandidateFeedbackRequest
+# RWS → Second Brain, fire-and-forget after a recruiter's accept/reject decision.
+# No PII: only the job title, which required skills matched/were missing, and the
+# score/outcome. candidate_id is the URL path parameter, not part of this body.
+# Idempotency key is application_id -- a decision happens at most once per
+# application (the state machine is terminal), so the receiving upsert is keyed on it.
+# ---------------------------------------------------------------------------
+
+class CandidateFeedbackRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    application_id: UUID4
+    decision: Literal["accepted", "rejected"]
+    job_title: str = Field(min_length=1, max_length=200)
+    matched_requirements: list[str] = Field(default_factory=list, max_length=50)
+    missing_requirements: list[str] = Field(default_factory=list, max_length=50)
+    final_score: float = Field(ge=0.0, le=1.0)
+    decided_at: datetime

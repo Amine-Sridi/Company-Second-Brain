@@ -232,16 +232,22 @@ def auth_headers(db_session) -> dict:
 @pytest.fixture
 def mock_second_brain(monkeypatch):
     """
-    Patches clients.retrieve_candidates / clients.get_candidate (as imported by
-    main.py's `import clients`) so tests never make a real HTTP call to Second Brain.
+    Patches clients.retrieve_candidates / clients.get_candidate / clients.send_candidate_feedback
+    (as imported by main.py's `import clients`) so tests never make a real HTTP call to
+    Second Brain.
 
     Usage: mock_second_brain.set_candidates([{"candidate_id": ..., "skills": [...], ...}])
     Each entry needs: candidate_id (str), skills, years_of_experience, job_titles,
     similarity_score.
+
+    Feedback write-back calls are recorded in .feedback_calls (list of kwargs dicts).
+    Call .fail_feedback() to make subsequent feedback calls raise SecondBrainClientError
+    (simulates Second Brain being unreachable for the background write-back).
     """
     import clients
+    from clients import SecondBrainClientError
 
-    state = {"candidates": []}
+    state = {"candidates": [], "feedback_calls": []}
 
     async def _retrieve_candidates(base_url, api_key, query_text, top_k):
         return [
@@ -261,12 +267,37 @@ def mock_second_brain(monkeypatch):
                 }
         return None
 
+    async def _send_candidate_feedback(
+        base_url, api_key, candidate_id, application_id, decision, job_title,
+        matched_requirements, missing_requirements, final_score, decided_at,
+    ):
+        state["feedback_calls"].append({
+            "candidate_id": str(candidate_id),
+            "application_id": str(application_id),
+            "decision": decision,
+            "job_title": job_title,
+            "matched_requirements": matched_requirements,
+            "missing_requirements": missing_requirements,
+            "final_score": final_score,
+            "decided_at": decided_at,
+        })
+
+    async def _failing_send_candidate_feedback(*args, **kwargs):
+        raise SecondBrainClientError("simulated Second Brain network failure")
+
     monkeypatch.setattr(clients, "retrieve_candidates", _retrieve_candidates)
     monkeypatch.setattr(clients, "get_candidate", _get_candidate)
+    monkeypatch.setattr(clients, "send_candidate_feedback", _send_candidate_feedback)
 
     class _Controller:
+        def __init__(self):
+            self.feedback_calls = state["feedback_calls"]
+
         def set_candidates(self, candidates):
             state["candidates"] = candidates
+
+        def fail_feedback(self):
+            monkeypatch.setattr(clients, "send_candidate_feedback", _failing_send_candidate_feedback)
 
     return _Controller()
 

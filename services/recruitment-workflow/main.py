@@ -16,7 +16,7 @@ import logging
 import uuid
 from typing import Annotated
 
-from fastapi import Depends, FastAPI, Header, HTTPException, Request
+from fastapi import BackgroundTasks, Depends, FastAPI, Header, HTTPException, Request
 from pydantic import ValidationError
 from pydantic_settings import BaseSettings, SettingsConfigDict
 from sqlalchemy.exc import IntegrityError
@@ -486,8 +486,53 @@ def select_candidate(
     return _application_response(application)
 
 
+async def _send_candidate_feedback_background(
+    candidate_id: uuid.UUID,
+    application_id: uuid.UUID,
+    decision: str,
+    job_title: str,
+    matched_requirements: list[str],
+    missing_requirements: list[str],
+    final_score: float,
+    decided_at,
+) -> None:
+    """
+    Fire-and-forget knowledge feedback write-back to Second Brain, run as a FastAPI
+    BackgroundTask *after* the recruiter's accept/reject HTTP response has already been
+    sent -- the decision itself is already durably persisted in `applications` and
+    `recruiter_decisions` by that point, so this can never block or fail the recruiter's
+    request. A failure here is logged and otherwise swallowed: Second Brain being
+    unreachable is not this request's problem, and there is no caller left to report it
+    to. Idempotent on the receiving end (upsert on application_id), so this is safe to
+    reason about as "at least once, never causes duplicates."
+    """
+    try:
+        await clients.send_candidate_feedback(
+            settings.second_brain_url,
+            settings.second_brain_api_key,
+            candidate_id=candidate_id,
+            application_id=application_id,
+            decision=decision,
+            job_title=job_title,
+            matched_requirements=matched_requirements,
+            missing_requirements=missing_requirements,
+            final_score=final_score,
+            decided_at=decided_at,
+        )
+    except SecondBrainClientError:
+        logger.warning(
+            "Failed to deliver candidate feedback to Second Brain for application %s",
+            application_id,
+            exc_info=True,
+        )
+
+
 def _decide(
-    db: Session, application_id: uuid.UUID, recruiter: Recruiter, decision: str
+    db: Session,
+    application_id: uuid.UUID,
+    recruiter: Recruiter,
+    decision: str,
+    background_tasks: BackgroundTasks,
 ) -> ApplicationResponse:
     existing = get_application(db, application_id)
     if existing is None:
@@ -502,27 +547,49 @@ def _decide(
                 f"(current status: {existing.status})"
             ),
         )
+
+    # The state machine transition above is already committed and immutable regardless
+    # of what happens next. The knowledge feedback write-back is a side effect of that
+    # fact, not a precondition for it -- so it runs after the response, not before.
+    match = get_match_result(db, updated.match_result_id)
+    job = get_job(db, updated.job_id)
+    background_tasks.add_task(
+        _send_candidate_feedback_background,
+        candidate_id=updated.candidate_id,
+        application_id=updated.id,
+        decision=updated.status,
+        job_title=job.title,
+        matched_requirements=match.matched_requirements,
+        missing_requirements=match.missing_requirements,
+        final_score=match.final_score,
+        decided_at=updated.decided_at,
+    )
+
     return _application_response(updated)
 
 
 @app.post("/v1/applications/{application_id}/accept", response_model=ApplicationResponse)
 def accept_application(
     application_id: uuid.UUID,
+    background_tasks: BackgroundTasks,
     db: Session = Depends(get_db),
     recruiter: Recruiter = Depends(require_recruiter),
 ):
-    """Terminal transition: selected -> accepted. Recorded in recruiter_decisions."""
-    return _decide(db, application_id, recruiter, "accept")
+    """Terminal transition: selected/invited/interviewed -> accepted. Recorded in
+    recruiter_decisions, then triggers an async knowledge feedback write-back."""
+    return _decide(db, application_id, recruiter, "accept", background_tasks)
 
 
 @app.post("/v1/applications/{application_id}/reject", response_model=ApplicationResponse)
 def reject_application(
     application_id: uuid.UUID,
+    background_tasks: BackgroundTasks,
     db: Session = Depends(get_db),
     recruiter: Recruiter = Depends(require_recruiter),
 ):
-    """Terminal transition: selected -> rejected. Recorded in recruiter_decisions."""
-    return _decide(db, application_id, recruiter, "reject")
+    """Terminal transition: selected/invited/interviewed -> rejected. Recorded in
+    recruiter_decisions, then triggers an async knowledge feedback write-back."""
+    return _decide(db, application_id, recruiter, "reject", background_tasks)
 
 
 @app.get("/v1/jobs/{job_id}/applications", response_model=list[ApplicationResponse])

@@ -48,6 +48,7 @@ def truncate_candidate_knowledge(test_engine):
     from sqlalchemy import text
     with test_engine.connect() as conn:
         conn.execute(text("TRUNCATE second_brain.candidate_knowledge"))
+        conn.execute(text("TRUNCATE second_brain.candidate_feedback"))
         conn.commit()
     yield
 

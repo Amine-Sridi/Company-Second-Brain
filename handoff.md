@@ -341,6 +341,78 @@ implementation — see the bootstrap instructions.
     valid but nonexistent `external_reference_id` returns `no_op` (this is where the FK
     bug above was caught); inviting a candidate with no Resume Intelligence contact
     record returns 422 and VoiceHR's interviews table gets zero new rows for it.
+- Knowledge feedback loop (RWS → Second Brain recruiter-decision write-back): **DONE**.
+  Completes the end-to-end story's last unimplemented arrow ("recruiter decision →
+  knowledge feedback"). Deliberately scoped to just the write-back itself — no read
+  path yet uses `candidate_feedback` (e.g. no scoring/ranking adjustment based on past
+  outcomes); that would be a separate, later design decision.
+  - **Second Brain side**: migration `0003` adds `second_brain.candidate_feedback`
+    (`candidate_id`, `application_id UNIQUE`, `decision CHECK IN ('accepted','rejected')`,
+    `job_title`, `matched_requirements`/`missing_requirements JSONB`, `final_score`,
+    `decided_at`, timestamps). Both `candidate_id` and `application_id` are **plain UUID
+    columns, not foreign keys** — deliberately, applying the lesson learned from last
+    session's `interview_webhook_events` bug: `application_id` belongs to RWS's
+    `recruitment` schema so a real FK is impossible anyway (no cross-schema grants), and
+    even a same-schema FK on `candidate_id` would wrongly reject feedback for a candidate
+    whose `candidate_knowledge` row no longer exists. New shared schema
+    `CandidateFeedbackRequest` (`shared/schemas/__init__.py`, `extra="forbid"`, no PII
+    fields — only `application_id`, `decision`, `job_title`,
+    `matched_requirements`/`missing_requirements`, `final_score`, `decided_at`).
+    `db.py`: `CandidateFeedback` ORM model, `upsert_candidate_feedback()` via
+    `ON CONFLICT (application_id) DO UPDATE` (idempotent: a repeated delivery for the
+    same application overwrites the same row rather than duplicating it),
+    `get_candidate_feedback_by_application()`. `main.py`:
+    `POST /v1/knowledge/candidates/{candidate_id}/feedback`, service-key auth
+    (`candidate_id` is a path parameter, matching the existing `GET
+    /v1/knowledge/candidates/{candidate_id}` convention rather than repeating it in the
+    body). 15 new integration tests (up from 34 to 50 total in `csb-second-brain`):
+    persistence, idempotent upsert (same `application_id` twice → one row, latest
+    values win), PII rejection (email/name → 422), invalid decision/score/candidate_id,
+    missing `application_id`, auth, and accepting feedback for a `candidate_id` with no
+    `candidate_knowledge` row at all.
+  - **RWS side**: `clients.py` gained `send_candidate_feedback()` (POSTs to the new
+    Second Brain endpoint; raises `SecondBrainClientError` on any transport/non-200
+    failure). `main.py`'s `_decide()` (shared by `accept_application`/
+    `reject_application`) now takes a `BackgroundTasks` parameter: after
+    `transition_application()` succeeds — i.e. after the state machine transition and
+    `recruiter_decisions` audit row are already durably committed — it fetches the
+    `MatchResult` (for `matched_requirements`/`missing_requirements`/`final_score`) and
+    `Job` (for `title`) already tied to the application, and schedules
+    `_send_candidate_feedback_background()` via `background_tasks.add_task(...)`. That
+    function is `async`, takes only plain primitives (no DB session — the request-scoped
+    session is closed before FastAPI's `BackgroundTasks` run, the same constraint
+    already documented for VoiceHR's webhook notifier last session), and swallows
+    `SecondBrainClientError` into a logged warning: a failed write-back must never
+    surface to the recruiter, since by the time it runs the decision is already final
+    and persisted. 5 new integration tests (up from 69 to 74 total in
+    `csb-recruitment-workflow`): accept and reject both trigger a correctly-shaped
+    write-back call, the write-back's `final_score` matches the actual persisted
+    `MatchResult` (not a recomputed value), accept still returns 200 when the write-back
+    fails (mocked `SecondBrainClientError`), and a second (409, already-decided) accept
+    attempt does not trigger a second write-back call.
+  - Preserved untouched, as instructed: the `Application` state machine's transitions
+    and their atomic conditional-UPDATE guards (`transition_application` itself was not
+    modified — only wrapped with an additional step *after* it succeeds), and
+    `MatchResult`'s immutability (the write-back only *reads* an existing `MatchResult`
+    via `get_match_result`, never writes to it).
+  - Full regression after this work: 111/111 unit tests (103 + 8 new
+    `CandidateFeedbackRequest` schema tests), 50/50 second-brain integration tests,
+    20/20 resume-intelligence, 74/74 RWS integration tests, 119/121 VoiceHR (the same 2
+    pre-existing/unrelated failures from last session, untouched — VoiceHR was not
+    touched at all this session, consistent with the task's "do not modify working
+    VoiceHR internals unnecessarily" instruction).
+  - **Live end-to-end smoke test verified** against real Postgres (no mocks): called the
+    feedback endpoint directly first (200, persisted, PII rejected with 422, a repeat
+    delivery with a different `decision` value overwrote the same row rather than
+    creating a second one — confirmed via `psql`, exactly one row). Then the full
+    real flow: ingested a candidate into Second Brain → submitted a real JD → selected
+    the qualified match → called `POST /v1/applications/{id}/accept` → confirmed via
+    `docker logs` that the HTTP response to the client (`200 OK` on `/accept`) was
+    logged **before** the outbound `POST .../feedback` call to Second Brain, confirming
+    the write-back genuinely runs after the response, not before it → confirmed the
+    resulting row in `second_brain.candidate_feedback` had the correct `candidate_id`,
+    `application_id`, `decision: accepted`, `job_title`, `matched_requirements`, and the
+    same `final_score` as the persisted `MatchResult`.
 - Nothing is BLOCKED.
 
 ## Known Limitations (discovered this session)
@@ -431,9 +503,10 @@ implementation — see the bootstrap instructions.
    recruiter-facing match/application view (`GET /v1/jobs/{job_id}/matches` or
    `/applications`), as an additional field computed on read rather than stored, or stored once
    and cached — worth a deliberate choice rather than defaulting to one.
-2. Knowledge feedback loop (per the end-to-end story: recruiter decision → knowledge feedback)
-   — not yet designed. Now that real recruiter decisions and VoiceHR assessments both exist and
-   are persisted, this is unblocked; still needs its own design pass (what exactly feeds back
-   into Second Brain, and how "PII-free" and "no shadow candidate database" constraints apply).
-3. `services/voicehr/README.md` cleanup (see Known Limitations above) — low priority, doesn't
+2. `services/voicehr/README.md` cleanup (see Known Limitations above) — low priority, doesn't
    block anything.
+3. Nothing currently reads `second_brain.candidate_feedback` — it's a write-back sink only.
+   Whether/how it should ever influence retrieval or scoring (e.g. down-weighting a candidate
+   repeatedly rejected for a given skill profile) is an open design question, deliberately not
+   answered this session — flagged here rather than in Known Limitations because it's a genuine
+   future design choice, not a defect.

@@ -579,3 +579,196 @@ def test_retrieve_embedding_failure_returns_502(client_failing_llm):
     )
     assert resp.status_code == 502
     assert "Embedding failed" in resp.json()["detail"]
+
+
+# ===========================================================================
+# Recruiter-decision feedback write-back -- POST /v1/knowledge/candidates/{id}/feedback
+# ===========================================================================
+
+def _feedback_url(candidate_id) -> str:
+    return f"/v1/knowledge/candidates/{candidate_id}/feedback"
+
+
+def _make_feedback_payload(
+    application_id: str | None = None,
+    decision: str = "accepted",
+    job_title: str = "Backend Engineer",
+    matched_requirements: list[str] | None = None,
+    missing_requirements: list[str] | None = None,
+    final_score: float = 0.85,
+    decided_at: str = "2026-08-27T00:00:00Z",
+) -> dict:
+    return {
+        "application_id": application_id or str(uuid.uuid4()),
+        "decision": decision,
+        "job_title": job_title,
+        "matched_requirements": matched_requirements if matched_requirements is not None else ["Python"],
+        "missing_requirements": missing_requirements if missing_requirements is not None else [],
+        "final_score": final_score,
+        "decided_at": decided_at,
+    }
+
+
+def test_submit_feedback_returns_200(client):
+    cid = uuid.uuid4()
+    resp = client.post(
+        _feedback_url(cid), json=_make_feedback_payload(), headers={"x-api-key": _VALID_KEY}
+    )
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["status"] == "ok"
+    assert "application_id" in body
+
+
+def test_submit_feedback_persists_row(client, db_session: Session):
+    from db import CandidateFeedback
+
+    cid = uuid.uuid4()
+    app_id = str(uuid.uuid4())
+    payload = _make_feedback_payload(
+        application_id=app_id,
+        decision="rejected",
+        job_title="Data Scientist",
+        matched_requirements=["Python", "SQL"],
+        missing_requirements=["Spark"],
+        final_score=0.42,
+    )
+    client.post(_feedback_url(cid), json=payload, headers={"x-api-key": _VALID_KEY})
+
+    row = (
+        db_session.query(CandidateFeedback)
+        .filter(CandidateFeedback.application_id == uuid.UUID(app_id))
+        .first()
+    )
+    assert row is not None
+    assert row.candidate_id == cid
+    assert row.decision == "rejected"
+    assert row.job_title == "Data Scientist"
+    assert row.matched_requirements == ["Python", "SQL"]
+    assert row.missing_requirements == ["Spark"]
+    assert row.final_score == 0.42
+
+
+def test_submit_feedback_is_idempotent_upsert(client, db_session: Session):
+    """A repeated delivery for the same application_id overwrites the same row
+    instead of creating a duplicate -- this is what makes the fire-and-forget
+    write-back from RWS safe to deliver more than once."""
+    from db import CandidateFeedback
+
+    cid = uuid.uuid4()
+    app_id = str(uuid.uuid4())
+
+    client.post(
+        _feedback_url(cid),
+        json=_make_feedback_payload(application_id=app_id, decision="accepted", final_score=0.9),
+        headers={"x-api-key": _VALID_KEY},
+    )
+    client.post(
+        _feedback_url(cid),
+        json=_make_feedback_payload(application_id=app_id, decision="rejected", final_score=0.9),
+        headers={"x-api-key": _VALID_KEY},
+    )
+
+    rows = (
+        db_session.query(CandidateFeedback)
+        .filter(CandidateFeedback.application_id == uuid.UUID(app_id))
+        .all()
+    )
+    assert len(rows) == 1
+    assert rows[0].decision == "rejected"  # reflects the latest delivery
+
+
+def test_submit_feedback_different_candidate_same_url_shape(client, db_session: Session):
+    """candidate_id is a path parameter and must be stored correctly even though it's
+    not repeated in the body."""
+    from db import CandidateFeedback
+
+    cid = uuid.uuid4()
+    resp = client.post(
+        _feedback_url(cid), json=_make_feedback_payload(), headers={"x-api-key": _VALID_KEY}
+    )
+    app_id = resp.json()["application_id"]
+
+    row = (
+        db_session.query(CandidateFeedback)
+        .filter(CandidateFeedback.application_id == uuid.UUID(app_id))
+        .first()
+    )
+    assert row.candidate_id == cid
+
+
+def test_submit_feedback_pii_email_field_rejected(client):
+    cid = uuid.uuid4()
+    payload = _make_feedback_payload()
+    payload["candidate_email"] = "alice@example.com"
+    resp = client.post(_feedback_url(cid), json=payload, headers={"x-api-key": _VALID_KEY})
+    assert resp.status_code == 422
+
+
+def test_submit_feedback_pii_name_field_rejected(client):
+    cid = uuid.uuid4()
+    payload = _make_feedback_payload()
+    payload["candidate_name"] = "Alice Dupont"
+    resp = client.post(_feedback_url(cid), json=payload, headers={"x-api-key": _VALID_KEY})
+    assert resp.status_code == 422
+
+
+def test_submit_feedback_invalid_decision_rejected(client):
+    cid = uuid.uuid4()
+    payload = _make_feedback_payload(decision="maybe")
+    resp = client.post(_feedback_url(cid), json=payload, headers={"x-api-key": _VALID_KEY})
+    assert resp.status_code == 422
+
+
+def test_submit_feedback_score_out_of_range_rejected(client):
+    cid = uuid.uuid4()
+    payload = _make_feedback_payload(final_score=1.5)
+    resp = client.post(_feedback_url(cid), json=payload, headers={"x-api-key": _VALID_KEY})
+    assert resp.status_code == 422
+
+
+def test_submit_feedback_missing_application_id_rejected(client):
+    cid = uuid.uuid4()
+    payload = _make_feedback_payload()
+    del payload["application_id"]
+    resp = client.post(_feedback_url(cid), json=payload, headers={"x-api-key": _VALID_KEY})
+    assert resp.status_code == 422
+
+
+def test_submit_feedback_invalid_candidate_id_in_path_rejected(client):
+    resp = client.post(
+        "/v1/knowledge/candidates/not-a-uuid/feedback",
+        json=_make_feedback_payload(),
+        headers={"x-api-key": _VALID_KEY},
+    )
+    assert resp.status_code == 422
+
+
+def test_submit_feedback_missing_key_returns_401(client):
+    cid = uuid.uuid4()
+    resp = client.post(_feedback_url(cid), json=_make_feedback_payload())
+    assert resp.status_code == 401
+
+
+def test_submit_feedback_wrong_key_returns_401(client):
+    cid = uuid.uuid4()
+    resp = client.post(
+        _feedback_url(cid), json=_make_feedback_payload(), headers={"x-api-key": "wrong"}
+    )
+    assert resp.status_code == 401
+
+
+def test_submit_feedback_accepts_candidate_with_no_knowledge_row(client, db_session: Session):
+    """Feedback must be accepted even for a candidate_id with no candidate_knowledge
+    row (e.g. it was never ingested, or was ingested and later removed) -- this table
+    is not a foreign key into candidate_knowledge, by design."""
+    from db import CandidateFeedback
+
+    cid = uuid.uuid4()  # deliberately never ingested via /v1/knowledge/candidates
+    resp = client.post(
+        _feedback_url(cid), json=_make_feedback_payload(), headers={"x-api-key": _VALID_KEY}
+    )
+    assert resp.status_code == 200
+
+    row = db_session.query(CandidateFeedback).filter(CandidateFeedback.candidate_id == cid).first()
+    assert row is not None

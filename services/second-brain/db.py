@@ -90,6 +90,37 @@ class CandidateKnowledge(Base):
     )
 
 
+class CandidateFeedback(Base):
+    """
+    PII-free write-back of a recruiter's accept/reject decision from RWS. candidate_id
+    and application_id are plain UUID columns, not foreign keys -- see the 0003
+    migration docstring for why (a cross-schema FK is impossible anyway, and this
+    endpoint must accept feedback even for a candidate_id no longer in
+    candidate_knowledge).
+    """
+
+    __tablename__ = "candidate_feedback"
+    __table_args__ = {"schema": "second_brain"}
+
+    id: uuid.UUID = Column(
+        UUID(as_uuid=True), primary_key=True, server_default=text("gen_random_uuid()")
+    )
+    candidate_id: uuid.UUID = Column(UUID(as_uuid=True), nullable=False)
+    application_id: uuid.UUID = Column(UUID(as_uuid=True), nullable=False, unique=True)
+    decision: str = Column(Text, nullable=False)
+    job_title: str = Column(Text, nullable=False)
+    matched_requirements: list = Column(JSONB, nullable=False)
+    missing_requirements: list = Column(JSONB, nullable=False)
+    final_score: float = Column(Float, nullable=False)
+    decided_at: datetime = Column(DateTime(timezone=True), nullable=False)
+    created_at: datetime = Column(
+        DateTime(timezone=True), server_default=text("now()"), nullable=False
+    )
+    updated_at: datetime = Column(
+        DateTime(timezone=True), server_default=text("now()"), nullable=False
+    )
+
+
 # ---------------------------------------------------------------------------
 # Business logic
 # ---------------------------------------------------------------------------
@@ -197,3 +228,63 @@ def search_candidates(
 
     rows = db.execute(sql, {"top_k": top_k}).fetchall()
     return [(uuid.UUID(str(row.candidate_id)), float(row.similarity)) for row in rows]
+
+
+def upsert_candidate_feedback(
+    db: Session,
+    candidate_id: uuid.UUID,
+    application_id: uuid.UUID,
+    decision: str,
+    job_title: str,
+    matched_requirements: list[str],
+    missing_requirements: list[str],
+    final_score: float,
+    decided_at: datetime,
+) -> None:
+    """
+    Insert or update recruiter-decision feedback, keyed by application_id.
+
+    Idempotent by design: a decision happens at most once per application, but the
+    write-back call from RWS is fire-and-forget (a FastAPI BackgroundTask) and may be
+    delivered more than once in practice (e.g. a retry after a timed-out response that
+    actually succeeded). ON CONFLICT (application_id) DO UPDATE makes a repeat delivery
+    overwrite the same row with the same data rather than create a duplicate.
+    """
+    stmt = (
+        pg_insert(CandidateFeedback)
+        .values(
+            candidate_id=candidate_id,
+            application_id=application_id,
+            decision=decision,
+            job_title=job_title,
+            matched_requirements=matched_requirements,
+            missing_requirements=missing_requirements,
+            final_score=final_score,
+            decided_at=decided_at,
+        )
+        .on_conflict_do_update(
+            index_elements=["application_id"],
+            set_={
+                "candidate_id": candidate_id,
+                "decision": decision,
+                "job_title": job_title,
+                "matched_requirements": matched_requirements,
+                "missing_requirements": missing_requirements,
+                "final_score": final_score,
+                "decided_at": decided_at,
+                "updated_at": func.now(),
+            },
+        )
+    )
+    db.execute(stmt)
+    db.commit()
+
+
+def get_candidate_feedback_by_application(
+    db: Session, application_id: uuid.UUID
+) -> Optional[CandidateFeedback]:
+    return (
+        db.query(CandidateFeedback)
+        .filter(CandidateFeedback.application_id == application_id)
+        .first()
+    )
