@@ -173,6 +173,36 @@ class MatchResult(Base):
     )
 
 
+class MatchExplanation(Base):
+    """
+    Advisory, LLM-generated explanation for one MatchResult -- 1:1 (match_result_id
+    UNIQUE), generated at most once and reused on every subsequent read. Purely
+    read-after-write: nothing here ever feeds back into scoring or qualification, both
+    of which are already computed and persisted on MatchResult before a row here can
+    exist. Unlike interview_webhook_events, a real foreign key is correct here -- every
+    row is created by this service itself for a match_result_id it already knows exists.
+    """
+
+    __tablename__ = "match_explanations"
+    __table_args__ = {"schema": "recruitment"}
+
+    id: uuid.UUID = Column(
+        UUID(as_uuid=True), primary_key=True, server_default=text("gen_random_uuid()")
+    )
+    match_result_id: uuid.UUID = Column(
+        UUID(as_uuid=True),
+        ForeignKey("recruitment.match_results.id"),
+        nullable=False,
+        unique=True,
+    )
+    explanation: str = Column(Text, nullable=False)
+    model: str = Column(Text, nullable=False)
+    prompt_version: str = Column(Text, nullable=False)
+    created_at: datetime = Column(
+        DateTime(timezone=True), server_default=text("now()"), nullable=False
+    )
+
+
 class Recruiter(Base):
     __tablename__ = "recruiters"
     __table_args__ = {"schema": "recruitment"}
@@ -428,6 +458,45 @@ def list_match_results_for_job(db: Session, job_id: uuid.UUID) -> list[MatchResu
 
 def get_match_result(db: Session, match_id: uuid.UUID) -> Optional[MatchResult]:
     return db.query(MatchResult).filter(MatchResult.id == match_id).first()
+
+
+# ---------------------------------------------------------------------------
+# Match explanations (advisory, LLM-generated, cached -- see MatchExplanation)
+# ---------------------------------------------------------------------------
+
+def get_match_explanation(
+    db: Session, match_result_id: uuid.UUID
+) -> Optional[MatchExplanation]:
+    return (
+        db.query(MatchExplanation)
+        .filter(MatchExplanation.match_result_id == match_result_id)
+        .first()
+    )
+
+
+def create_match_explanation(
+    db: Session,
+    match_result_id: uuid.UUID,
+    explanation: str,
+    model: str,
+    prompt_version: str,
+) -> MatchExplanation:
+    """
+    Raises sqlalchemy.exc.IntegrityError if an explanation for this match_result_id was
+    already created (match_result_id UNIQUE) -- callers must catch this and re-fetch the
+    row a concurrent request already inserted, rather than generating (and storing) a
+    second one for the same match.
+    """
+    row = MatchExplanation(
+        match_result_id=match_result_id,
+        explanation=explanation,
+        model=model,
+        prompt_version=prompt_version,
+    )
+    db.add(row)
+    db.commit()
+    db.refresh(row)
+    return row
 
 
 # ---------------------------------------------------------------------------

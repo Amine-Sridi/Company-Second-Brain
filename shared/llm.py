@@ -3,7 +3,9 @@ Thin LLM provider abstraction. GeminiProvider is the only implementation.
 
 The interface exists so that swapping providers is a config change, not a rewrite.
 API key comes exclusively from the GEMINI_API_KEY environment variable.
-Prompt text is intentionally excluded from error messages to avoid PII leakage.
+Prompt text is intentionally excluded from error messages and from logging to avoid
+PII leakage -- every call is logged (model, operation, duration, outcome) via
+shared.observability.log_external_call, never the prompt or the response content.
 """
 from __future__ import annotations
 
@@ -15,6 +17,8 @@ from abc import ABC, abstractmethod
 from typing import TypeVar
 
 from pydantic import BaseModel
+
+from shared.observability import Timer, log_external_call
 
 logger = logging.getLogger(__name__)
 
@@ -94,79 +98,107 @@ class GeminiProvider(LLMProvider):
 
     async def generate_text(self, prompt: str, *, model: str | None = None) -> str:
         target = model or self._default_model
-        try:
-            response = await self._client.aio.models.generate_content(
-                model=target,
-                contents=prompt,
-                config=self._types.GenerateContentConfig(temperature=0.2),
-            )
-            text = getattr(response, "text", None)
-            if not text:
-                raise LLMProviderError(f"Gemini ({target}) returned an empty response")
-            return text
-        except LLMProviderError:
-            raise
-        except Exception as exc:
-            raise LLMProviderError(
-                f"Gemini ({target}) generate_text failed: {type(exc).__name__}: {exc}"
-            ) from exc
+        with Timer() as timer:
+            try:
+                response = await self._client.aio.models.generate_content(
+                    model=target,
+                    contents=prompt,
+                    config=self._types.GenerateContentConfig(temperature=0.2),
+                )
+                text = getattr(response, "text", None)
+                if not text:
+                    raise LLMProviderError(f"Gemini ({target}) returned an empty response")
+            except Exception as exc:
+                log_external_call(
+                    logger, target="gemini", operation=f"generate_text:{target}",
+                    duration_ms=timer.duration_ms, outcome="error", error_type=type(exc).__name__,
+                )
+                if isinstance(exc, LLMProviderError):
+                    raise
+                raise LLMProviderError(
+                    f"Gemini ({target}) generate_text failed: {type(exc).__name__}: {exc}"
+                ) from exc
+        log_external_call(
+            logger, target="gemini", operation=f"generate_text:{target}",
+            duration_ms=timer.duration_ms, outcome="success",
+        )
+        return text
 
     async def generate_structured(
         self, prompt: str, schema: type[T], *, model: str | None = None
     ) -> T:
         target = model or self._default_model
-        try:
-            response = await self._client.aio.models.generate_content(
-                model=target,
-                contents=prompt,
-                config=self._types.GenerateContentConfig(
-                    response_mime_type="application/json",
-                    response_json_schema=schema.model_json_schema(),
-                    temperature=0.2,
-                ),
-            )
-            text = getattr(response, "text", None)
-            if not text:
-                raise LLMProviderError(f"Gemini ({target}) returned an empty response")
-            raw = text.strip().removeprefix("```json").removesuffix("```").strip()
+        with Timer() as timer:
             try:
-                data = json.loads(raw)
-            except json.JSONDecodeError as exc:
-                raise LLMProviderError(
-                    f"Gemini ({target}) returned non-JSON output"
-                ) from exc
-            try:
-                return schema.model_validate(data)
+                response = await self._client.aio.models.generate_content(
+                    model=target,
+                    contents=prompt,
+                    config=self._types.GenerateContentConfig(
+                        response_mime_type="application/json",
+                        response_json_schema=schema.model_json_schema(),
+                        temperature=0.2,
+                    ),
+                )
+                text = getattr(response, "text", None)
+                if not text:
+                    raise LLMProviderError(f"Gemini ({target}) returned an empty response")
+                raw = text.strip().removeprefix("```json").removesuffix("```").strip()
+                try:
+                    data = json.loads(raw)
+                except json.JSONDecodeError as exc:
+                    raise LLMProviderError(
+                        f"Gemini ({target}) returned non-JSON output"
+                    ) from exc
+                try:
+                    result = schema.model_validate(data)
+                except Exception as exc:
+                    raise LLMProviderError(
+                        f"Gemini ({target}) response did not match {schema.__name__}: {exc}"
+                    ) from exc
             except Exception as exc:
+                log_external_call(
+                    logger, target="gemini", operation=f"generate_structured:{target}",
+                    duration_ms=timer.duration_ms, outcome="error", error_type=type(exc).__name__,
+                )
+                if isinstance(exc, LLMProviderError):
+                    raise
                 raise LLMProviderError(
-                    f"Gemini ({target}) response did not match {schema.__name__}: {exc}"
+                    f"Gemini ({target}) generate_structured failed: {type(exc).__name__}: {exc}"
                 ) from exc
-        except LLMProviderError:
-            raise
-        except Exception as exc:
-            raise LLMProviderError(
-                f"Gemini ({target}) generate_structured failed: {type(exc).__name__}: {exc}"
-            ) from exc
+        log_external_call(
+            logger, target="gemini", operation=f"generate_structured:{target}",
+            duration_ms=timer.duration_ms, outcome="success",
+        )
+        return result
 
     async def embed_text(
         self, text: str, *, model: str | None = None, dimensions: int = 768
     ) -> list[float]:
         target = model or "gemini-embedding-001"
-        try:
-            loop = asyncio.get_running_loop()
-            result = await loop.run_in_executor(
-                None,
-                lambda: self._client.models.embed_content(
-                    model=target,
-                    contents=text,
-                    config=self._types.EmbedContentConfig(output_dimensionality=dimensions),
-                ),
-            )
-            values = result.embeddings[0].values
-            return list(values)
-        except LLMProviderError:
-            raise
-        except Exception as exc:
-            raise LLMProviderError(
-                f"Gemini ({target}) embed_text failed: {type(exc).__name__}: {exc}"
-            ) from exc
+        with Timer() as timer:
+            try:
+                loop = asyncio.get_running_loop()
+                result = await loop.run_in_executor(
+                    None,
+                    lambda: self._client.models.embed_content(
+                        model=target,
+                        contents=text,
+                        config=self._types.EmbedContentConfig(output_dimensionality=dimensions),
+                    ),
+                )
+                values = list(result.embeddings[0].values)
+            except Exception as exc:
+                log_external_call(
+                    logger, target="gemini", operation=f"embed_text:{target}",
+                    duration_ms=timer.duration_ms, outcome="error", error_type=type(exc).__name__,
+                )
+                if isinstance(exc, LLMProviderError):
+                    raise
+                raise LLMProviderError(
+                    f"Gemini ({target}) embed_text failed: {type(exc).__name__}: {exc}"
+                ) from exc
+        log_external_call(
+            logger, target="gemini", operation=f"embed_text:{target}",
+            duration_ms=timer.duration_ms, outcome="success",
+        )
+        return values

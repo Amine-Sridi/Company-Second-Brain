@@ -4,9 +4,21 @@
 # candidate-lookup endpoints. Kept intentionally thin — one async function, no retry/circuit
 # breaker machinery — per the bootstrap's "boring over clever" rule; add real retry logic only
 # if a concrete failure mode in this project demonstrates the need for it.
+#
+# Every call is logged (method, target host+path, status/outcome, duration_ms) via
+# shared.observability.log_external_call, and propagates the current request's
+# correlation id downstream via the X-Correlation-ID header. Never logs headers, the
+# request/response body, or the API key.
 from __future__ import annotations
 
+import logging
+from urllib.parse import urlsplit
+
 import httpx
+
+from shared.observability import CORRELATION_ID_HEADER, Timer, get_correlation_id, log_external_call
+
+logger = logging.getLogger(__name__)
 
 DEFAULT_TIMEOUT_SECONDS = 10.0
 
@@ -16,6 +28,14 @@ class ServiceCallError(Exception):
     timeout, connection refused). Non-2xx HTTP responses are NOT raised as errors here —
     callers inspect response.status_code themselves, since a 404 or 422 is often a normal,
     meaningful outcome (e.g. "candidate not found") rather than a failure."""
+
+
+def _target_and_path(url: str) -> tuple[str, str]:
+    """Splits a URL into (host, path) for logging -- never includes the query string,
+    which on these internal APIs could in principle carry identifiers we don't want to
+    assume are safe to log."""
+    parts = urlsplit(url)
+    return parts.netloc, parts.path
 
 
 async def call_service(
@@ -34,13 +54,39 @@ async def call_service(
     for calls that need attempt-scoped idempotency (it cannot itself be the auth
     mechanism, so it is always sent alongside, never instead of, x-api-key).
     """
-    headers = {"x-api-key": api_key, **(extra_headers or {})}
-    try:
-        async with httpx.AsyncClient(timeout=timeout) as client:
-            return await client.request(
-                method, url, json=json, params=params, headers=headers
+    headers = {"x-api-key": api_key}
+    correlation_id = get_correlation_id()
+    if correlation_id:
+        headers[CORRELATION_ID_HEADER] = correlation_id
+    headers.update(extra_headers or {})
+
+    target, path = _target_and_path(url)
+
+    with Timer() as timer:
+        try:
+            async with httpx.AsyncClient(timeout=timeout) as client:
+                response = await client.request(
+                    method, url, json=json, params=params, headers=headers
+                )
+        except httpx.HTTPError as exc:
+            log_external_call(
+                logger,
+                target=target,
+                operation=f"{method} {path}",
+                duration_ms=timer.duration_ms,
+                outcome="error",
+                error_type=type(exc).__name__,
             )
-    except httpx.HTTPError as exc:
-        raise ServiceCallError(
-            f"{method} {url} failed: {type(exc).__name__}: {exc}"
-        ) from exc
+            raise ServiceCallError(
+                f"{method} {url} failed: {type(exc).__name__}: {exc}"
+            ) from exc
+
+    log_external_call(
+        logger,
+        target=target,
+        operation=f"{method} {path}",
+        duration_ms=timer.duration_ms,
+        outcome="success" if response.status_code < 500 else "server_error",
+        status_code=response.status_code,
+    )
+    return response

@@ -36,6 +36,7 @@ from db import (
     get_db,
     get_job,
     get_latest_scoring_config,
+    get_match_explanation,
     get_match_result,
     get_recruiter_by_email,
     get_recruiter_by_id,
@@ -48,6 +49,7 @@ from db import (
     record_invite_attempt,
     transition_application,
 )
+from explanation import get_or_create_explanation
 from clients import SecondBrainClientError
 from resume_intelligence_client import ResumeIntelligenceClientError
 from schemas import (
@@ -64,10 +66,10 @@ from schemas import (
 )
 from scoring import CandidateScoringInput, JobRequirements, ScoringWeights, score_candidate
 from shared.llm import LLMProvider, LLMProviderError
+from shared.observability import CorrelationIdMiddleware, configure_json_logging
 from shared.schemas import WebhookPayload
 from voicehr_client import VoiceHRClientError
 
-logging.basicConfig(level="INFO")
 logger = logging.getLogger(__name__)
 
 
@@ -95,8 +97,10 @@ class Settings(BaseSettings):
 
 
 settings = Settings()
+configure_json_logging("recruitment-workflow", settings.log_level)
 
 app = FastAPI(title="Recruitment Workflow Service")
+app.add_middleware(CorrelationIdMiddleware)
 
 
 # ---------------------------------------------------------------------------
@@ -152,6 +156,28 @@ def get_llm_provider() -> LLMProvider:
             _llm_provider = GeminiProvider(api_key=settings.gemini_api_key or None)
         except LLMProviderError as exc:
             raise HTTPException(status_code=503, detail=str(exc))
+    return _llm_provider
+
+
+def get_llm_provider_optional() -> LLMProvider | None:
+    """
+    Best-effort variant of get_llm_provider for the advisory match-explanation path:
+    an unavailable/misconfigured Gemini key must never break GET
+    /v1/jobs/{job_id}/matches (which still returns valid, already-persisted
+    MatchResults either way) the way it legitimately does break JD submission, which
+    cannot proceed at all without structuring. Shares the same lazy singleton as
+    get_llm_provider (reused once constructed by either entry point) but returns None
+    instead of raising 503 on construction failure. Declared as its own top-level
+    dependency (not a plain call to get_llm_provider) so tests can override it
+    independently via app.dependency_overrides, the same way get_llm_provider is.
+    """
+    global _llm_provider
+    if _llm_provider is None:
+        from shared.llm import GeminiProvider
+        try:
+            _llm_provider = GeminiProvider(api_key=settings.gemini_api_key or None)
+        except LLMProviderError:
+            return None
     return _llm_provider
 
 
@@ -360,33 +386,52 @@ async def submit_job(
 
 
 @app.get("/v1/jobs/{job_id}/matches", response_model=list[MatchResultResponse])
-def get_job_matches(
+async def get_job_matches(
     job_id: uuid.UUID,
     db: Session = Depends(get_db),
     recruiter: Recruiter = Depends(require_recruiter),
+    llm: LLMProvider | None = Depends(get_llm_provider_optional),
 ):
-    """Recruiter-facing: browse persisted MatchResults for a job before selecting one."""
+    """
+    Recruiter-facing: browse persisted MatchResults for a job before selecting one.
+
+    Each match's advisory explanation is generated lazily, at most once, on the first
+    read that needs it -- get_or_create_explanation checks match_explanations first and
+    only calls Gemini on a cache miss, so repeated reads never call Gemini again. A
+    missing/unreachable Gemini key never fails this endpoint -- the already-persisted
+    scores/qualification are always returned regardless; only `explanation` comes back
+    null in that case.
+    """
     if get_job(db, job_id) is None:
         raise HTTPException(status_code=404, detail="Job not found")
 
     matches = list_match_results_for_job(db, job_id)
-    return [
-        MatchResultResponse(
-            match_id=m.id,
-            candidate_id=m.candidate_id,
-            semantic_score=m.semantic_score,
-            skill_score=m.skill_score,
-            experience_score=m.experience_score,
-            title_score=m.title_score,
-            deterministic_score=m.deterministic_score,
-            final_score=m.final_score,
-            hard_gate_passed=m.hard_gate_passed,
-            matched_requirements=m.matched_requirements,
-            missing_requirements=m.missing_requirements,
-            qualified=m.qualified,
+
+    responses = []
+    for m in matches:
+        if llm is not None:
+            explanation = await get_or_create_explanation(db, llm, m, settings.gemini_model)
+        else:
+            cached = get_match_explanation(db, m.id)
+            explanation = cached.explanation if cached else None
+        responses.append(
+            MatchResultResponse(
+                match_id=m.id,
+                candidate_id=m.candidate_id,
+                semantic_score=m.semantic_score,
+                skill_score=m.skill_score,
+                experience_score=m.experience_score,
+                title_score=m.title_score,
+                deterministic_score=m.deterministic_score,
+                final_score=m.final_score,
+                hard_gate_passed=m.hard_gate_passed,
+                matched_requirements=m.matched_requirements,
+                missing_requirements=m.missing_requirements,
+                qualified=m.qualified,
+                explanation=explanation,
+            )
         )
-        for m in matches
-    ]
+    return responses
 
 
 @app.post("/v1/scoring-configs", response_model=ScoringConfigResponse, status_code=201)
@@ -720,6 +765,10 @@ async def voicehr_webhook(
     except ValueError:
         application_id = None
 
+    # Log only identifiers and the outcome -- never payload.assessment (scores/CEFR
+    # level are treated as interview content here and must never be logged).
+    log_fields = {"delivery_id": x_delivery_id, "interview_status": payload.interview_status}
+
     try:
         event = insert_webhook_event(
             db,
@@ -734,9 +783,11 @@ async def voicehr_webhook(
         # Same X-Delivery-Id as a previously recorded event: this is a retried delivery
         # of something already handled. Stop here -- no application state is touched.
         db.rollback()
+        logger.info("webhook_received", extra={**log_fields, "outcome": "duplicate_ignored"})
         return {"status": "duplicate_ignored"}
 
     if application_id is None:
+        logger.info("webhook_received", extra={**log_fields, "outcome": "unknown_application"})
         return {"status": "unknown_application"}
 
     updated = record_interview_result(
@@ -745,7 +796,12 @@ async def voicehr_webhook(
     if updated is None:
         # Not an error: the application doesn't exist, or isn't currently 'invited'
         # (already interviewed/decided, or never invited). Nothing more to do.
+        logger.info("webhook_received", extra={**log_fields, "outcome": "no_op"})
         return {"status": "no_op"}
 
     mark_webhook_event_processed(db, event.id, True)
+    logger.info(
+        "webhook_received",
+        extra={**log_fields, "outcome": "processed", "application_id": str(application_id)},
+    )
     return {"status": "processed"}

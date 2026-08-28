@@ -413,6 +413,203 @@ implementation — see the bootstrap instructions.
     resulting row in `second_brain.candidate_feedback` had the correct `candidate_id`,
     `application_id`, `decision: accepted`, `job_title`, `matched_requirements`, and the
     same `final_score` as the persisted `MatchResult`.
+- Observability/hardening — structured JSON logging, correlation IDs, external-call
+  latency/failure logging, sensitive-data exclusion: **DONE**. Scoped to the three
+  services built this project (resume-intelligence, second-brain,
+  recruitment-workflow); VoiceHR's internals were **not** touched, per this task's own
+  "keep the existing architecture unchanged" instruction and the standing rule not to
+  modify VoiceHR unnecessarily — see Known Limitations for what that means in practice.
+  - New `shared/observability.py`: `JsonFormatter` (one JSON object per log line —
+    timestamp, level, service, logger, message, `correlation_id` when set, plus any
+    `extra=` fields — reads a record's actual attribute dict rather than a
+    hand-maintained field list, so it can't silently drop a field it doesn't know
+    about); a `contextvars`-based correlation ID (`get_correlation_id`/
+    `set_correlation_id`/`new_correlation_id`); `configure_json_logging(service_name)`
+    (replaces the root logger's handlers — idempotent, safe to call more than once);
+    `CorrelationIdMiddleware` (Starlette `BaseHTTPMiddleware` — reads `X-Correlation-ID`
+    from the incoming request or generates one, stores it in the contextvar for the rest
+    of the request *and any FastAPI BackgroundTasks scheduled during it* since those run
+    later in the same asyncio task rather than a new one, echoes it in the response
+    header); `log_external_call()` (one structured line per outbound call — target,
+    operation, `duration_ms`, `outcome`, `status_code` or `error_type` — never a header,
+    body, or prompt); `Timer` (a `duration_ms` **property**, deliberately not a value
+    frozen at `__exit__`, so it can be read from inside an `except` clause that logs and
+    re-raises before the `with` block has exited — the first version of this class had
+    exactly that bug, caught before it shipped by re-reading my own code, not by a test).
+  - `shared/http_client.call_service()`: now attaches `X-Correlation-ID` (from the
+    contextvar, omitted entirely if unset) to every outbound call, and logs
+    method/target-host/path/status/`duration_ms`/outcome via `log_external_call` —
+    never the request/response body, and the query string is stripped before logging
+    the path (defense in depth, though none of these internal APIs currently put
+    anything sensitive in a query string).
+  - `shared/llm.py`: all three `GeminiProvider` methods (`generate_text`,
+    `generate_structured`, `embed_text`) now log latency/outcome the same way — model
+    name and operation, never the prompt or the response content (the module already
+    had a comment to this effect for error messages; logging now upholds the same rule).
+  - All three services' `main.py`/`api.py`: replaced their ad hoc `logging.basicConfig`
+    calls with `configure_json_logging(<service-name>, settings.log_level)` and added
+    `app.add_middleware(CorrelationIdMiddleware)`. Note: this only reformats
+    **application** log lines (anything via `logging.getLogger(...)` that propagates to
+    root, which is everything logged by our own code plus `httpx`'s own request-line
+    logger). It does **not** reformat uvicorn's own access-log lines
+    (`uvicorn.access`/`uvicorn.error` install their own handlers with
+    `propagate=False` and were deliberately left alone — reconfiguring uvicorn's own
+    logging is infrastructure this task didn't ask for and isn't needed for the
+    stated goals).
+  - RWS's webhook receiver (`POST /v1/webhooks/voicehr`) now logs one `webhook_received`
+    line per delivery with `delivery_id`, `interview_status`, the outcome
+    (`processed`/`no_op`/`duplicate_ignored`/`unknown_application`), and
+    `application_id` when resolved — deliberately never `payload.assessment` (CEFR
+    level, scores), which is treated as interview content.
+  - Two pre-existing PII-risk log lines found and fixed (not new code, but directly
+    within this task's "never log PII" mandate, and both one-line, zero-behavior-change
+    fixes): `services/resume-intelligence/api.py`'s ingest-failure handler used to log
+    `str(exc)` (a pipeline exception could embed extracted name/email/phone in its
+    message) — now logs only `type(exc).__name__`. `pipeline/parsing_agent.py` had a
+    `DEBUG`-level line logging the first 500 characters of the raw LLM response — which
+    *is* the parsed candidate's name/email/phone, the exact thing being extracted — now
+    logs only its length. Both are part of the pre-existing dropped-in ResumeParser
+    pipeline; nothing else in that pipeline's ~30 other log lines was touched (company
+    names for ESN classification, filenames, generic error messages — none of those are
+    candidate PII per CLAUDE.md's definition, and broadly editing pre-existing pipeline
+    files beyond a concrete, confirmed risk was judged out of scope). The standalone
+    `pipeline`-CLI entry point (`services/resume-intelligence/main.py` — a batch tool,
+    not the running FastAPI service) was left untouched for the same reason.
+  - `services/resume-intelligence/requirements.txt` was missing `pytest` entirely
+    (discovered when this session's container rebuild lost whatever manual
+    `pip install` a previous session must have relied on — 20 previously-passing tests
+    suddenly couldn't even collect). Added `pytest`, matching the other two services;
+    unrelated to observability but blocked running "the relevant regression tests" as
+    instructed, so fixed here.
+  - Tests: 15 new unit tests for `shared/observability.py`
+    (`tests/unit/test_observability.py` — JSON formatter validity/correlation-id
+    inclusion/extra-field passthrough/exception formatting, correlation ID
+    generate/get/set, the middleware's generate/echo/uniqueness behavior via a throwaway
+    FastAPI app, `Timer`, `log_external_call` success/failure shape); 5 new unit tests
+    in `test_http_client.py` (correlation ID propagated/omitted, latency logged on
+    success, `error_type` logged on failure, the API key value never appears anywhere in
+    captured log output); 3 new unit tests in `test_llm.py` (one per Gemini method —
+    latency logged, and a distinctive marker string standing in for real PII in the
+    prompt/text never appears in captured logs). 19 new integration tests across the
+    three services (5 in resume-intelligence, 4 in second-brain, 10 in
+    recruitment-workflow — correlation ID generated/echoed/differs-per-request in all
+    three; PII/secret exclusion checks: contact-lookup response PII, service API keys,
+    ingested raw_text, recruiter password, issued JWT access token, and — the one
+    closest to "interview content" — a distinctive CEFR-level marker sent through the
+    VoiceHR webhook, confirmed absent from RWS's own `webhook_received` log line). Full
+    regression: 134/134 unit tests (111 + 23 new), 25/25 resume-intelligence, 54/54
+    second-brain, 81/81 recruitment-workflow, 119/121 VoiceHR (same 2 pre-existing,
+    unrelated failures as every prior session — VoiceHR was not touched at all this
+    session).
+  - **Live end-to-end smoke test verified**, real Postgres + real Gemini + all three
+    services (no mocks): submitted a JD to RWS with an explicit
+    `X-Correlation-ID: smoketest-correlation-id-4242` header — confirmed it was echoed
+    on the response, and then confirmed via `docker logs` on **both** containers that
+    the identical `correlation_id` appeared on RWS's own `generate_structured`/
+    `retrieve_candidates`/`get_candidate` log lines *and* on Second Brain's own
+    `embed_text` log line for the request that RWS's call triggered — i.e. the ID
+    genuinely crossed the process boundary and was picked up by the receiving
+    service's own middleware, not just echoed by the sender. Repeated this for the
+    invite flow with a second distinct ID (`smoketest-invite-corr-9999`): confirmed it
+    tagged RWS's outbound calls to **both** Resume Intelligence's contact lookup and
+    VoiceHR's `/api/invite`, covering all three of RWS's downstream integrations.
+    Every logged `external_call` line showed `duration_ms` and `outcome`/`status_code`,
+    and manual inspection of every line emitted during this run (including `httpx`'s
+    own request-line logger, which is outside this session's code but shares the same
+    JSON handler) confirmed no API key, password, JWT token, or resume/JD/interview
+    content appeared anywhere — including that the Gemini SDK's own request logging
+    doesn't put the API key in the URL (it's sent as a header), so nothing there leaks
+    either.
+- LLM-generated match explanation (advisory, generated after `final_score`/`qualified`
+  are already persisted): **DONE**. Closes the `[NEXT]` item from the previous session.
+  Scoped exactly as specced: generated lazily on read (`GET /v1/jobs/{job_id}/matches`),
+  generated and cached once per `MatchResult`, and never affects scoring/qualification.
+  - New migration `0005`: `recruitment.match_explanations` (`match_result_id UUID
+    UNIQUE REFERENCES match_results(id)`, `explanation TEXT`, `model TEXT`,
+    `prompt_version TEXT`, `created_at`). Unlike `interview_webhook_events`, a real
+    foreign key is correct here — every row is created by this service itself for a
+    `match_result_id` it already knows exists, never from an externally-supplied
+    reference. Ran clean against the live Postgres container.
+  - `db.py`: `MatchExplanation` ORM model, `get_match_explanation()`,
+    `create_match_explanation()` (raises `IntegrityError` on a concurrent duplicate —
+    same pattern as every other uniqueness constraint in this codebase, caller catches
+    and re-fetches rather than treating it as an error).
+  - New `services/recruitment-workflow/explanation.py`: `build_prompt(match)` builds
+    the LLM prompt strictly from fields already on the immutable `MatchResult` —
+    `candidate_snapshot` (only `skills`/`years_of_experience`/`job_titles`, read via
+    whitelisted `.get()` calls so even a hypothetical stray key in the snapshot could
+    never reach the prompt), `matched_requirements`/`missing_requirements`, all five
+    score components, `threshold_snapshot`, `hard_gate_passed`, `qualified` — plus an
+    explicit instruction not to include or guess any personal identifying information.
+    `get_or_create_explanation(db, llm, match, model)`: returns the cached explanation
+    if one exists (no LLM call); otherwise calls `llm.generate_text` once, catches
+    `LLMProviderError` and returns `None` on failure (logged, never raised further —
+    the caller's response is unaffected either way), and persists the result via
+    `create_match_explanation`, re-fetching on a concurrent-insert race instead of
+    storing a second row for the same match. This module never imports or calls
+    anything from `scoring.py`, never writes to `MatchResult`, and only ever *reads*
+    `final_score`/`qualified` as prompt input — the architectural rule that the LLM
+    never determines the score is enforced by this module structurally having no path
+    back into scoring, not by a comment.
+  - `main.py`: new `get_llm_provider_optional()` dependency — same lazy singleton as
+    the existing `get_llm_provider()`, but returns `None` instead of raising 503 when
+    Gemini can't be constructed (missing/invalid key). Declared as its own top-level
+    function (not a plain wrapper call to `get_llm_provider`) specifically so it's
+    independently overridable via `app.dependency_overrides` in tests and so a raising
+    sub-dependency can't abort the whole request — FastAPI has no way to catch an
+    exception raised while resolving a nested `Depends()`, so this had to be a sibling
+    dependency, not a wrapper. `GET /v1/jobs/{job_id}/matches` (now `async`) takes this
+    as a dependency and, per match, calls `get_or_create_explanation` only when a
+    provider is available; when it isn't, it falls back to reading any already-cached
+    explanation directly (`get_match_explanation`) so a missing key never regresses a
+    previously-generated explanation back to null. The endpoint never 503s because of
+    this — only `explanation` comes back `null` in that case, exactly as specced.
+    `POST /v1/jobs` (JD submission) deliberately does **not** trigger generation: it
+    already makes one synchronous Gemini call (JD structuring) plus N Second Brain
+    calls per candidate; adding N more synchronous Gemini calls there would measurably
+    slow down JD submission for no benefit, since nothing reads the explanation until
+    the recruiter views the match list. `MatchResultResponse` gained
+    `explanation: Optional[str] = None` (in `schemas.py`) — `null` at submission time,
+    populated on first read.
+  - Tests: 4 new unit tests in `tests/unit/test_explanation.py` (score/requirement
+    content present in the prompt; a hypothetical stray `email`/`name` key in
+    `candidate_snapshot` proven absent from the built prompt via whitelisting, not just
+    absent in practice; the model-facing "no PII" instruction is present). 8 new
+    integration tests in `tests/integration/test_recruitment_workflow.py`: explanation
+    present and matches the mock LLM's fixed output; **not** generated at JD-submission
+    time (`generate_text_calls == []` right after `POST /v1/jobs`); generated once and
+    reused across two `GET .../matches` calls (`len(generate_text_calls) == 1` after
+    two reads — the single most direct proof of the "generate once, reuse" invariant);
+    the row actually lands in `match_explanations` with a non-empty
+    explanation/model/prompt_version; a disqualified candidate (missing required skill)
+    still comes back with `qualified: false`/`hard_gate_passed: false` exactly as
+    scored even when the explanation LLM call is made to fail (new
+    `_FailingExplanationLLMProvider` / `client_failing_explanation` fixture —
+    `generate_structured` succeeds normally, only `generate_text` raises) — proving a
+    generation failure never touches scoring; the prompt text sent to the mock LLM
+    contains none of `@`/`email`/`phone`/`candidate_name`/`full_name`; an unavailable
+    provider (`get_llm_provider_optional` overridden to return `None`) still returns
+    200 with valid scores and `explanation: null`. `conftest_recruitment_workflow.py`'s
+    `_MockLLMProvider.generate_text` (previously `raise NotImplementedError`, unused
+    until now) now returns a fixed string and records every call in
+    `.generate_text_calls`; the `client` fixture now shares one `_MockLLMProvider`
+    instance (via a new `mock_llm` fixture) across a test's requests instead of a fresh
+    instance per dependency resolution, specifically so call-count assertions are
+    meaningful. Full regression after this work: 138/138 unit tests (134 + 4 new),
+    25/25 resume-intelligence, 54/54 second-brain, 88/88 recruitment-workflow (81 + 7
+    new), 119/121 VoiceHR (same 2 pre-existing/unrelated failures — VoiceHR untouched
+    this session).
+  - **Live end-to-end smoke test verified**, real Postgres + real Gemini (no mocks):
+    ingested a candidate into Second Brain, submitted a matching JD to RWS (submission
+    response's `explanation` correctly `null`), called `GET .../matches` twice. First
+    call returned a real, coherent Gemini-written explanation
+    ("...matched all required skills — Python, FastAPI, and PostgreSQL — with no
+    missing requirements... final score of 0.927... qualified because... exceeds the
+    qualification threshold of 0.300"); second call returned the byte-identical string.
+    Confirmed via `docker logs` that only **one** `generate_text:gemini-3.6-flash`
+    `external_call` line was ever logged despite the two reads. Confirmed via a direct
+    DB query that `match_explanations` holds exactly one row for that match, with
+    `model = gemini-3.6-flash`, `prompt_version = v1`, and a non-empty explanation.
 - Nothing is BLOCKED.
 
 ## Known Limitations (discovered this session)
@@ -494,19 +691,47 @@ implementation — see the bootstrap instructions.
   `"{application_id}:{attempt_number}"`, but VoiceHR's `/api/invite` accepts any string). Not a
   problem for this integration (VoiceHR is only ever called by RWS in this architecture), but
   worth knowing if `/api/invite` is ever exposed to other callers.
+- VoiceHR was **not** touched by this session's observability/hardening work — its own
+  pre-existing `logging` usage (plain unformatted lines across `evaluator.py`, `mailer.py`,
+  `agent.py`, etc.) is unchanged, it has no correlation ID middleware, and its logs are not JSON.
+  This was a deliberate scope decision (this task said "keep the existing architecture
+  unchanged" and "do not add new infrastructure," and prior sessions established a standing
+  rule against modifying VoiceHR internals unnecessarily), not an oversight. Two of its files
+  that this project's own code added last session — `backend/services/rws_client.py` and the
+  couple of `logger.warning`/`logger.exception` calls around it in `webhook.py` — were also left
+  as plain-text logging for consistency with the rest of VoiceHR's untouched logging, rather
+  than making just those two files inconsistently JSON. If VoiceHR's logging is ever brought in
+  line with the other three services, `shared/observability.py` cannot be imported there as-is
+  (VoiceHR's Dockerfile builds from its own directory and never copies in `shared/` — confirmed
+  in the VoiceHR-integration session) — it would need its own local copy or a genuinely shared
+  package published differently.
+- `configure_json_logging()` reformats application log lines (anything logged via
+  `logging.getLogger(...)` that isn't `propagate=False`) but does **not** touch uvicorn's own
+  `uvicorn.access`/`uvicorn.error` loggers, which install their own handlers with
+  `propagate=False` by default and so keep printing their normal plain-text access-log lines
+  (`INFO:     "GET /health HTTP/1.1" 200 OK`) alongside the JSON lines. This was a deliberate
+  choice, not a partial implementation — reconfiguring uvicorn's own logging pipeline is
+  infrastructure this task didn't ask for. If fully uniform JSON access logs are ever wanted,
+  that's a separate, explicit follow-up (pass a custom `log_config` to uvicorn), not something
+  to default into.
+- No log rotation, shipping, or aggregation was added (no ELK/Loki/CloudWatch/etc.) — logs go to
+  stdout as JSON lines only, per this task's explicit "do not add new infrastructure" instruction
+  and CLAUDE.md's existing ban on ELK-style stacks. Whatever currently collects each container's
+  stdout (`docker logs`, or nothing, depending on deployment) is the only place these logs live.
 
 ## Exact Next Steps
 
-1. **[NEXT]** LLM-generated match explanation (advisory only, generated *after*
-   `final_score`/`qualified` are persisted — per the architectural rule that the LLM never
-   determines the score itself). Not yet started; natural next point to surface it is the
-   recruiter-facing match/application view (`GET /v1/jobs/{job_id}/matches` or
-   `/applications`), as an additional field computed on read rather than stored, or stored once
-   and cached — worth a deliberate choice rather than defaulting to one.
-2. `services/voicehr/README.md` cleanup (see Known Limitations above) — low priority, doesn't
-   block anything.
-3. Nothing currently reads `second_brain.candidate_feedback` — it's a write-back sink only.
+1. **[NEXT]** `services/voicehr/README.md` cleanup (see Known Limitations above) — low
+   priority, doesn't block anything.
+2. Nothing currently reads `second_brain.candidate_feedback` — it's a write-back sink only.
    Whether/how it should ever influence retrieval or scoring (e.g. down-weighting a candidate
    repeatedly rejected for a given skill profile) is an open design question, deliberately not
    answered this session — flagged here rather than in Known Limitations because it's a genuine
    future design choice, not a defect.
+3. `GET /v1/jobs/{job_id}/applications` and `POST /v1/jobs` (JD submission response) don't
+   surface `explanation` for anything beyond what's already cached at the time of the call —
+   `explanation` is `null` in the JD-submission response and only gets populated the first time
+   `GET /v1/jobs/{job_id}/matches` is called for that job. This was a deliberate scope/latency
+   choice (see the Observability/hardening-adjacent entry above), not an oversight; if a future
+   session wants `/applications` to also carry the explanation, `get_or_create_explanation` is
+   already reusable there.

@@ -55,6 +55,7 @@ class MatchResultResponse(BaseModel):
     matched_requirements: list[str]
     missing_requirements: list[str]
     qualified: bool
+    explanation: Optional[str] = None
 
 
 class JobResponse(BaseModel):

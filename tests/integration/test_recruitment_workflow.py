@@ -60,6 +60,85 @@ def test_health_endpoint(client):
 
 
 # ---------------------------------------------------------------------------
+# Observability: correlation ID propagation + no secrets/PII/interview content in logs
+# ---------------------------------------------------------------------------
+
+def test_correlation_id_generated_when_absent(client):
+    resp = client.get("/health")
+    assert "x-correlation-id" in {k.lower() for k in resp.headers.keys()}
+    assert len(resp.headers["x-correlation-id"]) > 0
+
+
+def test_correlation_id_echoed_when_provided(client):
+    resp = client.get("/health", headers={"X-Correlation-ID": "caller-supplied-id-789"})
+    assert resp.headers["x-correlation-id"] == "caller-supplied-id-789"
+
+
+def test_correlation_id_differs_across_requests(client):
+    first = client.get("/health").headers["x-correlation-id"]
+    second = client.get("/health").headers["x-correlation-id"]
+    assert first != second
+
+
+def test_login_never_logs_password(client, caplog):
+    import logging
+
+    secret_password = "UNIQUE_MARKER_password_should_never_appear_in_logs"
+    with caplog.at_level(logging.DEBUG):
+        client.post(_LOGIN_URL, json={"email": SEED_RECRUITER_EMAIL, "password": secret_password})
+    assert secret_password not in caplog.text
+
+
+def test_login_never_logs_issued_access_token(client, caplog):
+    import logging
+
+    with caplog.at_level(logging.DEBUG):
+        resp = client.post(
+            _LOGIN_URL, json={"email": SEED_RECRUITER_EMAIL, "password": SEED_RECRUITER_PASSWORD}
+        )
+    token = resp.json()["access_token"]
+    assert len(token) > 20  # sanity: a real JWT was actually issued
+    assert token not in caplog.text
+
+
+def test_service_api_key_never_logged(client, caplog):
+    import logging
+
+    with caplog.at_level(logging.DEBUG):
+        client.post(
+            _SCORING_CONFIGS_URL,
+            json={
+                "weight_semantic": 0.5, "weight_deterministic": 0.5,
+                "skill_weight": 0.6, "experience_weight": 0.2, "title_weight": 0.2,
+            },
+            headers={"x-api-key": _VALID_KEY},
+        )
+    assert _VALID_KEY not in caplog.text
+
+
+def test_webhook_never_logs_assessment_content(
+    client, auth_headers, db_session, mock_second_brain, mock_resume_intelligence, mock_voicehr, caplog
+):
+    """The webhook handler's own 'webhook_received' log line must carry only
+    identifiers (delivery_id, interview_status, application_id) -- never the
+    assessment content (scores, CEFR level) it receives, which is treated as
+    interview content."""
+    import logging
+
+    _, application_id = select_and_invite(
+        client, auth_headers, mock_second_brain, mock_resume_intelligence, mock_voicehr
+    )
+    marker_cefr_level = "MRKR_LEVEL"  # fits InterviewAssessment's max_length=10
+    body, headers = make_webhook_payload(application_id, cefr_level=marker_cefr_level)
+
+    with caplog.at_level(logging.DEBUG):
+        resp = client.post(_WEBHOOK_URL, content=body, headers=headers)
+    assert resp.status_code == 200
+
+    assert marker_cefr_level not in caplog.text
+
+
+# ---------------------------------------------------------------------------
 # JD submission -- structuring, persistence, response shape
 # ---------------------------------------------------------------------------
 
@@ -278,6 +357,137 @@ def test_get_job_matches_unknown_job_returns_404(client, auth_headers):
 def test_get_job_matches_without_auth_returns_401(client):
     resp = client.get(f"{_JOBS_URL}/{uuid.uuid4()}/matches")
     assert resp.status_code == 401
+
+
+# ---------------------------------------------------------------------------
+# Advisory LLM match explanation -- generated once, cached, never affects scoring
+# ---------------------------------------------------------------------------
+
+def test_match_explanation_included_in_get_matches(client, auth_headers, mock_second_brain, mock_llm):
+    candidate = make_candidate(skills=["Python"], similarity_score=0.7)
+    mock_second_brain.set_candidates([candidate])
+    job_id = _submit_job(client, auth_headers).json()["job_id"]
+
+    resp = client.get(f"{_JOBS_URL}/{job_id}/matches", headers=auth_headers)
+    assert resp.status_code == 200
+    matches = resp.json()
+    assert len(matches) == 1
+    assert matches[0]["explanation"] == mock_llm.explanation_text
+    assert len(mock_llm.generate_text_calls) == 1
+
+
+def test_match_explanation_not_generated_at_job_submission_time(
+    client, auth_headers, mock_second_brain, mock_llm
+):
+    """Explanation generation happens on read (GET .../matches), not eagerly during
+    JD submission -- submit_job's own response must not trigger a Gemini call for it."""
+    candidate = make_candidate(skills=["Python"], similarity_score=0.7)
+    mock_second_brain.set_candidates([candidate])
+    resp = _submit_job(client, auth_headers)
+    assert resp.json()["matches"][0]["explanation"] is None
+    assert mock_llm.generate_text_calls == []
+
+
+def test_match_explanation_generated_once_and_reused_on_repeated_reads(
+    client, auth_headers, mock_second_brain, mock_llm
+):
+    candidate = make_candidate(skills=["Python"], similarity_score=0.7)
+    mock_second_brain.set_candidates([candidate])
+    job_id = _submit_job(client, auth_headers).json()["job_id"]
+
+    first = client.get(f"{_JOBS_URL}/{job_id}/matches", headers=auth_headers).json()
+    second = client.get(f"{_JOBS_URL}/{job_id}/matches", headers=auth_headers).json()
+
+    assert first[0]["explanation"] == second[0]["explanation"]
+    # Two reads, but only one underlying Gemini generate_text call -- the second read
+    # must hit the cached match_explanations row instead of calling Gemini again.
+    assert len(mock_llm.generate_text_calls) == 1
+
+
+def test_match_explanation_persisted_in_match_explanations_table(
+    client, auth_headers, db_session, mock_second_brain
+):
+    candidate = make_candidate(skills=["Python"], similarity_score=0.7)
+    mock_second_brain.set_candidates([candidate])
+    job_id = _submit_job(client, auth_headers).json()["job_id"]
+
+    client.get(f"{_JOBS_URL}/{job_id}/matches", headers=auth_headers)
+
+    from db import MatchExplanation, MatchResult
+
+    match = db_session.query(MatchResult).filter(MatchResult.job_id == uuid.UUID(job_id)).first()
+    row = (
+        db_session.query(MatchExplanation)
+        .filter(MatchExplanation.match_result_id == match.id)
+        .first()
+    )
+    assert row is not None
+    assert row.explanation
+    assert row.model
+    assert row.prompt_version
+
+
+def test_match_explanation_generation_failure_does_not_break_matching(
+    client_failing_explanation, auth_headers, mock_second_brain
+):
+    """A Gemini failure on the explanation path must never affect the already-computed
+    and persisted scores/qualification -- only `explanation` comes back null."""
+    candidate = make_candidate(
+        skills=["Java"],  # missing required Python -> disqualified, independent of explanation
+        years_of_experience=10.0,
+        similarity_score=0.99,
+    )
+    mock_second_brain.set_candidates([candidate])
+    job_id = _submit_job(client_failing_explanation, auth_headers, threshold=0.1).json()["job_id"]
+
+    resp = client_failing_explanation.get(f"{_JOBS_URL}/{job_id}/matches", headers=auth_headers)
+    assert resp.status_code == 200
+    match = resp.json()[0]
+    assert match["hard_gate_passed"] is False
+    assert match["missing_requirements"] == ["Python"]
+    assert match["qualified"] is False
+    assert match["explanation"] is None
+    assert len(client_failing_explanation.failing_llm.generate_text_calls) == 1
+
+
+def test_match_explanation_prompt_never_contains_pii(
+    client, auth_headers, mock_second_brain, mock_llm
+):
+    """The prompt sent to Gemini is built only from candidate_snapshot (skills/years/
+    job_titles) + matched/missing requirements + scores -- none of which can ever carry
+    a candidate's name, email, or phone number (Second Brain never stores those, and
+    main.py's candidate_snapshot only ever copies skills/years_of_experience/job_titles).
+    """
+    candidate = make_candidate(skills=["Python"], similarity_score=0.7)
+    mock_second_brain.set_candidates([candidate])
+    job_id = _submit_job(client, auth_headers).json()["job_id"]
+
+    client.get(f"{_JOBS_URL}/{job_id}/matches", headers=auth_headers)
+
+    assert len(mock_llm.generate_text_calls) == 1
+    prompt = mock_llm.generate_text_calls[0]
+    for marker in ("@", "email", "phone", "Email", "Phone", "candidate_name", "full_name"):
+        assert marker not in prompt
+
+
+def test_match_explanation_unavailable_gemini_key_returns_null_explanation(
+    client, auth_headers, mock_second_brain, monkeypatch
+):
+    """If get_llm_provider_optional can't construct a provider at all (e.g. no Gemini
+    key configured), GET .../matches must still succeed with valid scores -- only
+    explanation stays null."""
+    import main
+
+    candidate = make_candidate(skills=["Python"], similarity_score=0.7)
+    mock_second_brain.set_candidates([candidate])
+    job_id = _submit_job(client, auth_headers).json()["job_id"]
+
+    main.app.dependency_overrides[main.get_llm_provider_optional] = lambda: None
+    resp = client.get(f"{_JOBS_URL}/{job_id}/matches", headers=auth_headers)
+    assert resp.status_code == 200
+    match = resp.json()[0]
+    assert match["qualified"] is True
+    assert match["explanation"] is None
 
 
 # ---------------------------------------------------------------------------

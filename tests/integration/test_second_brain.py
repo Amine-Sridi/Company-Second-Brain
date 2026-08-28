@@ -49,6 +49,47 @@ def test_health_endpoint(client):
 
 
 # ---------------------------------------------------------------------------
+# Observability: correlation ID propagation + no secrets/PII in logs
+# ---------------------------------------------------------------------------
+
+def test_correlation_id_generated_when_absent(client):
+    resp = client.get("/health")
+    assert "x-correlation-id" in {k.lower() for k in resp.headers.keys()}
+    assert len(resp.headers["x-correlation-id"]) > 0
+
+
+def test_correlation_id_echoed_when_provided(client):
+    resp = client.get("/health", headers={"X-Correlation-ID": "caller-supplied-id-456"})
+    assert resp.headers["x-correlation-id"] == "caller-supplied-id-456"
+
+
+def test_correlation_id_differs_across_requests(client):
+    first = client.get("/health").headers["x-correlation-id"]
+    second = client.get("/health").headers["x-correlation-id"]
+    assert first != second
+
+
+def test_ingest_never_logs_api_key_or_raw_text(client, caplog):
+    """raw_text is PII-stripped by Resume Intelligence but may still contain sensitive
+    free text (skills context, phrasing); it and the service API key must never appear
+    in this service's own logs for the request that processed them."""
+    import logging
+
+    secret_raw_text = "UNIQUE_MARKER_never_should_be_logged Python engineer bio text."
+    with caplog.at_level(logging.DEBUG):
+        resp = client.post(
+            _INGEST_URL,
+            json=_make_payload(raw_text=secret_raw_text),
+            headers={"x-api-key": _VALID_KEY},
+        )
+    assert resp.status_code == 200
+
+    log_text = caplog.text
+    assert secret_raw_text not in log_text
+    assert _VALID_KEY not in log_text
+
+
+# ---------------------------------------------------------------------------
 # Valid ingestion
 # ---------------------------------------------------------------------------
 

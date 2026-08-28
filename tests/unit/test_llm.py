@@ -128,6 +128,39 @@ class TestGenerateText(unittest.TestCase):
         call_kwargs = mock_client.aio.models.generate_content.call_args.kwargs
         self.assertEqual(call_kwargs["model"], GeminiProvider.DEFAULT_MODEL)
 
+    def test_success_logs_latency_without_prompt_content(self):
+        secret_prompt = "Candidate resume text: Jane Doe, jane@example.com, +15551234567"
+        provider, _ = _make_provider("some completion")
+        with self.assertLogs("shared.llm", level="INFO") as ctx:
+            asyncio.run(provider.generate_text(secret_prompt))
+
+        joined = "\n".join(ctx.output)
+        self.assertNotIn(secret_prompt, joined)
+        self.assertNotIn("jane@example.com", joined)
+        record = ctx.records[0]
+        self.assertEqual(record.external_call["outcome"], "success")
+        self.assertIn("duration_ms", record.external_call)
+        self.assertTrue(record.external_call["operation"].startswith("generate_text:"))
+
+    def test_failure_logs_error_type_without_prompt_content(self):
+        secret_prompt = "Candidate resume text: Jane Doe, jane@example.com"
+        provider, mock_client = _make_provider()
+        mock_client.aio.models.generate_content = AsyncMock(
+            side_effect=RuntimeError("503 Service Unavailable")
+        )
+        from shared.llm import LLMProviderError
+
+        with self.assertLogs("shared.llm", level="WARNING") as ctx:
+            with self.assertRaises(LLMProviderError):
+                asyncio.run(provider.generate_text(secret_prompt))
+
+        joined = "\n".join(ctx.output)
+        self.assertNotIn(secret_prompt, joined)
+        self.assertNotIn("jane@example.com", joined)
+        record = ctx.records[0]
+        self.assertEqual(record.external_call["outcome"], "error")
+        self.assertEqual(record.external_call["error_type"], "RuntimeError")
+
 
 class TestGenerateStructured(unittest.TestCase):
     def test_returns_validated_model(self):
@@ -233,6 +266,19 @@ class TestEmbedText(unittest.TestCase):
         with self.assertRaises(LLMProviderError) as ctx:
             asyncio.run(provider.embed_text("hello"))
         self.assertIn("embed_text failed", str(ctx.exception))
+
+    def test_success_logs_latency_without_text_content(self):
+        secret_text = "Jane Doe, senior engineer, jane@example.com"
+        provider, _ = self._make_embed_provider()
+        with self.assertLogs("shared.llm", level="INFO") as ctx:
+            asyncio.run(provider.embed_text(secret_text))
+
+        joined = "\n".join(ctx.output)
+        self.assertNotIn(secret_text, joined)
+        self.assertNotIn("jane@example.com", joined)
+        record = ctx.records[0]
+        self.assertEqual(record.external_call["outcome"], "success")
+        self.assertIn("duration_ms", record.external_call)
 
 
 if __name__ == "__main__":

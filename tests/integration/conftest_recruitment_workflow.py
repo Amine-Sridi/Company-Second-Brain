@@ -126,16 +126,25 @@ def db_session(test_engine):
 
 
 class _MockLLMProvider:
-    """Returns a fixed structured JD; embed_text/generate_text are unused by RWS."""
+    """
+    Returns a fixed structured JD for generate_structured. generate_text backs the
+    advisory match-explanation path (GET .../matches) -- returns a fixed string and
+    records every call in .generate_text_calls so tests can assert on call count
+    (e.g. "repeated reads do not call Gemini again") without a real Gemini call.
+    embed_text is unused by RWS.
+    """
 
-    def __init__(self, structured=None):
+    def __init__(self, structured=None, explanation_text="Mock explanation."):
         self._structured = structured
+        self.explanation_text = explanation_text
+        self.generate_text_calls = []
 
     async def embed_text(self, text, *, model=None, dimensions=768):
         raise NotImplementedError
 
     async def generate_text(self, prompt, *, model=None):
-        raise NotImplementedError
+        self.generate_text_calls.append(prompt)
+        return self.explanation_text
 
     async def generate_structured(self, prompt, schema, *, model=None):
         if self._structured is not None:
@@ -154,10 +163,32 @@ class _FailingLLMProvider(_MockLLMProvider):
         raise LLMProviderError("Simulated JD structuring failure")
 
 
+class _FailingExplanationLLMProvider(_MockLLMProvider):
+    """generate_structured works normally (JD submission succeeds); generate_text
+    always fails, simulating Gemini being unreachable only for the advisory
+    match-explanation path."""
+
+    async def generate_text(self, prompt, *, model=None):
+        from shared.llm import LLMProviderError
+        self.generate_text_calls.append(prompt)
+        raise LLMProviderError("Simulated match-explanation generation failure")
+
+
 @pytest.fixture
-def client(db_session, monkeypatch):
+def mock_llm() -> "_MockLLMProvider":
+    """
+    A single, shared _MockLLMProvider instance for the `client` fixture -- shared
+    (not a fresh instance per call) so tests can assert on .generate_text_calls across
+    multiple requests within the same test (e.g. "a second GET .../matches does not
+    call Gemini again").
+    """
+    return _MockLLMProvider()
+
+
+@pytest.fixture
+def client(db_session, monkeypatch, mock_llm):
     from fastapi.testclient import TestClient
-    from main import app, settings, get_llm_provider
+    from main import app, settings, get_llm_provider, get_llm_provider_optional
     from db import get_db
 
     original_key = settings.service_api_key
@@ -169,7 +200,8 @@ def client(db_session, monkeypatch):
         yield db_session
 
     app.dependency_overrides[get_db] = _override_get_db
-    app.dependency_overrides[get_llm_provider] = lambda: _MockLLMProvider()
+    app.dependency_overrides[get_llm_provider] = lambda: mock_llm
+    app.dependency_overrides[get_llm_provider_optional] = lambda: mock_llm
 
     with TestClient(app, raise_server_exceptions=True) as c:
         yield c
@@ -182,7 +214,7 @@ def client(db_session, monkeypatch):
 @pytest.fixture
 def client_failing_llm(db_session):
     from fastapi.testclient import TestClient
-    from main import app, settings, get_llm_provider
+    from main import app, settings, get_llm_provider, get_llm_provider_optional
     from db import get_db
 
     original_key = settings.service_api_key
@@ -193,10 +225,45 @@ def client_failing_llm(db_session):
     def _override_get_db():
         yield db_session
 
+    failing = _FailingLLMProvider()
     app.dependency_overrides[get_db] = _override_get_db
-    app.dependency_overrides[get_llm_provider] = lambda: _FailingLLMProvider()
+    app.dependency_overrides[get_llm_provider] = lambda: failing
+    app.dependency_overrides[get_llm_provider_optional] = lambda: failing
 
     with TestClient(app, raise_server_exceptions=True) as c:
+        yield c
+
+    app.dependency_overrides.clear()
+    settings.service_api_key = original_key
+    settings.webhook_hmac_secret = original_webhook_secret
+
+
+@pytest.fixture
+def client_failing_explanation(db_session):
+    """
+    Like `client`, but the advisory match-explanation LLM call (generate_text) always
+    fails while JD structuring (generate_structured) succeeds normally -- for proving
+    a Gemini failure on the explanation path never breaks matching/qualification.
+    """
+    from fastapi.testclient import TestClient
+    from main import app, settings, get_llm_provider, get_llm_provider_optional
+    from db import get_db
+
+    original_key = settings.service_api_key
+    original_webhook_secret = settings.webhook_hmac_secret
+    settings.service_api_key = _TEST_SERVICE_KEY
+    settings.webhook_hmac_secret = TEST_WEBHOOK_HMAC_SECRET
+
+    def _override_get_db():
+        yield db_session
+
+    failing = _FailingExplanationLLMProvider()
+    app.dependency_overrides[get_db] = _override_get_db
+    app.dependency_overrides[get_llm_provider] = lambda: failing
+    app.dependency_overrides[get_llm_provider_optional] = lambda: failing
+
+    with TestClient(app, raise_server_exceptions=True) as c:
+        c.failing_llm = failing
         yield c
 
     app.dependency_overrides.clear()

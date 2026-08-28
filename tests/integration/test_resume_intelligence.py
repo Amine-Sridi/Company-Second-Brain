@@ -271,3 +271,64 @@ def test_health_endpoint(client):
     resp = client.get("/health")
     assert resp.status_code == 200
     assert resp.json() == {"status": "ok", "service": "resume-intelligence"}
+
+
+# ---------------------------------------------------------------------------
+# Observability: correlation ID propagation + no PII in logs
+# ---------------------------------------------------------------------------
+
+def test_correlation_id_generated_when_absent(client):
+    resp = client.get("/health")
+    assert "x-correlation-id" in {k.lower() for k in resp.headers.keys()}
+    assert len(resp.headers["x-correlation-id"]) > 0
+
+
+def test_correlation_id_echoed_when_provided(client):
+    resp = client.get("/health", headers={"X-Correlation-ID": "caller-supplied-id-123"})
+    assert resp.headers["x-correlation-id"] == "caller-supplied-id-123"
+
+
+def test_correlation_id_differs_across_requests(client):
+    first = client.get("/health").headers["x-correlation-id"]
+    second = client.get("/health").headers["x-correlation-id"]
+    assert first != second
+
+
+def test_contact_lookup_never_logs_pii(client, db_session: Session, caplog):
+    """The contact endpoint returns name/email/phone in its response body -- this test
+    asserts none of that PII ever appears in the service's own log output for the
+    request that served it."""
+    import logging
+
+    from db import store_candidate
+
+    cj = _make_candidate_json(
+        first_name="Sensitive", last_name="Candidate",
+        email="sensitive.pii.marker@example.com", phone="+33612345678",
+    )
+    candidate_id, _ = store_candidate(db_session, cj, raw_text="t")
+
+    with caplog.at_level(logging.DEBUG):
+        resp = client.get(
+            f"/v1/candidates/{candidate_id}/contact",
+            headers={"x-api-key": "test-service-key"},
+        )
+    assert resp.status_code == 200
+    assert resp.json()["email"] == "sensitive.pii.marker@example.com"  # sanity: PII really was returned
+
+    log_text = caplog.text
+    assert "sensitive.pii.marker@example.com" not in log_text
+    assert "+33612345678" not in log_text
+    assert "Sensitive Candidate" not in log_text
+    assert "Sensitive" not in log_text
+
+
+def test_service_api_key_never_logged(client, caplog):
+    import logging
+
+    with caplog.at_level(logging.DEBUG):
+        client.get(f"/v1/candidates/{uuid.uuid4()}/contact", headers={"x-api-key": "test-service-key"})
+        client.get(f"/v1/candidates/{uuid.uuid4()}/contact", headers={"x-api-key": "wrong-key-value"})
+
+    assert "test-service-key" not in caplog.text
+    assert "wrong-key-value" not in caplog.text
