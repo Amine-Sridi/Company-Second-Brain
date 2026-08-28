@@ -1,0 +1,7 @@
+fastapi
+uvicorn[standard]
+httpx
+pydantic[email]
+pydantic-settings
+google-genai==2.18.0
+websockets==16.0

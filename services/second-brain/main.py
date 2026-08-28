@@ -31,8 +31,8 @@ from shared.schemas import (
     RetrieveCandidatesResponse,
 )
 from shared.llm import LLMProvider, LLMProviderError
+from shared.observability import CorrelationIdMiddleware, configure_json_logging
 
-logging.basicConfig(level="INFO")
 logger = logging.getLogger(__name__)
 
 
@@ -50,8 +50,10 @@ class Settings(BaseSettings):
 
 
 settings = Settings()
+configure_json_logging("second-brain", settings.log_level)
 
 app = FastAPI(title="Second Brain")
+app.add_middleware(CorrelationIdMiddleware)
 
 
 # ---------------------------------------------------------------------------

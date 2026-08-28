@@ -610,6 +610,595 @@ implementation — see the bootstrap instructions.
     `external_call` line was ever logged despite the two reads. Confirmed via a direct
     DB query that `match_explanations` holds exactly one row for that match, with
     `model = gemini-3.6-flash`, `prompt_version = v1`, and a non-empty explanation.
+- VoiceHR reliability/security fixes (from an in-depth read-only audit of
+  `services/voicehr/backend/`, not this session's initial scope, done as a separate prior
+  step): **DONE**. Five approved fixes, explicitly scoped to exclude admin auth, Vapi
+  webhook hardening, report-token expiry, SQLite refactoring, and interview-engine
+  consolidation — all deferred, not attempted.
+  1. **The real local interview-completion path now notifies RWS.** This was the
+     single most important finding of the audit: `backend/services/processing.py`
+     (what `session.py`'s WebSocket handler actually calls when a candidate finishes
+     an interview) never called `notify_rws_interview_result` — only
+     `backend/api/routes/webhook.py`'s `process_interview` did, and that function is
+     the *legacy, unused-by-the-local-demo* Vapi-server-webhook path (main.py's own
+     comment already called it "optional production compatibility... local sessions
+     never call this endpoint"). Every interview run through the actual product flow
+     therefore never reached RWS. Fixed by extracting the shared "shape assessment +
+     sign + POST + persist delivery receipt" tail into one new function,
+     `notify_and_record_interview_result(conn, interview_id, external_reference_id,
+     scores, inconclusive)`, in `backend/services/rws_client.py`, and calling it from
+     **both** `processing.process_interview` (new) and `webhook.process_interview`
+     (refactored to use the same helper instead of its own inline copy) — so the two
+     completion paths can no longer silently drift apart on this behavior. Tests:
+     `tests/test_webhook.py`'s `mock_notify_rws` fixture retargeted to patch
+     `backend.services.rws_client.notify_rws_interview_result` (the one true patch
+     point for either caller, since the helper resolves that name in its own module's
+     namespace regardless of which path calls it) — all 5 existing RWS-notification
+     tests there still pass unchanged. New `tests/test_processing.py` (7 tests) is the
+     first test coverage of the real path: notifies RWS on completion (assessment
+     shape, delivery receipt persisted), inconclusive-duration case, a
+     `candidate_refused`/`abusive_language` termination (maps to RWS's `inconclusive`
+     bucket, RWS has no separate "terminated" concept), an evaluation-failure case
+     (maps to RWS's `failed`), a manual (non-RWS, `external_reference_id IS NULL`)
+     interview correctly never notifying, and RWS-unreachable not blocking the report
+     email. `tests/conftest.py`'s `client` fixture now also patches
+     `backend.services.processing`'s `settings` (it was missing from the per-module
+     patch list entirely — without this, `test_processing.py` would have run against
+     whatever real `.env` values happen to be loaded, non-deterministically, and
+     potentially attempted a real outbound email/webhook call).
+  2. **Fixed a secret-exposure bug in `backend/services/mailer.py`**:
+     `send_report_email` built the outbound admin-notification email's `from` field as
+     `f"VoiceHR <onboarding@{settings.resend_api_key}>"` — the live Resend API key
+     itself, not a domain, placed into an email header sent to a third party (and
+     almost certainly causing every such email to fail to send, silently, since it's
+     not a valid domain). Fixed by adding a new `resend_from_address` setting
+     (`backend/core/config.py`, default `"VoiceHR <onboarding@resend.dev>"` — Resend's
+     own unverified-domain sandbox sender, documented in `.env.example` under a new
+     `RESEND_FROM_ADDRESS`), used via `getattr(..., None) or <default>` so an
+     empty/unset value can never fall through to something falsy. Existing failure
+     isolation (`asyncio.wait_for` + `except (asyncio.TimeoutError, httpx.HTTPError):
+     return False`) was untouched. 2 new regression tests in `tests/test_mailer.py`:
+     one asserts the API key literally never appears in the `from` field sent to
+     Resend even when a custom `resend_from_address` is configured, the other asserts
+     an empty `resend_from_address` falls back to the safe sandbox default rather than
+     to the key or an empty string.
+  3. **Split the duplicate/shadowed `/health` routes.** `main.py` registered a trivial
+     `/health` *before* `report.py`'s `include_router` call; since Starlette matches
+     on first registration, `report.py`'s much richer `/health` (DB connectivity,
+     which evaluator/model is configured, Ollama liveness) was permanently unreachable
+     dead code — and this was the actual, verified root cause of the
+     `test_report.py::test_health_check` failure carried forward across multiple
+     prior sessions as "pre-existing, unrelated." Fixed by moving the rich check to
+     `GET /health/detail` (`backend/api/routes/report.py`); `main.py`'s `/health`
+     (used by the Docker healthcheck) is untouched and stays a single cheap request.
+     `tests/test_report.py::test_health_check` renamed to `test_health_check_detail`
+     and repointed at `/health/detail`; a new `test_health_lightweight_endpoint_is_not_
+     shadowed_by_detail_route` pins `/health`'s own minimal shape so the two routes
+     can't collapse back into each other unnoticed. **Live-verified**: `curl`-equivalent
+     calls from inside the rebuilt `csb-voicehr` container now return the trivial
+     shape at `/health` and the full diagnostic payload (`db: connected`,
+     `evaluator_provider: gemini`, `gemini_configured: true`, ...) at `/health/detail`.
+  4. **Evaluator reliability + prompt hardening**, `backend/services/evaluator.py`:
+     - Extracted `_generate_raw_result(provider, prompt)` (one generation attempt,
+       unvalidated) out of `evaluate()`, and wrapped the generate-then-validate step
+       in a loop bounded at `_MAX_EVALUATION_ATTEMPTS = 2` (one generation + exactly
+       one retry, never more). A retry now fires specifically when
+       `_validated_result` raises `ValueError` — syntactically valid JSON that's
+       missing a dimension score — since that's a plausible one-off model-quality
+       miss, not a systemic failure, and previously got zero retries (only
+       transport/rate-limit errors inside `_evaluate_with_gemini`'s own separate
+       3-attempt loop were ever retried). Any other exception, or a second
+       consecutive `ValueError`, still falls straight through to the existing
+       `empty_result(str(exc))` graceful-fallback path, unchanged.
+     - Hardened `EVALUATION_PROMPT` and `agent.py`'s `generate_conversation_decision`
+       prompt: the transcript / recent-conversation / candidate-response text is now
+       wrapped in `<transcript>`/`<recent_conversation>`/`<candidate_response>`
+       delimiters with an explicit instruction that this content is untrusted
+       candidate-provided data, not instructions, and any attempt embedded in it to
+       change the score or the interview's flow control (advance/terminate) must be
+       ignored. This is a genuine, not hypothetical, risk for a hiring-assessment
+       product: a candidate has direct incentive to talk their way into a better
+       score or an early/skipped task. Purely a prompt-text change — no schema,
+       control-flow, or architecture change.
+     - Tests: `tests/test_evaluator.py` gained 5 new tests — retry-then-succeed on an
+       incomplete-then-complete Gemini response pair (asserts exactly 2
+       `generate_content` calls), retry-exhausted-then-graceful-fallback on a
+       persistently incomplete response (asserts exactly 2 calls, never 3, proving
+       the bound), a legacy-flat-alias resolution test for `normalize_result`
+       (`comprehension_score`/`fluency_score`/etc. as top-level keys, not nested under
+       `dimensions`), and a prompt-content assertion that `EVALUATION_PROMPT` contains
+       the transcript delimiters and the untrusted-data instruction. `tests/test_
+       session.py` gained one test capturing the actual prompt string sent to
+       Gemini's `generate_content` for `generate_conversation_decision` and asserting
+       the same delimiters/instruction are present.
+  5. Fixed a real, blocking configuration bug found *while performing the live smoke
+     test* (see below), not part of the original approved scope but necessary to
+     verify it: VoiceHR's `.env`/`.env.example` still had `GEMINI_MODEL` and
+     `GEMINI_EVALUATION_MODEL` set to `gemini-2.5-flash`, which the live Gemini API
+     now rejects with `404 NOT_FOUND` ("no longer available to new users... use
+     models/gemini-3.6-flash") — the exact same deprecation already fixed for RWS's
+     own `GEMINI_MODEL` in a previous session (see the `gemini-2.5-flash` Known
+     Limitation below, now partly resolved). Updated both settings to
+     `gemini-3.6-flash` in `services/voicehr/.env` (the live container's actual
+     config) and `.env.example`. This is a config-value fix only, not a code or
+     architecture change.
+  - Full VoiceHR regression after all of the above: **134 passed, 1 failed** (up from
+    119 passed, 2 failed before this session — one of the two previously-"pre-existing,
+    unrelated" failures was actually the `/health` route-shadowing bug above, now
+    fixed and confirmed unrelated to anything else). The one remaining failure,
+    `test_session.py::test_gemini_live_proxy_streams_audio_and_transcript`, is
+    unrelated to every change in this session (asserts on `gemini_live.py`'s live
+    audio-session client-content capture, a file this session did not touch) — verified
+    it fails identically before and after this session's changes. RWS regression
+    unaffected (RWS code wasn't touched): 88/88 `tests/integration/test_
+    recruitment_workflow.py` (Docker), 138/138 host-side unit tests.
+  - **Live end-to-end smoke test verified against real Postgres, real Gemini, and the
+    rebuilt `csb-voicehr` container (no mocks, and no hand-crafted webhook)**: for each
+    of two full RWS→Second Brain→Resume Intelligence→VoiceHR→RWS cycles (login →
+    submit JD → select match → invite, with a matching Resume Intelligence contact
+    row inserted so the pre-flight contact-lookup gate passes), the interview's
+    completion was triggered by calling `backend.services.processing.process_interview`
+    **directly inside the running `csb-voicehr` container** — the exact function
+    `session.py`'s WebSocket handler calls, with a hand-written transcript standing in
+    only for real browser audio/ASR output (the one piece of the real path not driven
+    live here; everything downstream is the actual, unmodified code). Cycle 1 (before
+    the model-name fix above) hit the then-still-broken `gemini-2.5-flash` 404 and
+    fell through to `empty_result` — and RWS still autonomously received a correctly
+    HMAC-signed webhook and transitioned `selected → invited → interviewed` with
+    `interview_status: "failed"`, proving the graceful-fallback path survives all the
+    way to RWS. Cycle 2 (after the fix) got a genuine successful evaluation
+    (`overall_score: 94, cefr_level: "C1"`, real per-dimension scores) and RWS
+    transitioned to `interviewed` with `interview_status: "completed"` and those exact
+    scores. Confirmed via `docker logs csb-recruitment-workflow` that both deliveries
+    show `outcome: "processed"` with distinct `delivery_id`/`correlation_id` values —
+    i.e. RWS's real HMAC signature check genuinely passed twice on signatures VoiceHR's
+    own code produced, never anything hand-signed by this session. Confirmed via
+    `GET /v1/jobs/{job_id}/applications` on the RWS side (recruiter JWT, no shortcuts)
+    that both applications show the correct final state. Not exercised live: the admin
+    auth gap, the Vapi webhook path, and report-token expiry — all explicitly out of
+    this session's approved scope.
+- VoiceHR admin/report-management surface authentication: **DONE**. The next approved
+  item from the VoiceHR audit (item 3 in that list) — minimal HTTP Basic auth
+  protecting candidate PII, transcripts, recordings, and scores, explicitly not a user
+  database, session system, or JWT. Scoped exactly as approved: Vapi webhook
+  redesign, report-token expiry, SQLite refactoring, and interview-engine
+  consolidation were all explicitly excluded and not touched.
+  - Inspected the existing admin flow first: `frontend/admin.html`'s JS only calls
+    `fetch()` against the same-origin admin API routes with no custom auth headers —
+    meaning the browser's own native HTTP Basic credential prompt (triggered by a
+    401 response carrying `WWW-Authenticate: Basic`, then cached by the browser for
+    the session) is sufficient and requires zero frontend changes. This is what made
+    HTTP Basic the right minimal choice here, not a deliberate stylistic preference.
+  - New `require_admin_auth` dependency in `backend/api/deps.py` (co-located with the
+    existing `get_db`/`validate_interview_token` shared dependencies): FastAPI's
+    `HTTPBasic()` security scheme, both username and password compared via
+    `secrets.compare_digest` (constant-time), combined with `&` rather than `and` so
+    neither check short-circuits the other — the exact pattern FastAPI's own docs
+    recommend for HTTP Basic auth, chosen specifically to avoid a timing
+    side-channel between "wrong username" and "right username, wrong password". Two
+    new settings in `backend/core/config.py`: `admin_username` (default `"admin"`),
+    `admin_password` (default `"changeme-admin-password"`) — documented in
+    `.env.example` under a new `ADMIN_USERNAME`/`ADMIN_PASSWORD` section, and added to
+    the real `services/voicehr/.env` (same `changeme-*` placeholder convention already
+    used for `RWS_SERVICE_API_KEY`/`RWS_WEBHOOK_HMAC_SECRET` in this project).
+  - Protected exactly the routes that expose PII/report-management, decided by what
+    they actually reveal or let you do, not by URL prefix alone:
+    - `GET /admin` (`main.py`) — the primary documented admin entry point.
+    - `GET /admin/reports` (`report.py`) — HTML listing that embeds every completed
+      candidate's name and report token inline.
+    - `GET /api/admin/reports` (`report.py`) — the JSON equivalent: every candidate's
+      name, email, full transcript, scores, and recording URL, unfiltered.
+    - `POST /api/admin/reports/{report_token}/retry` (`report.py`) — a
+      report-management action (re-runs evaluation), not just a read.
+    - `GET /recordings/{filename}` (`report.py`) — added even though it isn't
+      `/admin`-prefixed, because the Goal explicitly named recordings and because its
+      filenames are the *sequential interview id* (`"{id}.webm"`), not an unguessable
+      token — without this, every interview's raw audio was enumerable by anyone
+      regardless of whether they knew any report_token at all, arguably the single
+      worst PII exposure on the whole surface.
+  - Deliberately left unauthenticated, per the task's own "keep candidate-facing
+    report links unchanged unless they are actually part of the admin surface" and
+    "no report-token expiry": `GET /api/report/{report_token}` and `GET /report`
+    (the per-report shareable-link flow, already gated by an unguessable UUID
+    `report_token` — the same bearer-capability-link model as the interview invite
+    link, which this task explicitly did not ask to change), `GET /health` and
+    `GET /health/detail` (operational diagnostics, not PII), and
+    `GET /interview`/`GET /api/interview/{token}` (candidate-facing, unrelated). Also
+    left untouched (pre-existing, unrelated, out of scope): `POST /api/invite`,
+    `POST /api/interview/{token}/invite`, and `.../invite/preview` — admin.html's own
+    invite-creation form calls these without any auth header at all, which appears to
+    already 401 today against `require_rws_service_key` (added in an earlier session
+    for the RWS integration) independent of anything in this session; flagged in
+    Known Limitations below rather than silently fixed, since it's a different,
+    pre-existing gap outside this task's explicit scope.
+  - One known, accepted residual gap, not fixed: `StaticFiles(directory="frontend",
+    html=True)` mounted at `/` in `main.py` also serves `frontend/admin.html`
+    directly at the raw path `/admin.html`, bypassing the `/admin` route's auth
+    dependency entirely (Starlette matches the explicitly-registered `/admin` route
+    first for that exact path, but `/admin.html` is a different path the StaticFiles
+    mount still serves unauthenticated). Left as-is because the static HTML itself
+    contains no embedded data — it's a page shell whose JS calls the now-protected
+    APIs, which are the actual data-bearing endpoints — and reworking the StaticFiles
+    mount to exclude one file was judged more risk/complexity than the residual
+    exposure (an unauthenticated view of an empty page shell) justifies. Documented
+    here rather than silently left unmentioned.
+  - Tests: new `tests/test_admin_auth.py` (25 tests) — every protected GET route
+    without credentials (401 + `WWW-Authenticate: Basic`), with a wrong password,
+    and with a wrong username; the retry POST and the recordings GET the same way;
+    valid credentials accepted on every protected route (including a positive
+    assertion that the returned JSON actually contains the seeded report); every
+    route intended to stay public still returns 200 with no credentials
+    (`/health`, `/health/detail`, `/interview`, `/report` pages,
+    `/api/report/{token}`, `/api/interview/{token}`); two `caplog`-based tests
+    (DEBUG level, both a successful and a failed auth attempt) asserting the
+    configured admin username/password never appear anywhere in captured log output.
+    7 pre-existing tests across `tests/test_report.py` and `tests/test_pages.py` that
+    called the now-protected routes were updated to pass valid Basic auth credentials
+    (`auth=(TEST_ADMIN_USERNAME, TEST_ADMIN_PASSWORD)`) — behavior unchanged, just
+    newly gated. `tests/conftest.py`'s `client` fixture now also patches
+    `backend.api.deps`'s `settings` reference (it wasn't patched before — `deps.py`
+    had no reason to import `settings` until this dependency needed it) and
+    `mock_settings` gained `admin_username`/`admin_password` test values.
+  - Full regression after this work: 159/160 VoiceHR tests (up from 134/135 — 25 new
+    admin-auth tests, same single pre-existing/unrelated `gemini_live` failure,
+    untouched), 138/138 host-side unit tests, 88/88 RWS integration tests (Docker) —
+    neither of the latter two touch VoiceHR code, run as a sanity check only.
+  - **Live-verified against the rebuilt `csb-voicehr` container** (real HTTP requests
+    over the mapped port, no TestClient): `GET /admin` with no credentials and with a
+    wrong password both return `401` with `WWW-Authenticate: Basic`; with the real
+    `.env` credentials it returns `200`, as do `/admin/reports` and
+    `/api/admin/reports`; `GET /recordings/1.webm` with no credentials returns `401`;
+    `/health`, `/health/detail`, and `/interview?token=x` all remain `200` with no
+    credentials. Confirmed via `docker logs csb-voicehr` that uvicorn's access log
+    (the only thing that logs these requests) records only method/path/status —
+    never the `Authorization` header or any credential value, for either the
+    rejected or the accepted requests.
+- `services/voicehr/README.md` cleanup: **DONE**. Closed the `[NEXT]` item carried forward
+  since the VoiceHR-integration session. Documentation-only — no application code, tests,
+  architecture, or behavior changed.
+  - Replaced the entire pre-integration-plan README (still describing a "skeleton only. Not
+    yet implemented" state and a planned `POST /v1/interviews` endpoint that was never built)
+    with one written directly against the current `backend/` implementation: VoiceHR's role
+    inside Company Second Brain, the full candidate interview flow, the Gemini Live vs. legacy
+    local (Whisper/Ollama/Kokoro) pipeline split and how `GEMINI_LIVE_ENABLED` selects between
+    them, the evaluation pipeline (weights, bounded retry-on-validation-failure, graceful
+    fallback, the untrusted-transcript prompt hardening), SQLite persistence, `POST
+    /api/invite` (auth, `external_reference_id`, `Idempotency-Key`), the shared
+    `notify_and_record_interview_result` helper (HMAC-SHA256 `X-Signature`/`X-Delivery-Id`,
+    the assessment-payload shaping, the completed/inconclusive/failed status mapping,
+    best-effort/no-retry semantics), the admin/report surface and its HTTP Basic auth
+    (including which routes are and are not gated, and why), `/health` vs `/health/detail`,
+    Resend email configuration, a table of relevant environment variables, and a "Known
+    deliberate limitations" section covering the legacy Vapi webhook path, the missing
+    `report_token` expiry, the `/admin.html` static-file auth bypass, the pre-existing
+    (unrelated, unfixed) `admin.html` invite-form auth gap, VoiceHR's still-plain-text
+    logging, and the two coexisting interview-conduct implementations.
+  - Also fixed one small, directly-related staleness found while writing the README:
+    `.env.example`'s `RWS_SERVICE_API_KEY` comment still named the never-built
+    `POST /v1/interviews` endpoint instead of the real `POST /api/invite` — corrected to match.
+  - Verified every route named in the new README actually exists in the code (grepped each
+    `@router.get/post(...)` decorator in `invite.py`/`interview.py`/`report.py`/`webhook.py`/
+    `session.py`/`main.py` against what the README claims, accounting for each router's
+    `prefix="/api"` registration in `main.py`) — no invented endpoints, no stale ones left in.
+  - Updated the two related, now-resolved Known Limitations bullets above (the VoiceHR-
+    integration session's README-staleness note, and the VoiceHR-audit session's Exact Next
+    Steps item) to point here, without deleting or rewriting their original text — per this
+    task's own instruction not to rewrite implementation history.
+  - No tests changed or run beyond confirming the file edits themselves don't affect anything
+    executable (`README.md`/`.env.example` are not imported or parsed by any test or
+    application code) — this task explicitly asked for documentation only.
+- VoiceHR repository cleanup (remove code/config outside the current architecture, make
+  `services/voicehr/` commit-ready): **DONE**. Traced every import/route/test/Docker/frontend
+  reference before deleting anything, per the task's explicit deletion rule. No application
+  behavior in the *retained* surface changed — RWS integration, admin auth, evaluator, and
+  Gemini Live were verified working exactly as before, both by regression tests and a real
+  (non-hand-crafted) end-to-end smoke test after rebuilding the Docker image.
+  - **Root cause of the biggest decision**: `GEMINI_LIVE_ENABLED` was `false` in the actual
+    `.env`, meaning the *legacy* local Whisper/Ollama-conversation/Kokoro/ElevenLabs pipeline
+    (`agent.py`'s `run_sarah_pipeline` body) was technically still the "active" path by
+    configuration, even though it was never exercised by any live demo activity this project
+    ran. The task explicitly listed "Gemini Live interview path" as must-keep-working and the
+    legacy pipeline as attention-worthy for removal — read as a deliberate instruction to
+    converge on Gemini Live as the sole interview-conduct implementation, not an oversight to
+    preserve the untouched status quo. Executed that convergence and flipped
+    `GEMINI_LIVE_ENABLED` away entirely (see below) rather than just defaulting it to `true`,
+    since keeping a toggle for an alternative that no longer exists would be dead config.
+  - **Files deleted** (each verified to have zero remaining callers before removal — see the
+    grep evidence trail in this session's own work, not just claimed here):
+    - `backend/services/models.py` — the local Pipecat/Whisper/Kokoro/Ollama-LLM model
+      factory. `create_stt`/`create_llm` were already dead even before this cleanup
+      (`create_local_stack` always passed `stt=None, llm=None`); `create_kokoro_tts`/
+      `create_tts`/`create_local_stack` were used only by the now-removed legacy pipeline body.
+    - `backend/services/transcriber.py` — the faster-whisper wrapper; used only by the
+      legacy pipeline's `transcribe_turn`/final fallback. Gemini Live transcribes natively.
+    - `backend/services/vapi.py` — `get_call_details`/`download_recording` were never called
+      by any application code, only by their own dedicated test file. Genuinely dead already.
+    - `backend/api/routes/webhook.py` — the Vapi-server-webhook-triggered completion path.
+      `main.py` itself already documented it as "optional production compatibility... local
+      sessions never call this endpoint." Its RWS-notification duty is now the sole
+      responsibility of `processing.process_interview` (unchanged from the prior session's
+      fix), so removing it does not reduce RWS-notification coverage.
+    - `tests/test_models.py`, `tests/test_transcriber.py`, `tests/test_vapi.py`,
+      `tests/test_webhook.py` — dedicated tests for the four files above.
+    - `services/voicehr/test.py` — a throwaway root-level debug script for testing Gemini
+      Live connectivity that **hard-coded the live `GEMINI_API_KEY` value** (the same key
+      currently in `.env`). Not covered by any `.gitignore` pattern (it's not `.env`, not a
+      cache, not a DB) — genuinely a secret sitting in a committable location. Confirmed via
+      grep that this key string appears nowhere else in the tree after deletion.
+    - `services/voicehr/docs/` (10 files, ~2,150 lines: `PRD.md`, `architecture.md`,
+      `agent.md`, `backend.md`, `database.md`, `edge-cases.md`, `environment.md`,
+      `evaluator.md`, `frontend.md`, `cloudflare.md`) — VoiceHR's own pre-existing product
+      documentation from before any of this project's integration work. Unreferenced by any
+      code, README, or config (confirmed by grep). Described a materially different picture
+      than the current implementation (Ollama framed as the interview-engine default, a
+      Cloudflare Tunnel deployment method never used in this Docker-Compose-only project, no
+      mention of RWS, admin auth, or the current `/health` split) — kept alongside the
+      accurate, freshly-rewritten `README.md` it would only have confused readers, not
+      supplemented them.
+    - Generated/cache artifacts from disk (already correctly `.gitignore`d, never tracked —
+      deleted for workspace tidiness per the task's explicit checklist, not a git-tracking
+      fix): `voicehr.db`, `.pytest_cache/`, all `__pycache__/` directories, and every
+      generated file under `storage/recordings/` and `storage/transcripts/` except the
+      tracked `.gitkeep` placeholders (dozens of `.webm`/`.json` files accumulated from this
+      project's own prior live smoke-testing sessions).
+  - **Files simplified**:
+    - `backend/services/agent.py` — rewritten from 856 lines down to ~100. Kept only what
+      `gemini_live.py` actually imports or transitively needs: `TASKS` (the four interview
+      questions), `CLOSING`/`TERMINATION_MESSAGES`, `classify_candidate_text()` and its
+      `REFUSAL_PATTERNS`/`ABUSIVE_WORDS`/`SEVERE_ABUSE_PATTERNS` dicts, and
+      `MAX_INTERVIEW_SECONDS`. `run_sarah_pipeline` is now a one-line dispatch straight into
+      `gemini_live.run_gemini_live_pipeline` — kept as a thin entry point specifically so
+      `session.py`'s import (`from backend.services.agent import run_sarah_pipeline`) needed
+      no change at all.
+    - `backend/api/routes/interview.py` — `/start` no longer computes/returns Vapi
+      `assistant_id`/`public_key` (confirmed via grep that `frontend/interview.html` never
+      read those fields — the admin.html invite-creation form is a separate, unrelated flow);
+      `live_audio` is now `bool(gemini_api_key)` instead of also requiring the removed
+      enabled-flag. `/prepare` no longer branches into `prepare_language()` (Whisper/Kokoro
+      warm-up) — Gemini Live needs no separate warm-up step, so it now just re-validates the
+      token and returns `{"status": "ready", "language": ..., "live": true}` unconditionally.
+    - `backend/api/routes/report.py`'s `/health/detail` — dropped the now-meaningless
+      `whisper_model` (setting removed) and `kokoro: true` (hardcoded, unconditionally true
+      regardless of whether Kokoro was even installed) fields. The Ollama-liveness check
+      stays — that's evaluator.py's own alternate provider, unrelated to the interview-conduct
+      pipeline removal.
+    - `backend/main.py` — dropped the `webhook` router import/registration.
+    - `backend/database.py` — `vapi_call_id` column removed from both `CREATE TABLE`
+      statements (the one-time legacy-schema migration guard and the main
+      `CREATE TABLE IF NOT EXISTS`), and from the guard's `INSERT ... SELECT` column list.
+      `retry_count` was **not** touched — confirmed via grep it's independently used by
+      `session.py`'s own WebSocket-disconnect retry logic, unrelated to Vapi.
+    - `backend/core/config.py` — see Configuration removed below.
+    - `Dockerfile` — dropped the `apt-get install ffmpeg build-essential` layer. Verified via
+      an actual rebuild (see below) that nothing in the surviving code shells out to `ffmpeg`
+      or needs a C compiler at install time; build time dropped from several minutes to ~50s.
+  - **Dependencies removed** (`requirements.txt`): `pipecat-ai[whisper,kokoro,ollama,
+    elevenlabs]` (the entire legacy local-model stack) and `aiofiles` (confirmed via grep:
+    never imported anywhere in `backend/` or `tests/`, unused even before this cleanup).
+    Kept: `anthropic` (evaluator.py's alternate provider, genuinely reachable via
+    `LLM_PROVIDER=anthropic`, not called out by the task for removal), `google-genai`,
+    `websockets==16.0` (core to the WebSocket/Gemini-Live transport — not legacy), `fastapi`,
+    `uvicorn[standard]`, `httpx`, `pydantic[email]`, `pydantic-settings`.
+  - **Configuration removed** (`backend/core/config.py`, `.env`, `.env.example`):
+    `gemini_live_enabled` (Gemini Live is now unconditional whenever `gemini_api_key` is set
+    — no more toggle to an alternative that no longer exists), `whisper_model`,
+    `kokoro_voice_en`, `kokoro_voice_fr`, `tts_provider`, `elevenlabs_api_key`,
+    `elevenlabs_voice_id`, `elevenlabs_voice_en`, `elevenlabs_voice_fr`, `elevenlabs_model`,
+    `elevenlabs_stability`, `elevenlabs_similarity_boost`, `elevenlabs_style`,
+    `elevenlabs_speaker_boost`, the module-level `ELEVENLABS_VOICES` dict (confirmed via grep
+    it was only ever read by the now-deleted `models.py`), `vapi_private_key`,
+    `vapi_public_key`, `vapi_assistant_en`, `vapi_assistant_fr`. Also fixed, while touching
+    this file: `.env.example` documented `ANTHROPIC_API_KEY` for the first time (it was
+    already a real, working setting, just never listed).
+  - **Functionality deliberately retained, and why**:
+    - `POST /api/invite`, `X-Api-Key` auth, `external_reference_id`, `Idempotency-Key`,
+      candidate interview flow, Gemini Live, evaluation (all providers), SQLite persistence,
+      automatic VoiceHR→RWS notification with HMAC-SHA256/`X-Delivery-Id`, admin/report
+      surface + HTTP Basic auth, protected recordings, Resend email, `/health` and
+      `/health/detail` — every item on the task's explicit must-keep-working list, verified
+      live (see smoke test below), not just by inspection.
+    - Evaluator's Ollama and Anthropic branches (`evaluator.py`) — **not** touched, unlike the
+      interview-*conduct* pipeline. These are genuinely reachable via `LLM_PROVIDER` (not
+      dead/unreachable code the way the local conversation pipeline was), and the task's
+      "old/local LLM-provider code that conflicts with Gemini" language was read as targeting
+      the interview-conduct pipeline specifically (grouped with "legacy Ollama/Whisper/Kokoro
+      interview implementation" in the same bullet), not the evaluator's own documented,
+      still-supported provider options.
+    - `retry_count` column and `session.py`'s WebSocket-disconnect retry logic — shared,
+      Vapi-independent; confirmed via grep before keeping it.
+  - **Left alone despite looking related, because it's still genuinely referenced**:
+    - `frontend/interview.html`'s JS still contains a `liveMode` branch keyed off the
+      `live_audio` response field — now always `true` in practice, but this is live,
+      functioning UI logic (chooses PCM-streaming vs. a now-dead MediaRecorder code path
+      inside the same file), not a separate unused file. Rewriting the JS to remove the
+      now-unreachable branch was judged out of scope (the task's file-level "unused
+      frontend/static files" language, not a request to prune dead branches inside files that
+      are still very much in use) and a real risk to the one thing that has to work flawlessly
+      live — left untouched.
+    - `frontend/admin.html` is still reachable unauthenticated at the raw `/admin.html` path
+      via the `StaticFiles` mount (pre-existing, unrelated to this cleanup — see `README.md`'s
+      Known Limitations). Not fixed here; out of this task's scope.
+  - **Tests updated to reflect the cleaned architecture**: `tests/conftest.py` (removed
+    `vapi_*`/`gemini_live_enabled` from `mock_settings` and the `webhook`/`vapi`/`agent`
+    module patches, dropped the `vapi_call_id` param from `create_interview()`);
+    `tests/test_integration.py` (`test_full_interview_flow`/`test_inconclusive_interview_flow`
+    rewritten to drive `backend.services.processing.process_interview` — the real path —
+    instead of the deleted `webhook.py` version, and to stop asserting on the removed Vapi
+    response fields); `tests/test_interview.py` (removed the `assistant_id`/`public_key`
+    assertions, replaced the `prepare_language`-mock test with one asserting the new
+    unconditional ready response, added a test proving `live_audio` reflects
+    `gemini_api_key`); `tests/test_database.py` (dropped `vapi_call_id` from the expected
+    interviews-table column set); `tests/test_report.py` (dropped `whisper_model`/`kokoro`
+    assertions from `test_health_check_detail`); `tests/test_session.py` (removed ~13 tests
+    that only exercised the deleted legacy pipeline — greeting/TTS/turn-transcription/
+    refusal-termination/stale-message tests — kept the safety-classification test, all six
+    Gemini Live pipeline tests, and both real-WebSocket-route tests unchanged). Also fixed
+    stale comments/docstrings in `processing.py`, `rws_client.py`, and `test_processing.py`
+    that referenced the now-deleted `webhook.py` by name.
+  - **Final test results**:
+    - Host-side full VoiceHR suite: **128 passed, 1 failed** (down from 159/1 before this
+      cleanup — the reduction is entirely the ~31 deleted legacy/dead-code tests; the one
+      remaining failure is the same pre-existing, unrelated `test_session.py::test_gemini_
+      live_proxy_streams_audio_and_transcript` carried across every session this project has
+      run, confirmed once more to be about `gemini_live.py`'s own `client_content` capture, a
+      file this cleanup did not touch).
+    - Same suite run **inside the rebuilt `csb-voicehr` container**: 128 passed, 1 failed
+      (identical) — confirms the trimmed `requirements.txt`/`Dockerfile` don't merely compile,
+      the actual application behavior is unaffected in the real deployment environment.
+    - Host-side unit tests (RWS/Second Brain/Resume Intelligence, untouched by this task):
+      138/138. RWS integration suite (Docker, untouched): 88/88. Both run as a sanity check
+      only — nothing in this cleanup touches their code.
+  - **Docker rebuild verified**: two of three build attempts hit a transient PyPI network
+    timeout (`ReadTimeoutError`/`no versions found` for unrelated packages, on unrelated
+    retries) — not a real dependency problem; a clean retry succeeded in ~50s (down from
+    several minutes previously), confirming the `ffmpeg`/`build-essential`/`pipecat-ai`
+    removal genuinely reduced build cost with no loss of function.
+  - **Live end-to-end smoke test verified, no hand-crafted webhook** (same discipline as the
+    prior session's RWS-notification fix): ingested a fresh Second Brain candidate, submitted
+    a JD via RWS, selected the qualified match, inserted a matching Resume Intelligence
+    contact, invited via the real `POST /api/invite` call, then called `backend.services.
+    processing.process_interview` **directly inside the rebuilt container** (the same function
+    `session.py`'s WebSocket handler calls, with a hand-written transcript standing in only
+    for real browser audio/ASR — everything downstream is the actual, unmodified, now-cleaned
+    code). Real Gemini evaluation succeeded (`overall_score: 92, cefr_level: "C1"`); RWS
+    autonomously received a correctly HMAC-signed webhook (confirmed via
+    `docker logs csb-recruitment-workflow` showing `outcome: "processed"` with a fresh,
+    distinct `delivery_id`) and transitioned `selected → invited → interviewed` with
+    `interview_status: "completed"` and those exact scores — confirmed via
+    `GET /v1/jobs/{job_id}/applications` on the RWS side (recruiter JWT, no shortcuts).
+  - **Final repository-cleanliness checks**: `git ls-files services/voicehr` shows only 3
+    tracked files (`Dockerfile`, `README.md`, `backend/main.py` — leftover placeholders from
+    before the real source landed); `git status --porcelain --ignored` confirms `.env`,
+    `voicehr.db`, every `__pycache__/`/`.pytest_cache/` directory, and all generated
+    `storage/recordings/*`/`storage/transcripts/*` files are correctly excluded (never shown
+    as addable); a dry-run `git add -n services/voicehr` was grepped for `.env`/`.db`/cache/
+    generated-recording patterns and matched none of them; grepped the entire tree for the
+    live `GEMINI_API_KEY` string and confirmed it appears nowhere outside the already-ignored
+    `.env`. Nothing has been staged or committed — that remains the user's own call.
+- VoiceHR architecture-convergence cleanup (final pass — Gemini as sole AI provider, admin
+  invite-flow removal, frontend dead-code convergence, and a real test-suite bug fix, not just
+  reachability-based dead code): **DONE**. Builds directly on the prior VoiceHR repository
+  cleanup; this pass reviewed the *remaining* implementation against the architecture itself
+  (CLAUDE.md: "Gemini is the default/sole AI provider"), not merely against runtime
+  reachability.
+  1. **Evaluator providers**: removed Anthropic and Ollama support from
+     `backend/services/evaluator.py` entirely — the `if llm_provider == "anthropic"` client
+     setup block, the `_generate_raw_result` provider-branching wrapper (inlined back into
+     `evaluate()` calling `_evaluate_with_gemini` directly, since there was only one branch
+     left), and the `httpx`-based Ollama HTTP branch. Gemini is now the only code path;
+     `_MAX_EVALUATION_ATTEMPTS = 2` bounded retry-on-incomplete-validation and the
+     transport-level 3-attempt Gemini backoff (`_evaluate_with_gemini`'s own loop) are both
+     **unchanged** — preserved exactly as required. Removed config:
+     `llm_provider`/`ollama_model`/`ollama_base_url`/`anthropic_api_key`/`anthropic_model`
+     from `backend/core/config.py`, `.env`, `.env.example`. Removed `anthropic` from
+     `requirements.txt` (confirmed via grep it's not imported anywhere else). Removed
+     `report.py`'s `/health/detail` Ollama-liveness HTTP probe and its `ollama`/`ollama_model`
+     response fields (querying a server that can never be configured to matter anymore); its
+     unused `httpx` import went with it. Rewrote all three Anthropic-based tests in
+     `tests/test_evaluator.py` as Gemini-based equivalents (`test_evaluate_returns_expected_
+     keys`, `test_evaluate_handles_api_error` — a genuinely new case: total-provider-failure
+     graceful fallback, distinct from the already-covered incomplete-JSON-retry case —
+     `test_evaluate_inconclusive_flag`), so no coverage was lost, only its provider changed.
+     Updated `test_report.py::test_health_check_detail` and `tests/conftest.py`'s
+     `mock_settings` to match.
+  2. **Interview frontend (`frontend/interview.html`)**: the `liveMode` flag and its `else`
+     branch were dead weight from the removed legacy pipeline — `live_audio` is unconditionally
+     `true` whenever `GEMINI_API_KEY` is set (the only supported configuration now), so the
+     branch could never actually run, but it still sent turn-based WebM/legacy protocol
+     messages (`turn_audio_start`, `ready_for_candidate`, `speech_start`, `barge_in`) that
+     `gemini_live.py`'s backend handler doesn't even recognize anymore. Removed: the `liveMode`
+     variable and both its branch points, `startVoiceActivityMonitor()`, `beginTurnRecording()`,
+     `endTurnRecording()`, `interruptSarah()`, and the now-orphaned `turnRecorder`/`turnChunks`/
+     `speechActive`/`loudFrames`/`silenceTimer` state, plus their residual cleanup references in
+     the termination/error/finish handlers. Verified with `node --check` on the extracted
+     `<script>` block that the result is still syntactically valid JS. The full-recording
+     `MediaRecorder`/`sendFullRecording()` mechanism (a separate, still-live concern — the
+     complete-session audio upload, handled by `gemini_live.py`'s own `full_audio_start`/
+     `full_audio_end` events) was correctly left untouched throughout.
+  3. **Admin invitation flow (`frontend/admin.html`)**: traced first — confirmed via grep that
+     RWS never calls `POST /api/interview/{token}/invite` or `.../invite/preview` (only
+     `POST /api/invite`, which is what RWS actually uses), and that the browser calling
+     `/api/invite` directly has been silently rejected by `require_rws_service_key` (401) since
+     the day that auth requirement was added, in every session across this project's history —
+     i.e. this was not a working feature that needed careful migration, it was already fully
+     broken. The only way to make it "work" would be embedding `RWS_SERVICE_API_KEY`
+     client-side, which the task explicitly forbids and which the architecture doesn't want
+     regardless (RWS is the sole interview creator). Removed the entire "New interview"
+     tab/page from `admin.html`: the compose-card form, the marketing-copy intro aside, and all
+     of `generateLink()`/`checkFields()`/`sendInvitation()`/`previewInvitation()`/`copyLink()`
+     plus their now-orphaned CSS rules and the `currentToken`/`nameInput`/`emailInput`/
+     `generateBtn` state. The admin page is now exactly what it functionally already was for
+     anyone able to reach it correctly: a read-only completed-reports view. Simplified the
+     page-toggle JS (`isReportsPage`, hidden-element toggling) into always showing the reports
+     section, and kept theme.css's existing `.reports-view` layout rules working by adding them
+     unconditionally instead of via now-dead JS conditional logic — verified with `node --check`.
+     **Left the backend routes untouched** (`POST /api/interview/{token}/invite`,
+     `GET .../invite/preview`, and their existing tests) — they aren't the auth-boundary
+     violation (no service key involved at all), and deleting a harmless, working "email a
+     candidate their existing interview link" capability on a guess about its future
+     usefulness was judged bigger scope than what was asked. This does surface a genuine,
+     honestly-flagged gap: **nothing in the current architecture reaches those two routes
+     anymore** (RWS never calls them, and the only UI that did was just removed), so there
+     is currently no way for a real candidate to receive their interview link by email in this
+     project. Documented prominently in `README.md`'s Known Limitations rather than silently
+     patched with a new feature, which was explicitly out of scope.
+  4. **Fixed the previously "known unrelated" `gemini_live.py` test failure for real**, per the
+     task's explicit "target a clean test suite, not a known unrelated failure" instruction —
+     investigated rather than re-labeled. Root cause: `run_gemini_live_pipeline()` carefully
+     constructs `initial_content` (a `types.Content` object, with an SDK-version-compatibility
+     try/except fallback to a plain dict) to open the conversation with Sarah's greeting — and
+     then never sends it. The actual call is `await session.send_realtime_input(text=...)`,
+     a completely different Gemini Live API method meant for continuous streaming input, not
+     for opening a formal conversational turn; `initial_content` is built and silently
+     discarded. The adjacent log line even describes the *intended* call
+     (`"...turn_complete=true content_parts=1"` — properties of `send_client_content`, not
+     `send_realtime_input`), confirming this was a real implementation bug, not a stale test
+     asserting removed-architecture behavior. Every fake Gemini Live session class across the
+     whole test file already independently implements `send_client_content` — the tests were
+     written correctly against the intended behavior; the code just never called it. Fixed by
+     changing that one line to `await session.send_client_content(turns=[initial_content],
+     turn_complete=True)`, using the object that was already being built. Confirmed via a full
+     grep of `gemini_live.py` that the two other `send_realtime_input` call sites (streaming
+     browser PCM chunks, and `audio_stream_end`) are unrelated and untouched — this was a
+     single-line, narrowly-scoped fix. `test_gemini_live_proxy_streams_audio_and_transcript`
+     now passes; no other Gemini Live test regressed (each was individually checked against
+     the fix's actual scope before running the suite, not just assumed safe).
+  - **Full regression, host-side**: **129 passed, 0 failed** — a fully clean VoiceHR suite for
+    the first time across this project's history (up from 129/1 before this pass — same test
+    count, since #4 fixed the previously-failing test rather than removing or skipping it).
+    Identical inside the rebuilt `csb-voicehr` container. Unit tests (RWS/Second Brain/Resume
+    Intelligence, untouched): 138/138. RWS integration suite (Docker, untouched): 88/88.
+  - **Docker rebuild verified**: clean build in ~45s (no regression from the prior session's
+    dependency/Dockerfile trimming).
+  - **Live end-to-end smoke test verified again, no hand-crafted webhook**: same discipline as
+    every prior session — ingested a fresh Second Brain candidate, submitted a JD via RWS,
+    selected the qualified match, inserted a matching Resume Intelligence contact, invited via
+    the real `POST /api/invite`, then called `backend.services.processing.process_interview`
+    directly inside the rebuilt container (transcript supplied directly, standing in only for
+    real browser audio/ASR — everything downstream, including the now-Gemini-only evaluator
+    and the RWS notification, is the real, unmodified, freshly-cleaned code). Real Gemini
+    evaluation succeeded (`overall_score: 93, cefr_level: "C1"`); RWS autonomously received a
+    correctly HMAC-signed webhook (`outcome: "processed"`, a fresh distinct `delivery_id`) and
+    transitioned `selected → invited → interviewed` with `interview_status: "completed"` and
+    those exact scores, confirmed via `GET /v1/jobs/{job_id}/applications` (recruiter JWT).
+  - **Repository cleanliness, final check**: `git ls-files services/voicehr` still shows only
+    the same 3 pre-existing tracked files (`Dockerfile`, `README.md`, `backend/main.py`); a
+    dry-run `git add -n services/voicehr` was captured in full (44 files: 3 modifications, 41
+    new) and grepped for credential-like patterns (`AQ.`/`AIza`/`sk-`/PEM headers/
+    key-value-secret shapes) — the only matches were harmless synthetic test tokens
+    (`"report-token"`, `"test-token"`, `"wrong-key"`, etc.); the real `GEMINI_API_KEY` string
+    was separately confirmed absent from every one of those 44 files. `.env`, `voicehr.db`,
+    every `__pycache__`/`.pytest_cache`, and all generated `storage/recordings`/
+    `storage/transcripts` content remain correctly excluded (confirmed via
+    `git status --porcelain` returning nothing for those specific paths). Nothing has been
+    staged or committed — see the exact 44-file list in this session's own summary message for
+    the commit-ready inventory; that remains the user's call to make.
+  - **Final VoiceHR architecture** (see `README.md` for full detail, kept in sync with this):
+    one interview-conduct implementation (Gemini Live), one evaluation provider (Gemini), one
+    interview-creation caller (RWS, via `POST /api/invite`), one admin surface (read-only
+    completed-reports view, HTTP Basic auth), one outbound integration (the signed RWS
+    completion webhook), SQLite persistence unchanged/unmigrated. No Vapi, no local
+    Whisper/Ollama/Kokoro/ElevenLabs, no Anthropic, no admin-initiated interview creation.
 - Nothing is BLOCKED.
 
 ## Known Limitations (discovered this session)
@@ -625,15 +1214,17 @@ implementation — see the bootstrap instructions.
   failure regardless of pg_hba.conf settings. Integration tests must be run inside the container
   via `docker exec csb-resume-intelligence python -m pytest /app/test_resume_intelligence.py -v`.
   Workaround for migrations: `docker exec csb-resume-intelligence alembic upgrade head`.
-- `gemini-2.5-flash` returned `404 NOT_FOUND` from the live Gemini API this session ("no longer
-  available to new users... use models/gemini-3.6-flash"). Updated `GeminiProvider.DEFAULT_MODEL`
-  in `shared/llm.py` and `GEMINI_MODEL` in `services/recruitment-workflow/.env(.example)` to
-  `gemini-3.6-flash`; the corresponding unit test assertion was updated too. `gemini-embedding-001`
-  (used by Second Brain) was unaffected. `services/resume-intelligence/.env.example` and VoiceHR
-  still reference `gemini-2.5-flash` — out of scope for this task (resume-intelligence's pipeline
-  does not currently call `generate_text`/`generate_structured`; VoiceHR internals are untouched
-  per the bootstrap rule) but worth checking before any future step that does call Gemini text
-  generation from either service.
+- `gemini-2.5-flash` returned `404 NOT_FOUND` from the live Gemini API ("no longer available to
+  new users... use models/gemini-3.6-flash"). Updated `GeminiProvider.DEFAULT_MODEL` in
+  `shared/llm.py` and `GEMINI_MODEL` in `services/recruitment-workflow/.env(.example)` to
+  `gemini-3.6-flash` in an earlier session; the corresponding unit test assertion was updated
+  too. `gemini-embedding-001` (used by Second Brain) was unaffected. **Resolved for VoiceHR this
+  session** (see the VoiceHR reliability/security fixes entry above, item 5): `GEMINI_MODEL` and
+  `GEMINI_EVALUATION_MODEL` in `services/voicehr/.env(.example)` updated to `gemini-3.6-flash`
+  too, discovered live-blocking the evaluator during the RWS-notification smoke test.
+  `services/resume-intelligence/.env.example` still references `gemini-2.5-flash` — still out of
+  scope (that pipeline does not currently call `generate_text`/`generate_structured`), but worth
+  checking before any future step that does.
 - No lint or type-check tooling (ruff/mypy/flake8/pylint) is configured anywhere in this repo —
   none was set up in prior sessions either. This session verified all new/changed files with
   `python -m py_compile` (syntax only) since no linter/type checker was available to run.
@@ -668,12 +1259,17 @@ implementation — see the bootstrap instructions.
   scoring a large retrieved set costs N+1 HTTP calls to Second Brain. Acceptable for this
   project's scale (demo, small candidate pool) — flagged here in case a future session considers
   batching or embedding the attributes directly in the retrieval response instead.
-- `services/voicehr/README.md` still says "Status: skeleton only. Not yet implemented" and
-  references a planned `POST /v1/interviews` endpoint name — both are stale. The real source was
+- `services/voicehr/README.md` still said "Status: skeleton only. Not yet implemented" and
+  referenced a planned `POST /v1/interviews` endpoint name — both were stale. The real source was
   already present this session (invite/webhook routes, SQLite persistence, evaluator, all
   working), and the actual integration point is the existing `POST /api/invite`, extended in
-  place rather than replaced. Worth updating that README in a future session; not done now to
-  keep this session's diff focused on the integration itself.
+  place rather than replaced. **Resolved in a later session**: the README was rewritten from
+  scratch against the actual current implementation (architecture/role, interview flow, the
+  Gemini Live vs. legacy local pipeline split, the evaluation pipeline, SQLite persistence,
+  `POST /api/invite`, `external_reference_id`/`Idempotency-Key`, the RWS notification helper
+  and its HMAC signing, interview-status mapping, the admin/report surface and its HTTP Basic
+  auth, `/health` vs `/health/detail`, Resend config, environment variables, and known
+  deliberate limitations) — see the entry below.
 - A foreign key from an append-only receipt/log table to the entity it references is the wrong
   default in this project whenever the log's job includes recording *unresolvable* references
   (see the `interview_webhook_events.application_id` bug above, caught only by live-testing the
@@ -691,20 +1287,18 @@ implementation — see the bootstrap instructions.
   `"{application_id}:{attempt_number}"`, but VoiceHR's `/api/invite` accepts any string). Not a
   problem for this integration (VoiceHR is only ever called by RWS in this architecture), but
   worth knowing if `/api/invite` is ever exposed to other callers.
-- VoiceHR was **not** touched by this session's observability/hardening work — its own
-  pre-existing `logging` usage (plain unformatted lines across `evaluator.py`, `mailer.py`,
-  `agent.py`, etc.) is unchanged, it has no correlation ID middleware, and its logs are not JSON.
-  This was a deliberate scope decision (this task said "keep the existing architecture
-  unchanged" and "do not add new infrastructure," and prior sessions established a standing
-  rule against modifying VoiceHR internals unnecessarily), not an oversight. Two of its files
-  that this project's own code added last session — `backend/services/rws_client.py` and the
-  couple of `logger.warning`/`logger.exception` calls around it in `webhook.py` — were also left
-  as plain-text logging for consistency with the rest of VoiceHR's untouched logging, rather
-  than making just those two files inconsistently JSON. If VoiceHR's logging is ever brought in
-  line with the other three services, `shared/observability.py` cannot be imported there as-is
-  (VoiceHR's Dockerfile builds from its own directory and never copies in `shared/` — confirmed
-  in the VoiceHR-integration session) — it would need its own local copy or a genuinely shared
-  package published differently.
+- VoiceHR was **not** touched by the observability/hardening session's JSON-logging/correlation-ID
+  work specifically — its own pre-existing `logging` usage (plain unformatted lines across
+  `evaluator.py`, `mailer.py`, `agent.py`, etc.) is still unchanged, it still has no correlation
+  ID middleware, and its logs are still not JSON. That remains a deliberate scope decision (that
+  task said "keep the existing architecture unchanged" and "do not add new infrastructure").
+  (A *later*, separate session did make targeted VoiceHR fixes — RWS-notification path,
+  mailer secret bug, `/health` split, evaluator retry/prompt hardening, per the entry above — but
+  those were explicit, approved, narrowly-scoped fixes, not a reversal of this logging-scope
+  decision; VoiceHR's logging is still plain-text throughout.) If VoiceHR's logging is ever
+  brought in line with the other three services, `shared/observability.py` cannot be imported
+  there as-is (VoiceHR's Dockerfile builds from its own directory and never copies in `shared/`)
+  — it would need its own local copy or a genuinely shared package published differently.
 - `configure_json_logging()` reformats application log lines (anything logged via
   `logging.getLogger(...)` that isn't `propagate=False`) but does **not** touch uvicorn's own
   `uvicorn.access`/`uvicorn.error` loggers, which install their own handlers with
@@ -721,14 +1315,15 @@ implementation — see the bootstrap instructions.
 
 ## Exact Next Steps
 
-1. **[NEXT]** `services/voicehr/README.md` cleanup (see Known Limitations above) — low
-   priority, doesn't block anything.
-2. Nothing currently reads `second_brain.candidate_feedback` — it's a write-back sink only.
+Nothing is currently marked `[NEXT]` — both remaining items below are open design questions,
+not required actions, per the sessions that flagged them.
+
+1. Nothing currently reads `second_brain.candidate_feedback` — it's a write-back sink only.
    Whether/how it should ever influence retrieval or scoring (e.g. down-weighting a candidate
    repeatedly rejected for a given skill profile) is an open design question, deliberately not
    answered this session — flagged here rather than in Known Limitations because it's a genuine
    future design choice, not a defect.
-3. `GET /v1/jobs/{job_id}/applications` and `POST /v1/jobs` (JD submission response) don't
+2. `GET /v1/jobs/{job_id}/applications` and `POST /v1/jobs` (JD submission response) don't
    surface `explanation` for anything beyond what's already cached at the time of the call —
    `explanation` is `null` in the JD-submission response and only gets populated the first time
    `GET /v1/jobs/{job_id}/matches` is called for that job. This was a deliberate scope/latency

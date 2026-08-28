@@ -1,0 +1,36 @@
+# Local environment and secrets
+.env
+.env.*
+!.env.example
+
+# Python caches and tooling
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+.hypothesis/
+
+# Local application data
+*.db
+*.sqlite
+*.sqlite3
+storage/recordings/*
+storage/transcripts/*
+!storage/recordings/.gitkeep
+!storage/transcripts/.gitkeep
+
+# Logs and temporary files
+*.log
+*.tmp
+*.temp
+*.swp
+*.swo
+
+# IDE and OS files
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db

@@ -1,0 +1,797 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>VoiceHR Interview</title>
+    <style>
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+        body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background: #f5f5f5; color: #333; display: flex; justify-content: center; align-items: center; min-height: 100vh; padding: 1rem; }
+        .card { background: #fff; border-radius: 12px; padding: 2rem; max-width: 500px; width: 100%; box-shadow: 0 2px 10px rgba(0,0,0,0.1); }
+        h2 { margin-bottom: 1rem; }
+        .step { display: none; }
+        .step.active { display: block; }
+        .error-msg { color: #dc2626; padding: 1rem; text-align: center; }
+        .consent-box { margin: 1rem 0; padding: 1rem; background: #f9f9f9; border-radius: 6px; }
+        .consent-box label { display: flex; align-items: center; gap: 0.5rem; cursor: pointer; }
+        .mic-bar-container { width: 100%; height: 20px; background: #e5e5e5; border-radius: 10px; margin: 1rem 0; overflow: hidden; }
+        .mic-bar { height: 100%; background: #22c55e; border-radius: 10px; width: 0%; transition: width 0.1s; }
+        button { padding: 0.7rem 1.5rem; background: #2563eb; color: #fff; border: none; border-radius: 6px; font-size: 1rem; cursor: pointer; margin-top: 1rem; }
+        button:disabled { background: #93c5fd; cursor: not-allowed; }
+        .timer { font-size: 1.5rem; font-weight: 600; text-align: center; margin: 1rem 0; }
+        .task-indicator { text-align: center; color: #666; margin-bottom: 0.5rem; }
+        .thank-you { text-align: center; }
+        .thank-you h2 { color: #22c55e; }
+         .loading { text-align: center; padding: 2rem; }
+         .live-transcript { margin: 1rem 0; padding: 0.85rem; background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 8px; max-height: 180px; overflow-y: auto; text-align: left; }
+         .live-transcript-title { color: #64748b; font-size: 0.75rem; font-weight: 700; letter-spacing: 0.08em; text-transform: uppercase; margin-bottom: 0.5rem; }
+         .live-transcript-line { margin: 0.4rem 0; line-height: 1.4; }
+         .live-transcript-speaker { font-weight: 700; margin-right: 0.35rem; }
+         .live-transcript-line.sarah .live-transcript-speaker { color: #2563eb; }
+         .live-transcript-line.candidate .live-transcript-speaker { color: #7c3aed; }
+         .task-steps .step { display: block; }
+    </style>
+    <link rel="stylesheet" href="/theme.css">
+</head>
+<body class="midnight-page">
+    <div class="card">
+        <div class="step active" id="step-loading">
+            <div class="loading">
+                <p>Loading...</p>
+            </div>
+        </div>
+
+        <div class="step" id="step-error">
+            <div class="error-msg" id="error-text"></div>
+        </div>
+
+        <div class="step" id="step-consent">
+            <h2>Welcome, <span id="candidate-name"></span></h2>
+            <p>Language: <strong id="lang-display"></strong></p>
+            <div class="consent-box">
+                <p>This interview will be recorded for evaluation purposes.</p>
+            </div>
+            <label><input type="checkbox" id="consent-check" onchange="document.getElementById('consent-btn').disabled = !this.checked"> I agree to be recorded.</label>
+            <br>
+            <button id="consent-btn" disabled onclick="enterMicStep()">Continue</button>
+        </div>
+
+        <div class="step" id="step-mic">
+            <h2>Microphone Test</h2>
+            <p>Speak into your microphone to see the level below.</p>
+            <div class="mic-bar-container">
+                <div class="mic-bar" id="mic-bar"></div>
+            </div>
+            <p id="mic-error" style="color:#dc2626;display:none;">Could not access microphone. Please check browser permissions.</p>
+            <p id="model-error" style="color:#dc2626;display:none;"></p>
+            <button id="start-btn" disabled onclick="startInterview()">Preparing Sarah...</button>
+        </div>
+
+        <div class="step" id="step-interview">
+             <div class="interview-shell">
+                 <div class="interview-top"><span class="candidate-name" id="interview-candidate"></span><span class="elapsed-timer" id="timer">00:00</span></div>
+                  <div class="orb-wrap"><div class="orb speaking" id="sarah-orb"><div class="orb-core"></div></div><p class="orb-label" id="sarah-label">Connecting to Sarah…</p></div>
+                 <div class="wave" id="wave"><div class="bar"></div><div class="bar"></div><div class="bar"></div><div class="bar"></div><div class="bar"></div><div class="bar"></div><div class="bar"></div><div class="bar"></div><div class="bar"></div><div class="bar"></div><div class="bar"></div><div class="bar"></div></div>
+                    <div class="task-card"><p class="task-label task-indicator">Interview in progress</p><p class="task-text">Sarah will guide you through 4 tasks. Speak naturally and give Sarah examples when you can.</p><div class="task-steps"><div class="step current"></div><div class="step"></div><div class="step"></div><div class="step"></div></div></div>
+                    <div class="live-transcript" id="live-transcript" aria-live="polite" aria-label="Live transcript">
+                        <p class="live-transcript-title">Live transcript</p>
+                        <div id="live-transcript-lines"><p style="color:#64748b;font-size:0.9rem;">Your conversation will appear here.</p></div>
+                    </div>
+                 <button id="finish-btn" onclick="finishInterview()">Finish Interview</button>
+             </div>
+        </div>
+
+        <div class="step" id="step-retry">
+            <h2>Connection Lost</h2>
+            <p>The connection was interrupted. You can reconnect to continue.</p>
+            <button onclick="retryInterview()">Reconnect</button>
+        </div>
+
+         <div class="step" id="step-done">
+             <div class="thank-you">
+                 <h2>Thank you!</h2>
+                 <p>Your interview is complete.</p>
+                 <p>The recruitment team will be in touch.</p>
+             </div>
+         </div>
+
+         <div class="step" id="step-terminated">
+             <div class="thank-you">
+                 <h2>Interview ended</h2>
+                 <p id="termination-text">The interview has ended.</p>
+                 <p>The recruitment team will review the available report.</p>
+             </div>
+         </div>
+    </div>
+
+    <script>
+        const params = new URLSearchParams(window.location.search);
+        const token = params.get('token');
+        let candidateName = '';
+        let language = '';
+         let ws = null;
+         let liveAudioSource = null;
+         let liveAudioProcessor = null;
+         let liveAudioGain = null;
+         let livePcmChunks = [];
+         let livePcmSamples = 0;
+         const livePcmChunkSize = 4000; // 250 ms at 16 kHz
+        let mediaRecorder = null;
+        let mediaStream = null;
+        let micInputStream = null;
+        let recordingChunks = [];
+        let timerInterval = null;
+        let retryCount = 0;
+        let audioContext = null;
+        let analyser = null;
+         let ending = false;
+           let sessionTerminated = false;
+           let sessionFailed = false;
+           let liveFailure = false;
+        let audioQueue = Promise.resolve();
+        let audioSampleRate = 24000;
+        let audioChannels = 1;
+          let candidateListening = false;
+         let audioGeneration = 0;
+         const activeAudioSources = new Set();
+         let micReady = false;
+         let modelsReady = false;
+         let preparePromise = null;
+         let heartbeatInterval = null;
+          let liveActivityActive = false;
+          let liveSilenceSince = 0;
+          let liveConnected = false;
+          let sessionGeneration = 0;
+          let firstAudioReceivedGeneration = 0;
+          let liveBinaryFrameCount = 0;
+          let liveBinaryByteCount = 0;
+          let liveTranscriptCurrent = null;
+          const liveSpeechThreshold = 0.018;
+          const liveSilenceDuration = 3000;
+
+          function sendPendingLivePcm() {
+              if (!livePcmSamples || !liveConnected || !candidateListening || !ws || ws.readyState !== WebSocket.OPEN) return;
+              const chunk = new Int16Array(livePcmSamples);
+              let offset = 0;
+              for (const pcmChunk of livePcmChunks) {
+                  chunk.set(pcmChunk, offset);
+                  offset += pcmChunk.length;
+              }
+              livePcmChunks = [];
+              livePcmSamples = 0;
+              wsSend(chunk.buffer);
+          }
+
+         /** Safely send a message over the WebSocket, silently dropping
+          *  if the socket is not OPEN (prevents race-condition errors
+          *  when the connection closes between a guard check and send). */
+         function wsSend(data) {
+             try {
+                 if (ws && ws.readyState === WebSocket.OPEN) ws.send(data);
+             } catch (e) {
+                 console.warn('wsSend failed:', e);
+             }
+         }
+
+         function showStep(id) {
+             document.querySelectorAll('.step').forEach(s => s.classList.remove('active'));
+             document.getElementById(id).classList.add('active');
+         }
+
+         function resetLiveTranscript() {
+             liveTranscriptCurrent = null;
+             const lines = document.getElementById('live-transcript-lines');
+             if (lines) {
+                 lines.innerHTML = '<p style="color:#64748b;font-size:0.9rem;">Your conversation will appear here.</p>';
+             }
+         }
+
+          function renderLiveTranscriptEvent(message) {
+              const lines = document.getElementById('live-transcript-lines');
+              if (!lines) return;
+              const role = message.role === 'assistant'
+                  ? 'sarah'
+                  : message.role === 'user' || message.role === 'candidate'
+                      ? 'candidate'
+                      : null;
+              if (!role) {
+                  console.warn('[VoiceHR] Ignoring transcript with unknown role', message);
+                  return;
+              }
+             if (message.type === 'transcript_delta' && message.text) {
+                 if (!liveTranscriptCurrent || liveTranscriptCurrent.role !== role) {
+                     if (lines.children.length === 1 && lines.children[0].tagName === 'P') lines.innerHTML = '';
+                     const line = document.createElement('p');
+                     line.className = `live-transcript-line ${role}`;
+                     const speaker = document.createElement('span');
+                     speaker.className = 'live-transcript-speaker';
+                     speaker.textContent = role === 'sarah' ? 'Sarah:' : 'You:';
+                     const text = document.createElement('span');
+                     line.append(speaker, text);
+                     lines.appendChild(line);
+                     liveTranscriptCurrent = { role, textElement: text };
+                 }
+                 liveTranscriptCurrent.textElement.textContent += message.text;
+                 const transcript = document.getElementById('live-transcript');
+                 if (transcript) transcript.scrollTop = transcript.scrollHeight;
+             } else if (message.type === 'transcript_turn_end') {
+                 if (liveTranscriptCurrent && liveTranscriptCurrent.role === role) liveTranscriptCurrent = null;
+             }
+         }
+
+        async function validateToken() {
+            if (!token) {
+                showError('This link is invalid.');
+                return;
+            }
+
+            try {
+                const res = await fetch(`/api/interview/${token}`);
+                if (res.status === 404) { showError('This link is invalid.'); return; }
+                if (res.status === 410) { showError('This interview link has expired.'); return; }
+                if (res.status === 409) { showError('This interview has already been completed.'); return; }
+                if (!res.ok) { showError('Something went wrong.'); return; }
+
+                const data = await res.json();
+                candidateName = data.candidate_name;
+                language = data.language;
+                 document.getElementById('candidate-name').textContent = candidateName;
+                 document.getElementById('interview-candidate').textContent = candidateName;
+                 document.getElementById('lang-display').textContent = language === 'en' ? 'English' : 'French';
+                 showStep('step-consent');
+                 preparePromise = prepareSarah(language);
+                 initMic();
+            } catch (e) {
+                showError('Network error. Please try again.');
+            }
+        }
+
+        function showError(msg) {
+            document.getElementById('error-text').textContent = msg;
+            showStep('step-error');
+        }
+
+        async function prepareSarah(selectedLanguage) {
+            try {
+                const res = await fetch(`/api/interview/${token}/prepare`, { method: 'POST' });
+                if (!res.ok) {
+                    const error = await res.json().catch(() => ({}));
+                    throw new Error(error.detail || 'Sarah could not be prepared.');
+                }
+                modelsReady = true;
+                updateStartButton();
+            } catch (error) {
+                const modelError = document.getElementById('model-error');
+                modelError.textContent = `${selectedLanguage === 'fr' ? 'Sarah est' : 'Sarah is'} unavailable: ${error.message}`;
+                modelError.style.display = 'block';
+                updateStartButton();
+            }
+        }
+
+        function updateStartButton() {
+            const startButton = document.getElementById('start-btn');
+            startButton.disabled = !(micReady && modelsReady);
+            startButton.textContent = modelsReady
+                ? 'Mic is working — Start Interview'
+                : 'Preparing Sarah...';
+        }
+
+        async function initMic() {
+            try {
+                const stream = await navigator.mediaDevices.getUserMedia({
+                    audio: {
+                        echoCancellation: true,
+                        noiseSuppression: true,
+                        autoGainControl: true,
+                    }
+                });
+                micInputStream = stream;
+                audioContext = new AudioContext();
+                analyser = audioContext.createAnalyser();
+                const source = audioContext.createMediaStreamSource(stream);
+                source.connect(analyser);
+                analyser.fftSize = 256;
+                const dataArray = new Uint8Array(analyser.frequencyBinCount);
+
+                function updateBar() {
+                    analyser.getByteFrequencyData(dataArray);
+                    const avg = dataArray.reduce((a, b) => a + b, 0) / dataArray.length;
+                    document.getElementById('mic-bar').style.width = Math.min(100, avg * 2) + '%';
+                     if (avg > 10) {
+                         micReady = true;
+                         updateStartButton();
+                     }
+                    requestAnimationFrame(updateBar);
+                }
+                updateBar();
+            } catch (e) {
+                document.getElementById('mic-error').style.display = 'block';
+            }
+        }
+
+        async function enterMicStep() {
+            showStep('step-mic');
+            if (audioContext && audioContext.state === 'suspended') {
+                try {
+                    await audioContext.resume();
+                } catch (error) {
+                    console.warn('[VoiceHR] Could not resume microphone audio context', error);
+                }
+            }
+            updateStartButton();
+        }
+
+         async function startInterview() {
+             const generation = ++sessionGeneration;
+             if (ws && ws.readyState !== WebSocket.CLOSED) ws.close(1000, 'starting new session');
+             recordingChunks = [];
+              liveConnected = false;
+              candidateListening = false;
+              audioQueue = Promise.resolve();
+              resetLiveTranscript();
+             activeAudioSources.forEach(source => {
+                 try { source.stop(); } catch (e) { /* already ended */ }
+             });
+              activeAudioSources.clear();
+              firstAudioReceivedGeneration = 0;
+              liveBinaryFrameCount = 0;
+              liveBinaryByteCount = 0;
+              console.info('[VoiceHR] interview startup', { generation });
+             showStep('step-interview');
+            startTimer();
+            if (audioContext && audioContext.state === 'suspended') {
+                await audioContext.resume();
+            }
+
+            try {
+                const res = await fetch(`/api/interview/${token}/start`, { method: 'POST' });
+                if (!res.ok) {
+                    stopTimer();
+                    showError('This interview is no longer available.');
+                    return;
+                }
+                 const session = await res.json();
+                 const { ws_url } = session;
+                  const socket = new WebSocket(ws_url.replace(/^http/, 'ws'));
+                  ws = socket;
+                  socket.binaryType = 'arraybuffer';
+                  socket.onopen = () => {
+                      if (generation !== sessionGeneration || ws !== socket) return;
+                      console.info('[VoiceHR] WebSocket open', { generation, at: performance.now() });
+                      startHeartbeat();
+                      startAudioStream(generation);
+                  };
+                 socket.onmessage = event => {
+                     if (generation === sessionGeneration && ws === socket) handleServerMessage(event);
+                 };
+                 socket.onclose = event => {
+                     if (generation === sessionGeneration && ws === socket) handleInterviewClose(event);
+                 };
+                 socket.onerror = event => {
+                     if (generation === sessionGeneration && ws === socket) handleError(event);
+                 };
+            } catch (e) {
+                stopTimer();
+                showError('Failed to start interview. Please try again.');
+            }
+        }
+
+         async function startAudioStream(generation) {
+             try {
+                 if (generation !== sessionGeneration) return;
+                 const micEnded = micInputStream && micInputStream.getTracks().every(track => track.readyState === 'ended');
+                 mediaStream = !micInputStream || micEnded
+                    ? await navigator.mediaDevices.getUserMedia({
+                        audio: {
+                            echoCancellation: true,
+                            noiseSuppression: true,
+                            autoGainControl: true,
+                        }
+                    })
+                    : micInputStream;
+                  micInputStream = mediaStream;
+                  const socket = ws;
+                  console.info('[VoiceHR] audio stream setup', { generation, sampleRate: audioContext?.sampleRate });
+                 const attemptChunks = [];
+                 recordingChunks = attemptChunks;
+                 const recorder = new MediaRecorder(mediaStream);
+                 mediaRecorder = recorder;
+                 recorder.ondataavailable = (event) => {
+                     if (event.data.size) attemptChunks.push(event.data);
+                 };
+                 recorder.onstop = () => sendFullRecording(
+                     attemptChunks, recorder.mimeType, socket, generation,
+                 );
+                 recorder.start();
+                 await startLiveAudioStream(generation);
+            } catch (e) {
+                showError('Could not access microphone. Please check browser permissions.');
+                ws.close();
+            }
+        }
+
+         async function startLiveAudioStream(generation) {
+             if (generation !== sessionGeneration || !audioContext || !mediaStream || !ws || ws.readyState !== WebSocket.OPEN) return;
+             const processorName = `voicehr-input-${generation}`;
+            const workletSource = `class VoiceHrInputProcessor extends AudioWorkletProcessor {
+                process(inputs) {
+                    const channel = inputs[0] && inputs[0][0];
+                    if (channel) this.port.postMessage(channel.slice(0));
+                    return true;
+                }
+            }
+             registerProcessor('${processorName}', VoiceHrInputProcessor);`;
+            const workletUrl = URL.createObjectURL(new Blob([workletSource], { type: 'application/javascript' }));
+            await audioContext.audioWorklet.addModule(workletUrl);
+            URL.revokeObjectURL(workletUrl);
+            const source = audioContext.createMediaStreamSource(mediaStream);
+             const processor = new AudioWorkletNode(audioContext, processorName);
+            const silentGain = audioContext.createGain();
+            silentGain.gain.value = 0;
+             processor.port.onmessage = event => {
+                if (ending || generation !== sessionGeneration || !liveConnected || !ws || ws.readyState !== WebSocket.OPEN) return;
+                const input = event.data;
+                if (!candidateListening) {
+                    liveActivityActive = false;
+                    liveSilenceSince = 0;
+                    livePcmChunks = [];
+                    livePcmSamples = 0;
+                    return;
+                }
+                let energy = 0;
+                for (let index = 0; index < input.length; index++) energy += input[index] * input[index];
+                const speakingNow = Math.sqrt(energy / input.length) >= liveSpeechThreshold;
+                const now = performance.now();
+                if (speakingNow) {
+                    liveSilenceSince = 0;
+                    liveActivityActive = true;
+                } else if (liveActivityActive) {
+                    if (!liveSilenceSince) liveSilenceSince = now;
+                    if (now - liveSilenceSince >= liveSilenceDuration) {
+                        liveActivityActive = false;
+                        liveSilenceSince = 0;
+                    }
+                }
+                const ratio = audioContext.sampleRate / 16000;
+                const outputLength = Math.floor(input.length / ratio);
+                const output = new Int16Array(outputLength);
+                for (let index = 0; index < outputLength; index++) {
+                    const pos = index * ratio;
+                    const i = Math.floor(pos);
+                    const frac = pos - i;
+                    const a = input[Math.min(input.length - 1, i)];
+                    const b = input[Math.min(input.length - 1, i + 1)];
+                    output[index] = Math.max(-32768, Math.min(32767, Math.round((a + frac * (b - a)) * 32767)));
+                }
+                livePcmChunks.push(output);
+                livePcmSamples += output.length;
+                if (livePcmSamples < livePcmChunkSize) return;
+                sendPendingLivePcm();
+            };
+            source.connect(processor);
+            processor.connect(silentGain);
+            silentGain.connect(audioContext.destination);
+            liveAudioSource = source;
+            liveAudioProcessor = processor;
+            liveAudioGain = silentGain;
+            wsSend(JSON.stringify({ type: 'live_audio_start', sample_rate: 16000 }));
+        }
+
+          function stopLiveAudioStream() {
+              sendPendingLivePcm();
+              if ( liveConnected && ws && ws.readyState === WebSocket.OPEN) {
+                 wsSend(JSON.stringify({ type: 'audio_stream_end' }));
+             }
+             liveActivityActive = false;
+             liveSilenceSince = 0;
+            if (liveAudioProcessor) liveAudioProcessor.disconnect();
+            if (liveAudioSource) liveAudioSource.disconnect();
+            if (liveAudioGain) liveAudioGain.disconnect();
+            liveAudioProcessor = null;
+            liveAudioSource = null;
+            liveAudioGain = null;
+            livePcmChunks = [];
+            livePcmSamples = 0;
+        }
+
+         function startHeartbeat() {
+             stopHeartbeat();
+              heartbeatInterval = setInterval(() => {
+                  if (!ending && ws && ws.readyState === WebSocket.OPEN) {
+                      wsSend(JSON.stringify({ type: 'heartbeat' }));
+                  }
+              }, 5000);
+         }
+
+         function stopHeartbeat() {
+             if (heartbeatInterval) {
+                 clearInterval(heartbeatInterval);
+                 heartbeatInterval = null;
+             }
+         }
+
+        async function sendFullRecording(chunks = recordingChunks, mimeType, socket = ws, generation = sessionGeneration) {
+            if (generation !== sessionGeneration || ws !== socket || !socket || socket.readyState !== WebSocket.OPEN) return;
+             wsSend(JSON.stringify({ type: 'full_audio_start' }));
+             const blob = new Blob(chunks, { type: mimeType || 'audio/webm' });
+             wsSend(await blob.arrayBuffer());
+             wsSend(JSON.stringify({ type: 'full_audio_end' }));
+             wsSend(JSON.stringify({ type: 'end' }));
+        }
+
+        function handleServerMessage(event) {
+            if (typeof event.data === 'string') {
+                 try {
+                      const message = JSON.parse(event.data);
+                       if (message.type !== 'heartbeat') {
+                           console.info('[VoiceHR] Live server event', {
+                               type: message.type,
+                               role: message.role,
+                               candidateListening,
+                               liveConnected,
+                               generation: sessionGeneration,
+                           });
+                       }
+                       if (message.type === 'transcript_delta' || message.type === 'transcript_turn_end') {
+                           console.debug('[VoiceHR] transcript event', message.type, message.role, message.text || '');
+                           renderLiveTranscriptEvent(message);
+                           return;
+                      }
+                      if (message.type === 'progress') {
+                         const completed = message.completed || [];
+                         const phaseLabels = {
+                             clarifying: 'Sarah is asking for a little more detail',
+                             discussion: 'Conversation in progress',
+                             task: `Task ${message.task} of ${message.total || 4}`,
+                         };
+                         document.querySelector('.task-indicator').textContent =
+                             phaseLabels[message.phase] || phaseLabels.task;
+                         document.querySelectorAll('.task-steps .step').forEach((step, index) => {
+                             const number = index + 1;
+                             step.classList.toggle('done', completed.includes(number));
+                             step.classList.toggle('current', number === message.task && !completed.includes(number));
+                         });
+                         return;
+                     }
+                     if (message.type === 'task') {
+                         const total = message.total || 4;
+                         document.querySelector('.task-text').textContent = message.text;
+                         document.querySelector('.task-indicator').textContent = message.follow_up
+                             ? `Follow-up question · Task ${message.task}`
+                             : `Task ${message.task} of ${total}`;
+                         if (message.phase === 'clarifying') {
+                             document.querySelector('.task-indicator').textContent =
+                                 'Sarah is asking for a little more detail';
+                         }
+                        return;
+                    }
+                     if (message.type === 'audio_start') {
+                        audioSampleRate = message.sample_rate || 24000;
+                        audioChannels = message.channels || 1;
+                         candidateListening = false;
+                         setSpeaking(true);
+                         console.info('[VoiceHR] Sarah audio started', { generation: sessionGeneration, at: performance.now() });
+                         return;
+                    }
+                      if (message.type === 'audio_end') {
+                        setSpeaking(false);
+                        candidateListening = true;
+                        return;
+                    }
+                       if (message.type === 'live_connected') {
+                           liveConnected = true;
+                           console.info('[VoiceHR] Gemini Live connected; awaiting Sarah audio', {
+                               generation: sessionGeneration,
+                               at: performance.now(),
+                               candidateListening,
+                           });
+                           return;
+                     }
+                     if (message.type === 'conversation_complete') {
+                         ending = true;
+                         finishInterview();
+                         return;
+                     }
+                     if (message.type === 'conversation_terminated') {
+                         ending = true;
+                         sessionTerminated = true;
+                         stopLiveAudioStream();
+                         const terminationText = message.reason === 'abusive_language'
+                             ? 'The interview ended because the conversation was not respectful.'
+                             : 'The interview ended because the assessment questions were not answered.';
+                         document.getElementById('termination-text').textContent = terminationText;
+                         showStep('step-terminated');
+                         candidateListening = false;
+                         if (mediaRecorder && mediaRecorder.state !== 'inactive') {
+                             mediaRecorder.stop();
+                         } else if (ws && ws.readyState === WebSocket.OPEN) {
+                             wsSend(JSON.stringify({ type: 'end' }));
+                         }
+                         return;
+                     }
+                     if (message.type === 'server_error') {
+                         sessionFailed = true;
+                         ending = true;
+                         stopHeartbeat();
+                         stopLiveAudioStream();
+                         stopTimer();
+                         candidateListening = false;
+                         if (mediaRecorder && mediaRecorder.state !== 'inactive') {
+                             mediaRecorder.onstop = null;
+                             mediaRecorder.stop();
+                         }
+                         showError(message.message || 'Sarah could not process that answer. Please try again.');
+                         if (ws && ws.readyState === WebSocket.OPEN) ws.close(1011, 'server error');
+                         return;
+                      }
+                      if (message.type === 'live_error') {
+                           console.error('[VoiceHR] Gemini Live error', {
+                               generation: sessionGeneration,
+                               message: message.message,
+                               reason: message.reason,
+                               errorType: message.error_type,
+                               errorCode: message.error_code,
+                               errorReason: message.error_reason,
+                               at: performance.now(),
+                           });
+                          liveFailure = true;
+                          sessionFailed = false;
+                          ending = true;
+                          stopLiveAudioStream();
+                          stopTimer();
+                          if (mediaRecorder && mediaRecorder.state !== 'inactive') {
+                              mediaRecorder.stop();
+                           } else if (ws && ws.readyState === WebSocket.OPEN) {
+                               wsSend(JSON.stringify({ type: 'end' }));
+                           }
+                           document.querySelector('#step-retry p').textContent =
+                               'Sarah became unavailable. Your recording was preserved. You can reconnect once.';
+                           showStep('step-retry');
+                           return;
+                      }
+                    if (message.type === 'follow_up') {
+                        document.querySelector('.task-indicator').textContent = `Follow-up question · Task ${message.task}`;
+                        return;
+                    }
+                    if (message.type === 'status') {
+                        document.querySelector('.task-indicator').textContent = message.audio_error
+                            ? 'Sarah audio unavailable. You can continue speaking.'
+                            : message.text;
+                        if (message.audio_error) {
+                            setSpeaking(false);
+                            if (ws && ws.readyState === WebSocket.OPEN) {
+                                 wsSend(JSON.stringify({ type: 'ready_for_candidate' }));
+                             }
+                        } else if (message.speaking !== false) {
+                            setSpeaking(true);
+                        }
+                    }
+                 } catch (e) {
+                     console.error('[VoiceHR] Failed to handle server message', e, event.data);
+                 }
+             } else if (event.data instanceof ArrayBuffer) {
+                 liveBinaryFrameCount++;
+                 liveBinaryByteCount += event.data.byteLength;
+                 if (firstAudioReceivedGeneration !== sessionGeneration) {
+                     firstAudioReceivedGeneration = sessionGeneration;
+                     console.info('[VoiceHR] first Sarah PCM received', {
+                         generation: sessionGeneration,
+                         bytes: event.data.byteLength,
+                         at: performance.now(),
+                     });
+                 }
+                 const generation = audioGeneration;
+                 audioQueue = audioQueue
+                     .then(() => playPcmAudio(event.data, audioSampleRate, audioChannels, generation))
+                     .catch(err => console.warn('PCM playback error:', err));
+            }
+        }
+
+        async function playPcmAudio(buffer, sampleRate, channels, generation) {
+             if (generation !== audioGeneration || ending) return;
+            if (!audioContext) audioContext = new AudioContext();
+            if (audioContext.state === 'suspended') await audioContext.resume();
+            const pcm = new Int16Array(buffer);
+            const frameCount = Math.floor(pcm.length / channels);
+            const audioBuffer = audioContext.createBuffer(channels, frameCount, sampleRate);
+            for (let channel = 0; channel < channels; channel++) {
+                const output = audioBuffer.getChannelData(channel);
+                for (let i = 0; i < frameCount; i++) output[i] = pcm[i * channels + channel] / 32768;
+            }
+             const source = audioContext.createBufferSource();
+             source.buffer = audioBuffer;
+             source.connect(audioContext.destination);
+             activeAudioSources.add(source);
+             await new Promise(resolve => {
+                 source.onended = () => {
+                     activeAudioSources.delete(source);
+                     resolve();
+                 };
+                 source.start();
+             });
+        }
+
+        function setSpeaking(isSpeaking) {
+            candidateListening = !isSpeaking;
+            document.getElementById('sarah-orb').classList.toggle('speaking', isSpeaking);
+            document.getElementById('sarah-label').textContent = isSpeaking ? 'Sarah is speaking…' : 'Your turn';
+        }
+
+        function handleInterviewClose(event) {
+             stopHeartbeat();
+             stopTimer();
+             stopLiveAudioStream();
+            if (mediaRecorder && mediaRecorder.state !== 'inactive') mediaRecorder.stop();
+             if (mediaStream) mediaStream.getTracks().forEach(track => track.stop());
+
+              if (sessionTerminated) {
+                  showStep('step-terminated');
+                  return;
+              }
+              if (sessionFailed) return;
+              if (liveFailure) {
+                  showStep('step-retry');
+                  return;
+              }
+            if (event.code !== 1000 && !ending && retryCount < 1) {
+                showStep('step-retry');
+                return;
+            }
+            showStep('step-done');
+        }
+
+        function handleError() {
+             stopHeartbeat();
+             stopTimer();
+            if (retryCount < 1) {
+                showStep('step-retry');
+            } else {
+                showError('Interview could not be completed. Please contact the recruitment team.');
+            }
+        }
+
+          async function retryInterview() {
+             retryCount++;
+             liveFailure = false;
+             sessionFailed = false;
+             ending = true;
+             stopLiveAudioStream();
+             if (mediaRecorder && mediaRecorder.state !== 'inactive') mediaRecorder.stop();
+             if (mediaStream) mediaStream.getTracks().forEach(track => track.stop());
+             ending = false;
+             await startInterview();
+         }
+
+        function finishInterview() {
+            ending = true;
+             const finishButton = document.getElementById('finish-btn');
+             finishButton.disabled = true;
+             finishButton.textContent = 'Finishing...';
+             stopLiveAudioStream();
+             candidateListening = false;
+            if (mediaRecorder && mediaRecorder.state !== 'inactive') {
+                mediaRecorder.stop();
+            } else if (ws && ws.readyState === WebSocket.OPEN) {
+                wsSend(JSON.stringify({ type: 'end' }));
+            }
+        }
+
+        let seconds = 0;
+        function startTimer() {
+            seconds = 0;
+            timerInterval = setInterval(() => {
+                seconds++;
+                const m = String(Math.floor(seconds / 60)).padStart(2, '0');
+                const s = String(seconds % 60).padStart(2, '0');
+                document.getElementById('timer').textContent = `${m}:${s}`;
+            }, 1000);
+        }
+
+        function stopTimer() {
+            if (timerInterval) clearInterval(timerInterval);
+        }
+
+        validateToken();
+    </script>
+</body>
+</html>

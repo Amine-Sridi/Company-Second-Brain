@@ -1,0 +1,279 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>VoiceHR Admin</title>
+    <style>
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+        body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background: #f5f5f5; color: #333; padding: 2rem; }
+        .container { max-width: 500px; margin: 0 auto; }
+        .admin-container { max-width: 1100px !important; }
+        .reports-section { margin-top: 3rem; }
+        .reports-heading { display: flex; justify-content: space-between; align-items: center; gap: 1rem; margin-bottom: 1rem; }
+        .reports-heading h2 { font-size: 1.35rem; }
+        .secondary-btn { background: var(--sand); color: var(--ink); border: 1px solid var(--pebble); padding: 0.55rem 1rem; font-size: 0.9rem; }
+        .secondary-btn:hover { background: var(--stone); }
+        .reports-status { color: var(--ink-mid); font-size: 0.9rem; margin-bottom: 1rem; }
+        .report-card { background: var(--sand); border: 1px solid var(--pebble); border-radius: 14px; margin-bottom: 1rem; overflow: hidden; }
+        .report-summary { display: grid; grid-template-columns: minmax(190px, 1.5fr) repeat(4, minmax(90px, 0.7fr)) auto; align-items: center; gap: 1rem; padding: 1rem 1.25rem; cursor: pointer; }
+        .report-summary:hover { background: rgba(255,255,255,0.28); }
+        .candidate-name { font-weight: 600; color: var(--ink); }
+        .candidate-email, .report-date { display: block; color: var(--ink-mid); font-size: 0.8rem; margin-top: 0.2rem; word-break: break-word; }
+        .summary-label { display: block; color: var(--ink-faint); font-size: 0.72rem; text-transform: uppercase; letter-spacing: .04em; margin-bottom: .2rem; }
+        .summary-value { font-weight: 600; color: var(--ink); }
+        .report-score { font: 2rem/1 var(--font-voice); color: var(--blue-deep); }
+        .report-badge { display: inline-block; border-radius: 999px; padding: .25rem .55rem; background: var(--blue-tint); color: var(--blue-ink); font-size: .78rem; font-weight: 600; }
+        .report-badge.inconclusive { background: var(--terra-tint); color: var(--terra); }
+        .report-badge.failed { background: #fef3c7; color: #92400e; }
+        .termination-alert { margin-bottom: 1rem; padding: .8rem 1rem; border: 1px solid #dfc0a8; border-radius: 9px; background: var(--terra-tint); color: var(--terra); font-size: .85rem; }
+        .expand-icon { color: var(--ink-mid); font-size: 1.2rem; transition: transform .15s; }
+        .report-card.open .expand-icon { transform: rotate(180deg); }
+        .report-details { display: none; border-top: 1px solid var(--pebble); padding: 1.25rem; }
+        .report-card.open .report-details { display: block; }
+        .evaluation-alert { display: flex; align-items: center; gap: .75rem; flex-wrap: wrap; margin-bottom: 1rem; padding: .8rem 1rem; border: 1px solid #f0c36d; border-radius: 9px; background: #fff8e5; color: #7a5214; font-size: .85rem; }
+        .details-grid { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 1rem 2rem; }
+        .detail-block { min-width: 0; }
+        .detail-block.full-width { grid-column: 1 / -1; }
+        .detail-block h3 { color: var(--ink); font-size: 1rem; margin-bottom: .8rem; }
+        .dimension-row { display: grid; grid-template-columns: 190px 1fr 52px; align-items: center; gap: .65rem; margin-bottom: .7rem; }
+        .dimension-name { color: var(--ink-mid); font-size: .85rem; }
+        .dimension-weight { color: var(--ink-faint); font-size: .72rem; }
+        .dimension-track { height: 8px; background: var(--stone); border-radius: 99px; overflow: hidden; }
+        .dimension-fill { height: 100%; border-radius: inherit; }
+        .dimension-score { text-align: right; font-family: var(--font-mono); font-size: .82rem; color: var(--ink); }
+        .stats-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: .6rem; }
+        .stat-box { background: rgba(255,255,255,.3); border-radius: 9px; padding: .7rem; }
+        .stat-value { display: block; font-weight: 600; color: var(--ink); }
+        .stat-label { display: block; color: var(--ink-faint); font-size: .75rem; margin-top: .2rem; }
+        .evidence-table { width: 100%; border-collapse: collapse; }
+        .evidence-table th, .evidence-table td { padding: .55rem; border-bottom: 1px solid var(--pebble); text-align: left; vertical-align: top; font-size: .82rem; }
+        .evidence-table th { color: var(--ink-mid); font-weight: 600; }
+        .quote { color: var(--ink); font-style: italic; }
+        .insight-list { display: grid; gap: .5rem; }
+        .insight { padding: .65rem .8rem; border-radius: 8px; font-size: .85rem; }
+        .insight.strength { background: var(--sage-tint); border: 1px solid var(--sage-border); }
+        .insight.concern { background: var(--terra-tint); border: 1px solid var(--terra-border); }
+        .insight-time { color: var(--ink-faint); font-family: var(--font-mono); font-size: .72rem; margin-right: .4rem; }
+        .transcript-box { max-height: 330px; overflow-y: auto; background: rgba(255,255,255,.3); border-radius: 9px; padding: .8rem; }
+        .transcript-turn { display: grid; grid-template-columns: 48px 75px 1fr; gap: .6rem; margin-bottom: .65rem; font-size: .82rem; line-height: 1.45; }
+        .transcript-time { color: var(--ink-faint); font-family: var(--font-mono); }
+        .transcript-speaker { color: var(--blue-ink); font-weight: 600; }
+        .transcript-speaker.candidate { color: var(--terra); }
+        .report-actions { display: flex; align-items: center; gap: .75rem; margin-top: 1rem; }
+        .report-actions a { color: var(--blue-ink); font-size: .85rem; }
+        .report-audio { width: 100%; margin-top: .4rem; }
+        .empty-reports { background: var(--sand); border: 1px dashed var(--pebble); border-radius: 12px; padding: 1.5rem; color: var(--ink-mid); text-align: center; }
+        @media (max-width: 800px) {
+            .report-summary { grid-template-columns: minmax(170px, 1fr) repeat(2, minmax(80px, .7fr)) auto; }
+            .report-summary > :nth-child(4), .report-summary > :nth-child(5) { display: none; }
+        }
+        @media (max-width: 600px) {
+            body { padding: 1rem; }
+            .reports-heading { align-items: flex-start; flex-direction: column; }
+            .report-summary { grid-template-columns: 1fr auto; gap: .7rem; }
+            .report-summary > :not(:first-child):not(:last-child) { display: block; }
+            .report-summary .summary-score { grid-column: 1; }
+            .details-grid { grid-template-columns: 1fr; }
+            .detail-block.full-width { grid-column: auto; }
+            .dimension-row { grid-template-columns: 145px 1fr 42px; }
+            .evidence-table { display: block; overflow-x: auto; }
+        }
+    </style>
+    <link rel="stylesheet" href="/theme.css">
+</head>
+<body class="linen-page admin-page">
+    <div class="admin-shell">
+        <header class="topbar">
+            <a class="logo" href="/admin" aria-label="VoiceHR admin home"><div class="logo-mark"><div class="logo-dot"></div></div><span class="logo-text">VoiceHR</span></a>
+            <nav class="topbar-nav" aria-label="Workspace navigation">
+                <a class="topbar-link active" href="/admin">Completed reports</a>
+            </nav>
+            <div class="topbar-tools"><span class="topbar-label">Recruiter workspace</span><span class="user-avatar" aria-label="Admin user">AM</span></div>
+        </header>
+        <main class="workspace-frame">
+          <div class="container admin-container">
+            <section class="reports-section" id="completed-reports" aria-labelledby="reports-title">
+            <span hidden>Completed Interviews</span>
+            <div class="reports-heading">
+                <div>
+                    <h2 id="reports-title" class="page-heading">Completed Reports</h2>
+                    <p class="reports-status" id="reports-status">Loading reports...</p>
+                </div>
+                <button class="secondary-btn" id="refresh-reports" onclick="loadReports()">Refresh Reports</button>
+            </div>
+            <div id="reports-list"></div>
+            </section>
+          </div>
+        </main>
+    </div>
+    <script>
+        // Interview invitations are created by RWS (POST /api/invite, service-key
+        // authenticated) as part of the Company Second Brain recruiter workflow, not
+        // from this admin UI -- this page is a read-only view onto completed reports.
+        // The reports-only layout reuses theme.css's existing "reports-view" styling.
+        document.body.classList.add('reports-view');
+
+        function escapeHtml(value) {
+            return String(value ?? '').replace(/[&<>'"]/g, character => ({
+                '&': '&amp;', '<': '&lt;', '>': '&gt;', "'": '&#39;', '"': '&quot;'
+            }[character]));
+        }
+
+        function safeUrl(value) {
+            return typeof value === 'string' && value.startsWith('/recordings/') ? value : '';
+        }
+
+        function formatDuration(seconds) {
+            if (seconds == null || Number.isNaN(Number(seconds))) return 'N/A';
+            const total = Math.max(0, Math.round(Number(seconds)));
+            return `${Math.floor(total / 60)}m ${String(total % 60).padStart(2, '0')}s`;
+        }
+
+        function formatTimestamp(value) {
+            const raw = String(value ?? '0');
+            const parsed = raw.includes(':')
+                ? raw.split(':').reduce((total, part) => total * 60 + Number(part), 0)
+                : Number(raw);
+            const seconds = Number.isFinite(parsed) ? Math.max(0, parsed) : 0;
+            return `${String(Math.floor(seconds / 60)).padStart(2, '0')}:${String(Math.floor(seconds % 60)).padStart(2, '0')}`;
+        }
+
+        function scoreColor(score) {
+            if (score == null) return '#c0b8ae';
+            if (score < 50) return '#c06a3a';
+            if (score < 65) return '#b58a44';
+            return '#4a7a58';
+        }
+
+        function renderInsight(item, kind) {
+            const text = item.text || item.quote || item.note || '';
+            return `<div class="insight ${kind}"><span class="insight-time">${escapeHtml(item.timestamp || '')}</span>${escapeHtml(text)}</div>`;
+        }
+
+        function renderReportCard(report, index) {
+            const dimensions = [
+                ['Interaction & Comprehension', 'interaction_comprehension'],
+                ['Fluency & Coherence', 'fluency_coherence'],
+                ['Grammar & Language Control', 'grammar_language_control'],
+                ['Vocabulary & Range', 'vocabulary_range'],
+                ['Pronunciation & Intelligibility', 'pronunciation_intelligibility']
+            ];
+            const weights = report.dimension_weights || {};
+            const score = report.overall_score == null ? 'N/A' : report.overall_score;
+            const evaluationFailed = report.evaluation_status === 'failed' || report.overall_score == null;
+            const terminated = report.status === 'terminated';
+            const statusClass = terminated ? 'failed' : (evaluationFailed ? 'failed' : (report.inconclusive ? 'inconclusive' : ''));
+            const statusLabel = terminated ? 'Terminated' : (evaluationFailed ? 'Evaluation unavailable' : (report.inconclusive ? 'Inconclusive' : report.status || 'Completed'));
+            const transcript = report.transcript || [];
+            const recordingUrl = safeUrl(report.recording_url || (report.recording || {}).url);
+            const evidence = report.evidence || [];
+            const strengths = report.strengths || [];
+            const concerns = report.concerns || [];
+
+            let html = `<article class="report-card" id="report-card-${index}">
+                <div class="report-summary" role="button" tabindex="0" onclick="toggleReport(${index})" onkeydown="if(event.key === 'Enter' || event.key === ' ') toggleReport(${index})">
+                    <div><span class="candidate-name">${escapeHtml(report.candidate_name)}</span><span class="candidate-email">${escapeHtml(report.candidate_email)}</span><span class="report-date">${escapeHtml(report.language === 'fr' ? 'French' : 'English')} · ${escapeHtml(new Date(report.interview_date).toLocaleString())}</span></div>
+                     <div class="summary-score"><span class="summary-label">Overall</span><span class="report-score">${escapeHtml(score)}</span><span class="score-context">/ 100</span></div>
+                    <div><span class="summary-label">CEFR</span><span class="summary-value">${escapeHtml(report.cefr_level || 'N/A')}</span></div>
+                    <div><span class="summary-label">Confidence</span><span class="summary-value">${escapeHtml(report.confidence || 'N/A')}</span></div>
+                    <div><span class="summary-label">Status</span><span class="report-badge ${statusClass}">${escapeHtml(statusLabel)}</span></div>
+                    <span class="expand-icon" aria-hidden="true">⌄</span>
+                </div>
+                <div class="report-details">
+                    ${terminated ? `<div class="termination-alert"><strong>Interview terminated.</strong> ${escapeHtml(report.termination_reason === 'abusive_language' ? 'The candidate used abusive or threatening language.' : 'The candidate repeatedly refused to answer the assessment questions.')}</div>` : ''}
+                    ${evaluationFailed ? `<div class="evaluation-alert"><strong>Evaluation unavailable.</strong> ${escapeHtml(report.evaluation_error || 'The evaluator did not return scores. Start Gemini and retry this report.')} <button class="secondary-btn" onclick="retryReport(event, '${escapeHtml(report.report_token)}')">Retry Evaluation</button></div>` : ''}
+                    <div class="details-grid">
+                        <div class="detail-block">
+                            <h3>Dimension Scores</h3>`;
+            for (const [label, key] of dimensions) {
+                const dimensionScore = report.dimensions ? report.dimensions[key] : null;
+                const weight = weights[key] == null ? '' : `${Math.round(weights[key] * 100)}%`;
+                html += `<div class="dimension-row"><span class="dimension-name">${escapeHtml(label)} <span class="dimension-weight">${escapeHtml(weight)}</span></span><span class="dimension-track"><span class="dimension-fill" style="width:${Math.max(0, Math.min(100, Number(dimensionScore) || 0))}%;background:${scoreColor(dimensionScore)}"></span></span><span class="dimension-score">${escapeHtml(dimensionScore == null ? 'N/A' : dimensionScore)}</span></div>`;
+            }
+            html += `</div>
+                        <div class="detail-block">
+                            <h3>Interview Statistics</h3>
+                            <div class="stats-grid">
+                                <div class="stat-box"><span class="stat-value">${escapeHtml(formatDuration(report.stats && report.stats.interview_duration_seconds))}</span><span class="stat-label">Interview duration</span></div>
+                                <div class="stat-box"><span class="stat-value">${escapeHtml(formatDuration(report.stats && report.stats.candidate_speaking_duration_seconds))}</span><span class="stat-label">Candidate speaking</span></div>
+                                <div class="stat-box"><span class="stat-value">${escapeHtml(report.stats && report.stats.word_count != null ? report.stats.word_count : 'N/A')}</span><span class="stat-label">Candidate words</span></div>
+                            </div>`;
+            if (recordingUrl) html += `<h3 style="margin-top:1.1rem">Recording</h3><audio class="report-audio" controls src="${escapeHtml(recordingUrl)}"></audio>`;
+            html += `</div>`;
+
+            if (strengths.length || concerns.length) {
+                html += `<div class="detail-block"><h3>Strengths & Concerns</h3><div class="insight-list">`;
+                for (const item of strengths) html += renderInsight(item, 'strength');
+                for (const item of concerns) html += renderInsight(item, 'concern');
+                html += `</div></div>`;
+            }
+
+            if (evidence.length) {
+                html += `<div class="detail-block"><h3>Timestamped Evidence</h3><table class="evidence-table"><thead><tr><th>Time</th><th>Dimension</th><th>Quote</th><th>Note</th></tr></thead><tbody>`;
+                for (const item of evidence) html += `<tr><td>${escapeHtml(item.timestamp)}</td><td>${escapeHtml(item.dimension)}</td><td class="quote">"${escapeHtml(item.quote)}"</td><td>${escapeHtml(item.note)}</td></tr>`;
+                html += `</tbody></table></div>`;
+            }
+
+            if (transcript.length) {
+                html += `<div class="detail-block full-width"><h3>Transcript</h3><div class="transcript-box">`;
+                for (const turn of transcript) {
+                    const candidate = turn.role === 'user' || turn.role === 'candidate';
+                    html += `<div class="transcript-turn"><span class="transcript-time">${escapeHtml(formatTimestamp(turn.timestamp))}</span><span class="transcript-speaker ${candidate ? 'candidate' : ''}">${candidate ? 'Candidate' : 'Sarah'}</span><span>${escapeHtml(turn.text)}</span></div>`;
+                }
+                html += `</div></div>`;
+            }
+
+            html += `<div class="detail-block full-width report-actions"><a href="/report?token=${encodeURIComponent(report.report_token)}" target="_blank" rel="noopener">Open full report</a></div>
+                    </div>
+                </div>
+            </article>`;
+            return html;
+        }
+
+        function toggleReport(index) {
+            document.getElementById(`report-card-${index}`).classList.toggle('open');
+        }
+
+        async function retryReport(event, reportToken) {
+            event.stopPropagation();
+            const button = event.currentTarget;
+            button.disabled = true;
+            button.textContent = 'Retrying...';
+            try {
+                const res = await fetch(`/api/admin/reports/${encodeURIComponent(reportToken)}/retry`, { method: 'POST' });
+                if (!res.ok) {
+                    const error = await res.json().catch(() => ({}));
+                    throw new Error(error.detail || 'Evaluation failed');
+                }
+                await loadReports();
+            } catch (error) {
+                button.disabled = false;
+                button.textContent = 'Retry Evaluation';
+                alert(error.message);
+            }
+        }
+
+        async function loadReports() {
+            const statusEl = document.getElementById('reports-status');
+            const listEl = document.getElementById('reports-list');
+            statusEl.textContent = 'Loading reports...';
+            try {
+                const res = await fetch('/api/admin/reports');
+                if (!res.ok) throw new Error('Unable to load reports');
+                const data = await res.json();
+                const reports = data.reports || [];
+                statusEl.textContent = reports.length ? `${reports.length} report${reports.length === 1 ? '' : 's'}` : 'No completed reports yet.';
+                listEl.innerHTML = reports.length
+                    ? reports.map(renderReportCard).join('')
+                    : '<div class="empty-reports">Completed interview reports will appear here.</div>';
+            } catch (e) {
+                statusEl.textContent = 'Could not load reports.';
+                listEl.innerHTML = '<div class="empty-reports">Try refreshing the reports list.</div>';
+            }
+        }
+
+        loadReports();
+    </script>
+</body>
+</html>
