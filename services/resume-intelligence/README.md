@@ -105,8 +105,18 @@ upload (PDF/DOCX/JPEG/PNG)
 | Method | Path | Auth | Purpose |
 |---|---|---|---|
 | `GET` | `/health` | none | liveness |
-| `POST` | `/v1/resumes` | none (candidate-facing upload) | ingest a resume, returns `candidate_id` |
+| `POST` | `/v1/resumes` | `X-Api-Key` service key | ingest a resume, returns `candidate_id` |
 | `GET` | `/v1/candidates/{candidate_id}/contact` | `X-Api-Key` service key | PII contact lookup for RWS, transient use only |
+
+Both non-health endpoints use the same service-key mechanism — there is no separate
+auth system, and this service never validates a recruiter JWT. In this architecture,
+admin/recruiter uploads always go through RWS first: `recruiter client --JWT--> RWS
+--service key--> Resume Intelligence`. RWS's own `POST /v1/resumes` is JWT-protected
+and forwards to this endpoint using RWS's service key, which is never exposed to the
+recruiter's browser (see `services/recruitment-workflow/main.py`'s
+`upload_candidate_resume`). The same service-key mechanism here is deliberately
+suitable for a future trusted caller too (e.g. an email-ingestion workflow) — no new
+auth surface would be needed for that.
 
 ### Failure semantics
 
@@ -115,6 +125,7 @@ upload (PDF/DOCX/JPEG/PNG)
 | Status | Cause |
 |---|---|
 | `201` | extraction, structuring, storage, and Second Brain ingestion all succeeded |
+| `401` | missing or wrong `X-Api-Key` |
 | `422` | unsupported file type (anything outside `.pdf`/`.docx`/`.jpg`/`.jpeg`/`.png`) |
 | `502` | Gemini structured extraction failed after 3 bounded attempts — no candidate is stored |
 | `502` | candidate was stored, but the Second Brain push failed — candidate_id is in the response detail; retrying the upload is safe |
@@ -152,13 +163,17 @@ codebase and checked by tests (`tests/test_api.py`'s log-leak tests).
 
 ## Authentication
 
-- `POST /v1/resumes` has no authentication — it is the candidate-facing upload endpoint.
-  Whether it should require a service key (e.g. if it is ever only reached through a
-  recruiter-facing flow rather than a direct candidate upload) is an open design question,
-  not decided in this codebase; see "Known deliberate limitations."
-- `GET /v1/candidates/{candidate_id}/contact` requires the `X-Api-Key` header to match
-  `SERVICE_API_KEY` — this is the same static service-to-service API key pattern used by
-  every other cross-service call in the platform (no JWT, no OAuth).
+- Both `POST /v1/resumes` and `GET /v1/candidates/{candidate_id}/contact` require the
+  `X-Api-Key` header to match `SERVICE_API_KEY` — the same static service-to-service API
+  key pattern used by every other cross-service call in the platform (no JWT, no OAuth).
+  This service never validates a recruiter JWT at all; it doesn't understand the concept.
+- The recruiter-facing JWT boundary lives entirely upstream, on RWS's own
+  `POST /v1/resumes` (protected by `require_recruiter`, a short-lived JWT in
+  `Authorization: Bearer`). A recruiter's browser never receives or holds this service's
+  API key — RWS forwards the uploaded file here with its own service credential after
+  checking the JWT. Sending a recruiter JWT directly to this service's endpoints has no
+  effect: it isn't a header this service reads, and even a well-formed
+  `Authorization: Bearer <jwt>` header is simply ignored (only `X-Api-Key` is checked).
 
 ## Supported file types
 
@@ -200,9 +215,10 @@ service's own `alembic/env.py` in this platform.
 
 - **`.doc` is not supported.** Adding it back would mean adding `antiword` as a new system
   dependency for a rare, legacy format — deliberately not done.
-- **`POST /v1/resumes` has no authentication.** Not a bug found and left unfixed — a
-  genuine open question about this endpoint's intended caller (a direct candidate upload
-  vs. a recruiter-facing flow) that this codebase does not answer either way.
+- **No email-ingestion caller exists yet.** `POST /v1/resumes`'s service-key auth is
+  deliberately generic (not RWS-specific) so a future trusted caller — e.g. an
+  email-ingestion workflow that pulls resumes from an inbox — could call it the same way,
+  with its own service-key credential. That workflow itself is explicitly not implemented.
 - **No skill taxonomy or synonym resolution.** Skills are deduped only by exact
   (case-insensitive) match — "JS" and "Javascript" are kept as distinct entries. This is a
   deliberate scope boundary (see the project's own CLAUDE.md), not an oversight.

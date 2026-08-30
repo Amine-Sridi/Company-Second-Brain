@@ -5,10 +5,14 @@
 # breaker machinery — per the bootstrap's "boring over clever" rule; add real retry logic only
 # if a concrete failure mode in this project demonstrates the need for it.
 #
+# `files`/`data` support multipart forwarding (e.g. RWS forwarding a recruiter's uploaded
+# resume file to Resume Intelligence) using this same client rather than a second, bespoke
+# HTTP abstraction just for uploads.
+#
 # Every call is logged (method, target host+path, status/outcome, duration_ms) via
 # shared.observability.log_external_call, and propagates the current request's
 # correlation id downstream via the X-Correlation-ID header. Never logs headers, the
-# request/response body, or the API key.
+# request/response body (including any file content), or the API key.
 from __future__ import annotations
 
 import logging
@@ -45,6 +49,8 @@ async def call_service(
     api_key: str,
     json: dict | None = None,
     params: dict | None = None,
+    files: dict | None = None,
+    data: dict | None = None,
     extra_headers: dict | None = None,
     timeout: float = DEFAULT_TIMEOUT_SECONDS,
 ) -> httpx.Response:
@@ -53,6 +59,11 @@ async def call_service(
     extra_headers is merged on top of the x-api-key header -- e.g. an Idempotency-Key
     for calls that need attempt-scoped idempotency (it cannot itself be the auth
     mechanism, so it is always sent alongside, never instead of, x-api-key).
+
+    files/data forward a multipart/form-data body (e.g. {"file": (filename, content,
+    content_type)}) -- mutually exclusive with json in practice, same as httpx itself.
+    The multipart Content-Type/boundary header is set by httpx automatically; nothing
+    here needs to touch it.
     """
     headers = {"x-api-key": api_key}
     correlation_id = get_correlation_id()
@@ -66,7 +77,8 @@ async def call_service(
         try:
             async with httpx.AsyncClient(timeout=timeout) as client:
                 response = await client.request(
-                    method, url, json=json, params=params, headers=headers
+                    method, url, json=json, params=params,
+                    files=files, data=data, headers=headers,
                 )
         except httpx.HTTPError as exc:
             log_external_call(

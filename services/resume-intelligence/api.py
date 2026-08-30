@@ -3,8 +3,15 @@ FastAPI application for Resume Intelligence.
 
 Endpoints:
   GET  /health
-  POST /v1/resumes                          — ingest a resume file, returns candidate_id
+  POST /v1/resumes                          — service-key auth, ingest a resume file, returns candidate_id
   GET  /v1/candidates/{candidate_id}/contact — service-key auth, returns PII contact data
+
+Both non-health endpoints use the same X-Api-Key service-key mechanism -- there is no
+separate auth system here, and this service never validates a recruiter JWT (that
+happens once, upstream, in RWS). The current caller of POST /v1/resumes is RWS's own
+recruiter-facing upload endpoint (POST /v1/resumes on RWS, JWT-protected there); the
+same service-key mechanism is already what a future trusted caller (e.g. an
+email-ingestion workflow) would use too -- no new auth surface would be needed for that.
 """
 from __future__ import annotations
 
@@ -114,10 +121,16 @@ async def ingest_resume(
     file: UploadFile = File(...),
     db: Session = Depends(get_db),
     llm: LLMProvider = Depends(get_llm_provider),
+    _auth: None = Depends(require_service_key),
 ):
     """
     Accept a resume file, run the extraction + parsing pipeline, store the candidate
     with normalized-email dedup, and return the candidate_id.
+
+    Requires X-Api-Key service key. This service never validates a recruiter JWT --
+    RWS is the only current caller, and its own recruiter-facing upload endpoint is
+    what checks the JWT, before forwarding here with the service key (never exposed
+    to the recruiter's browser).
 
     Idempotent: submitting the same candidate email again returns the existing id
     (is_new=false) without modifying any data.

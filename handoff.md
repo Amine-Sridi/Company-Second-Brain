@@ -1693,15 +1693,114 @@ implementation — see the bootstrap instructions.
     and scoring untouched; no change to the system-wide architecture; no auth added to
     `POST /v1/resumes` (flagged, not fixed — see above).
 
+- Resume Intelligence upload authentication boundary: **DONE**. Closes the open question the
+  previous session flagged (whether `POST /v1/resumes` should require the service API key) with
+  an explicit architecture decision: admin/recruiter uploads always go through RWS.
+  `recruiter client --JWT--> RWS --service key--> Resume Intelligence --service key--> Second
+  Brain`. No RBAC/roles, no OAuth/SSO, no email ingestion — none of that was in scope or added.
+  - **Resume Intelligence** (`services/resume-intelligence/api.py`): `POST /v1/resumes` now
+    requires `X-Api-Key` via the same `require_service_key` dependency `GET /v1/candidates/{id}/
+    contact` already used — one auth mechanism, not a second one. This service still never
+    reads or validates a JWT anywhere; an `Authorization: Bearer` header has no effect on it at
+    all (confirmed live and by test). All pre-existing tests that upload a resume were updated
+    to send the correct key; four new tests cover the boundary itself (no key → `401`, wrong key
+    → `401`, a JWT-shaped `Authorization` header → still `401`, correct key → `201`).
+  - **RWS** (`services/recruitment-workflow/main.py`, `resume_intelligence_client.py`): new
+    `POST /v1/resumes`, protected by the existing `require_recruiter` JWT dependency (the same
+    one `/v1/applications/{id}/invite` already uses) — no new auth mechanism, no roles (the
+    single seeded recruiter account is still the only one, as instructed). It reads the upload
+    once, forwards it to Resume Intelligence via a new `resume_intelligence_client.upload_resume`
+    using RWS's existing `resume_intelligence_api_key`/`resume_intelligence_url` settings (both
+    already present from the earlier contact-lookup integration) — the recruiter's browser never
+    receives or sees this key. Resume Intelligence's own response is preserved rather than
+    collapsed into one generic outcome: its 2xx body (`candidate_id`/`is_new`) and 4xx status
+    (e.g. `422` for an unsupported file) pass straight through; a Resume Intelligence 5xx or an
+    unreachable Resume Intelligence both become RWS's own `502` (an upstream integration
+    failure, not a problem with the upload itself).
+  - **Shared HTTP client** (`shared/http_client.py`): `call_service` gained optional
+    `files`/`data` parameters (httpx's own multipart kwargs, passed straight through) so RWS
+    could forward the uploaded file using the exact same client every other cross-service call
+    already uses — no second, upload-specific HTTP abstraction was written. Correlation-ID
+    propagation needed no new code at all: it already reads the request-scoped id from the
+    contextvar regardless of whether the call carries a JSON body or a multipart one, confirmed
+    live via matching `correlation_id` values across RWS's forwarding call and Resume
+    Intelligence's own extraction/Gemini/Second-Brain log lines for the same request.
+  - **A real latency finding, fixed, not just noted**: `call_service`'s shared default timeout
+    (10s) is tuned for a plain JSON call and is routinely too short for resume ingestion, which
+    runs real extraction plus up to 3 bounded Gemini attempts (each a real network round trip,
+    observed live at 7-25+ seconds per attempt) before Second Brain is even called. Discovered
+    live during this session's own smoke testing (a real successful Gemini + Second Brain
+    completion on Resume Intelligence's side arrived *after* RWS's forwarding call had already
+    given up and reported "unreachable"). Fixed by overriding the timeout specifically in
+    `resume_intelligence_client.upload_resume` (now 90s) rather than raising the shared default
+    for every other call in the codebase; covered by a new test asserting the override is
+    actually passed through.
+  - **RWS test suite created from scratch**: RWS had no `tests/` directory at all before this
+    session. Added `tests/conftest.py` (the same host/Docker sys.path pattern already
+    established in Resume Intelligence's own `tests/conftest.py`) and `tests/
+    test_resume_upload.py` (13 tests) covering: the full auth-boundary matrix (no JWT, a service
+    key in place of a JWT, a garbage bearer token, a valid JWT); that Resume Intelligence is
+    called with the service key and never the JWT, with the exact filename/content/content-type
+    forwarded unchanged; response-semantics passthrough for 2xx/4xx/5xx/unreachable; the extended
+    upload timeout; and that a JWT, the Resume Intelligence service key, and an uploaded email
+    address never appear in RWS's own logs or error responses (`caplog`-based, not just
+    asserted). Added `python-multipart` to RWS's `requirements.txt` (required for FastAPI's
+    `UploadFile`/`File(...)` form parsing — RWS had never needed it before this endpoint).
+  - **Documentation**: `services/resume-intelligence/README.md`'s API table, Authentication
+    section, and Known Limitations were updated to state the new reality (`POST /v1/resumes` now
+    requires the service key; the "open question" framing from the previous session's entry is
+    replaced with the actual decision) and to explain the RWS-in-front architecture and why the
+    service-key mechanism was deliberately kept generic (suitable for a future email-ingestion
+    caller, not implemented).
+  - **Verification**: Resume Intelligence full suite **75 passed, 4 skipped on host** / **77
+    passed, 1 skipped inside the rebuilt container against live Postgres** (skips are the
+    pre-existing, expected live-Gemini/no-fixture cases). RWS's new suite: **13 passed** on host
+    and inside its own rebuilt container. Both `infra-resume-intelligence` and
+    `infra-recruitment-workflow` images rebuilt successfully.
+  - **Live security verification** (against the actual running containers, not mocks): logged in
+    as the real seeded recruiter (`recruiter@example.com`) to get a genuine JWT, then confirmed
+    directly — (1) an unauthenticated direct upload to Resume Intelligence → `401`; (2) that same
+    real recruiter JWT sent directly to Resume Intelligence's own endpoint → `401` (rejected;
+    Resume Intelligence has no idea what a JWT is); (3) Resume Intelligence's real service key →
+    accepted (reached the real pipeline, `502` only because the test payload wasn't a parseable
+    resume — not a `401`); (4) RWS's own upload endpoint with no JWT → `401`; (5) RWS's upload
+    endpoint with a service API key in place of a JWT → `401` (a service key cannot substitute
+    for the recruiter JWT there either). All five matched the required outcome exactly.
+  - **Live end-to-end smoke test — partially completed, reported honestly**: the auth/forwarding
+    layer this task actually built was fully verified live and working correctly end to end —
+    every attempt's container logs show the real chain (`JWT verified by RWS` → `forwarded with
+    the service key` → `Resume Intelligence's real extract_text/parse_resume_text ran on the
+    real uploaded file` → `a real Gemini structured-extraction call was made`), all tagged with
+    one shared `correlation_id` across both services' logs, proving the entire boundary this
+    task was scoped to build is genuinely wired correctly. What could not be freshly completed
+    this session was the *Gemini call itself* succeeding on demand: `gemini-3.6-flash`'s
+    free-tier quota (already under strain from the previous session's own debugging) was
+    exhausted again by this session's verification traffic, confirmed by direct API checks
+    against both `gemini-3.6-flash` and a temporary `gemini-flash-latest` override (used only
+    for verification, reverted immediately afterward via a container recreate + `/health` +
+    `GEMINI_MODEL` env check) — both returned `429 RESOURCE_EXHAUSTED` on repeated attempts
+    spaced minutes apart. One attempt *did* complete successfully on Resume Intelligence's own
+    side during this session (real Gemini success + real Second Brain `200 OK`, visible in its
+    logs), but arrived after RWS's forwarding call had already timed out and reported failure to
+    the client — which is exactly the latency finding fixed above, discovered because of this
+    attempt. A full, fresh, single-request success through the entire `JWT → RWS → Resume
+    Intelligence → Gemini → DB → Second Brain` chain was not obtained this session due to the
+    quota exhaustion; the previous session's real end-to-end candidate
+    (`candidate_id = 7e664e04-4230-47d1-918d-461b97e0d11d`) remains correctly present and
+    PII-boundary-correct in both schemas, unaffected by any change in this session. Production
+    model configuration was not changed to force a pass, per this project's established
+    practice — this is reported plainly rather than glossed over.
+  - **Not done this pass, deliberately**: no RBAC/roles (still one seeded recruiter account); no
+    OAuth/SSO; Resume Intelligence still does not understand JWTs at all; no service key is
+    exposed client-side; no email-ingestion/inbox workflow was implemented (only kept
+    compatible); no change to parsing, dedup, scoring, or Second Brain behavior.
+
 ## Exact Next Steps
 
-Nothing is currently marked `[NEXT]`. Resume Intelligence has now been through four full
-sessions (standalone-tool removal, Gemini modernization, Second Brain integration, final
-hardening) and is in a commit-ready, documented state. The two open items below predate all of
-that work and remain genuine future design questions, not gaps surfaced by this session — plus
-one new one worth deciding explicitly rather than leaving implicit: whether `POST /v1/resumes`
-should require the service API key (see `services/resume-intelligence/README.md`'s "Known
-deliberate limitations").
+Nothing is currently marked `[NEXT]`. The upload-authentication boundary is now fully decided
+and implemented: admin/recruiter uploads go through RWS's JWT-protected endpoint, which forwards
+to Resume Intelligence's own now-service-key-protected endpoint. The items below predate this
+work and remain genuine open design questions, not gaps surfaced by this session.
 
 1. Nothing currently reads `second_brain.candidate_feedback` — it's a write-back sink only.
    Whether/how it should ever influence retrieval or scoring (e.g. down-weighting a candidate

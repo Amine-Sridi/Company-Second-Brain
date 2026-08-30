@@ -16,7 +16,7 @@ import logging
 import uuid
 from typing import Annotated
 
-from fastapi import BackgroundTasks, Depends, FastAPI, Header, HTTPException, Request
+from fastapi import BackgroundTasks, Depends, FastAPI, File, Header, HTTPException, Request, UploadFile, status
 from pydantic import ValidationError
 from pydantic_settings import BaseSettings, SettingsConfigDict
 from sqlalchemy.exc import IntegrityError
@@ -227,6 +227,59 @@ def login(payload: LoginRequest, db: Session = Depends(get_db)):
         recruiter.id, recruiter.email, settings.jwt_secret, settings.jwt_expiry_minutes
     )
     return LoginResponse(access_token=token, expires_at=expires_at)
+
+
+# ---------------------------------------------------------------------------
+# Recruiter-facing resume upload -- JWT here, service key onward to Resume Intelligence
+#
+# Architecture: admin/recruiter uploads always go through RWS, never directly to
+# Resume Intelligence. This endpoint is the JWT-protected front door; it forwards the
+# file to Resume Intelligence using RWS's own service-to-service API key (never sent
+# to or exposed in the recruiter's browser). Resume Intelligence itself never sees or
+# validates the recruiter's JWT -- it only checks the service key, exactly as it does
+# for every other caller. The same Resume Intelligence endpoint is deliberately left
+# suitable for a future trusted caller (e.g. an email-ingestion workflow) to use the
+# same way, with its own service-key credential -- no new auth surface needed there.
+# ---------------------------------------------------------------------------
+
+@app.post("/v1/resumes", status_code=status.HTTP_201_CREATED)
+async def upload_candidate_resume(
+    file: UploadFile = File(...),
+    recruiter: Recruiter = Depends(require_recruiter),
+):
+    """
+    Recruiter-facing resume upload. Requires a recruiter JWT (Authorization: Bearer);
+    a service API key does not satisfy this -- require_recruiter reads a different
+    header and secret entirely (see its docstring).
+
+    Resume Intelligence's own response is preserved as-is rather than collapsed into
+    one generic outcome: its 2xx body (candidate_id/is_new) and its 4xx status
+    (e.g. 422 for an unsupported file type) both pass through unchanged, since those
+    are meaningful to the recruiter client. A Resume Intelligence 5xx, or the service
+    being unreachable at all, is reported as 502 -- an upstream integration failure,
+    not a problem with the upload itself.
+    """
+    content = await file.read()
+    try:
+        resp = await resume_intelligence_client.upload_resume(
+            settings.resume_intelligence_url,
+            settings.resume_intelligence_api_key,
+            file.filename or "resume",
+            content,
+            file.content_type or "application/octet-stream",
+        )
+    except ResumeIntelligenceClientError as exc:
+        raise HTTPException(status_code=502, detail=f"Resume Intelligence unreachable: {exc}")
+
+    if resp.status_code >= 500:
+        raise HTTPException(status_code=502, detail="Resume Intelligence upload failed")
+    if resp.status_code >= 400:
+        try:
+            detail = resp.json().get("detail", "Resume upload rejected")
+        except ValueError:
+            detail = "Resume upload rejected"
+        raise HTTPException(status_code=resp.status_code, detail=detail)
+    return resp.json()
 
 
 @app.post("/v1/jobs", response_model=JobResponse, status_code=200)
