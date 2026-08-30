@@ -1,0 +1,5 @@
+<resume_text>
+{RESUME_TEXT}
+</resume_text>
+
+Extract the candidate's information from the resume text above.

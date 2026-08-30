@@ -1,5 +1,4 @@
 # Local configuration & secret keys
-AGENT.local.md
 .env
 .env.local
 *.env
@@ -19,11 +18,9 @@ venv/
 env/
 ENV/
 
-# Output files & generated spreadsheets (keep directory structure)
+# Output files (keep directory structure)
 output/*
 !output/.gitkeep
-*.xlsx
-*.csv
 
 # Sensitive / Binary Input Resumes (keep directory structure)
 tests/sample_resumes/*

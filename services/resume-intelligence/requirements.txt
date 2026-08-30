@@ -5,15 +5,9 @@ pytesseract>=0.3.10
 python-docx>=1.1
 Pillow>=10.0
 
-# ── Parsing & ESN agents ──────────────────────────────────────────────────────
-ollama>=0.2
-requests>=2.31
-duckduckgo-search>=6.0
-langgraph>=0.2
+# ── Parsing agent (live — deterministic post-processing only, LLM call is Gemini
+# via shared.llm below) ────────────────────────────────────────────────────────
 python-dateutil>=2.9
-
-# ── Output ────────────────────────────────────────────────────────────────────
-openpyxl>=3.1
 
 # ── Web API + database (added for HTTP service layer) ────────────────────────
 fastapi
@@ -30,4 +24,4 @@ httpx
 google-genai==2.18.0
 
 # ── Utilities ─────────────────────────────────────────────────────────────────
-python-dotenv>=1.0
+pytest
