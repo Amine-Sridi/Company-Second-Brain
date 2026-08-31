@@ -52,11 +52,91 @@ def _client() -> TestClient:
     return TestClient(api.app)
 
 
-def _upload(client: TestClient):
+def _upload(client: TestClient, *, api_key: str | None = ...):
+    """Uploads with the correct service key by default. Pass api_key=None to omit the
+    header entirely, or any other string to send a wrong one -- both exercise the auth
+    boundary tests below."""
+    headers = {}
+    if api_key is ...:
+        headers["x-api-key"] = api.settings.service_api_key
+    elif api_key is not None:
+        headers["x-api-key"] = api_key
     return client.post(
         "/v1/resumes",
         files={"file": ("resume.pdf", b"not a real pdf, just bytes for the upload", "application/pdf")},
+        headers=headers,
     )
+
+
+# ---------------------------------------------------------------------------
+# POST /v1/resumes -- service-key auth boundary
+# ---------------------------------------------------------------------------
+
+def test_upload_without_api_key_returns_401_and_never_runs_the_pipeline(monkeypatch):
+    pipeline_called = {"n": 0}
+
+    async def fake_parse_resume_text(llm, raw_text, file_meta=None, *, model=None):
+        pipeline_called["n"] += 1
+        return ParseResult(data=_VALID_CANDIDATE_JSON, success=True, attempts=1)
+
+    monkeypatch.setattr("pipeline.parsing_agent.parse_resume_text", fake_parse_resume_text)
+
+    client = _client()
+    try:
+        resp = _upload(client, api_key=None)
+    finally:
+        api.app.dependency_overrides.clear()
+
+    assert resp.status_code == 401
+    assert pipeline_called["n"] == 0
+
+
+def test_upload_with_wrong_api_key_returns_401():
+    client = _client()
+    try:
+        resp = _upload(client, api_key="not-the-real-key")
+    finally:
+        api.app.dependency_overrides.clear()
+
+    assert resp.status_code == 401
+
+
+def test_upload_with_a_recruiter_jwt_shaped_bearer_header_is_still_rejected():
+    # Resume Intelligence must never accept a recruiter JWT in place of the service
+    # key -- it doesn't understand JWTs at all, only X-Api-Key. A Bearer/Authorization
+    # header (what RWS's own recruiter auth uses) has no effect here whatsoever.
+    client = _client()
+    try:
+        resp = client.post(
+            "/v1/resumes",
+            files={"file": ("resume.pdf", b"bytes", "application/pdf")},
+            headers={"Authorization": "Bearer not-a-real-jwt.but.shaped-like-one"},
+        )
+    finally:
+        api.app.dependency_overrides.clear()
+
+    assert resp.status_code == 401
+
+
+def test_upload_with_correct_api_key_succeeds(monkeypatch):
+    async def fake_parse_resume_text(llm, raw_text, file_meta=None, *, model=None):
+        return ParseResult(data=_VALID_CANDIDATE_JSON, success=True, attempts=1)
+
+    monkeypatch.setattr("pipeline.parsing_agent.parse_resume_text", fake_parse_resume_text)
+    monkeypatch.setattr(api, "store_candidate", lambda db, candidate_json, raw_text: (str(uuid.uuid4()), True))
+
+    async def fake_send_candidate_summary(base_url, api_key, summary):
+        pass
+
+    monkeypatch.setattr(second_brain_client, "send_candidate_summary", fake_send_candidate_summary)
+
+    client = _client()
+    try:
+        resp = _upload(client)
+    finally:
+        api.app.dependency_overrides.clear()
+
+    assert resp.status_code == 201
 
 
 def test_total_parsing_failure_returns_502_and_stores_no_candidate(monkeypatch):
@@ -227,6 +307,7 @@ def test_doc_upload_rejected_with_422_not_silently_degraded():
         resp = client.post(
             "/v1/resumes",
             files={"file": ("resume.doc", b"anything", "application/msword")},
+            headers={"x-api-key": api.settings.service_api_key},
         )
     finally:
         api.app.dependency_overrides.clear()
@@ -241,6 +322,7 @@ def test_unknown_extension_rejected_with_422():
         resp = client.post(
             "/v1/resumes",
             files={"file": ("resume.exe", b"anything", "application/octet-stream")},
+            headers={"x-api-key": api.settings.service_api_key},
         )
     finally:
         api.app.dependency_overrides.clear()
@@ -294,6 +376,7 @@ def test_real_upload_happy_path_through_real_extraction_and_parsing(monkeypatch)
                 "/v1/resumes",
                 files={"file": ("DEV_LINKEDIN_Jean DUPONT.docx", f.read(),
                                 "application/vnd.openxmlformats-officedocument.wordprocessingml.document")},
+                headers={"x-api-key": api.settings.service_api_key},
             )
     finally:
         api.app.dependency_overrides.clear()
