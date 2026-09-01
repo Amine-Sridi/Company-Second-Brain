@@ -1,0 +1,21 @@
+/* Shared design tokens. Plain CSS custom properties -- no CSS-in-JS, no theme library. */
+:root {
+  --color-bg: #f7f8fa;
+  --color-surface: #ffffff;
+  --color-border: #e2e5ea;
+  --color-text: #1f2430;
+  --color-text-muted: #6b7280;
+  --color-primary: #2f5fdb;
+  --color-primary-hover: #2549ad;
+  --color-danger: #c0392b;
+  --color-danger-bg: #fdecea;
+
+  --radius: 8px;
+  --spacing-1: 4px;
+  --spacing-2: 8px;
+  --spacing-3: 16px;
+  --spacing-4: 24px;
+
+  --font-sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial,
+    sans-serif;
+}

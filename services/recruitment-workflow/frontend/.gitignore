@@ -1,0 +1,16 @@
+# Dependencies
+node_modules/
+
+# Build output (rebuilt fresh by the Docker build stage -- see Dockerfile, future pass)
+dist/
+
+# Local env overrides
+.env
+.env.local
+
+# Logs
+*.log
+npm-debug.log*
+
+# Editor/OS
+.DS_Store
