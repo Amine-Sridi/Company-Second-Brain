@@ -134,14 +134,15 @@ cross-service call in the diagram's lower half happens server-side, inside RWS.
 services/recruitment-workflow/frontend/
 ├── src/
 │   ├── api/           # One module per resource; each wraps client.js for a specific
-│   │                   # RWS resource (auth.js exists; jobs.js/applications.js/
-│   │                   # candidates.js/resumes.js are proposed, see §20)
+│   │                   # RWS resource -- auth.js/resumes.js/jobs.js/candidates.js/
+│   │                   # applications.js (selectMatch/getApplications/invite) all
+│   │                   # exist; accept()/reject() land with Phase 7, see §20/§24
 │   ├── auth/           # Plain JS (no React) JWT storage + decode -- callable from
 │   │                    # anywhere, including api/client.js, without a hook
 │   ├── context/          # AuthContext -- the one global store this app has
 │   ├── router/            # AppRouter (route table) + ProtectedRoute (auth guard)
-│   ├── hooks/               # Reusable custom hooks (useAsync, usePolling,
-│   │                          # useCandidateIdentity) -- PROPOSED, not yet created
+│   ├── hooks/               # Reusable custom hooks -- useCandidateIdentity exists;
+│   │                          # usePolling remains proposed (Phase 6)
 │   ├── components/           # Reusable, presentational pieces shared across pages
 │   │                           # (StatusBadge, ScoreBar, Sidebar, TopBar, ...)
 │   ├── pages/                  # One component per route, owns its own local state
@@ -237,13 +238,13 @@ marked **PROPOSED** are not yet implemented on the backend — see §20.
 |---|---|---|---|---|
 | Log in | `api/auth.js: login(email, password)` *(exists)* | `POST /v1/auth/login` | `access_token`, `token_type`, `expires_at` | `401` invalid credentials |
 | Upload a resume | `api/resumes.js: uploadResume(file)` *(implemented)* | `POST /v1/resumes` | `candidate_id`, `is_new` | `401` no/invalid JWT · `422` unsupported file type · `502` Resume Intelligence unreachable/failed |
-| List jobs | `api/jobs.js: getJobs()` *(not yet built — backend ready)* | `GET /v1/jobs` **IMPLEMENTED** | `job_id`, `title`, `created_at`, `match_count` (`JobSummaryResponse`, newest-first) | `401` no/invalid JWT |
-| Create a job from a JD | `api/jobs.js: createJob({ title, raw_description, threshold?, top_k?, scoring_config_version? })` *(proposed)* | `POST /v1/jobs` | `job_id`, `job_description_id`, `version`, `title`, `required_skills`, `preferred_skills`, `min_years_experience`, `titles`, `threshold`, `scoring_config_version`, `matches: MatchResultResponse[]` (matches here have `explanation: null` — see next row) | `502` JD structuring / Second Brain retrieval or lookup failed · `422` unknown `scoring_config_version` · `500` no scoring config exists |
-| View ranked candidates | `api/jobs.js: getJobMatches(jobId)` *(proposed)* | `GET /v1/jobs/{job_id}/matches` | `match_id`, `candidate_id`, `semantic_score`, `skill_score`, `experience_score`, `title_score`, `deterministic_score`, `final_score`, `hard_gate_passed`, `matched_requirements`, `missing_requirements`, `qualified`, `explanation` (populated lazily here, unlike the `POST /v1/jobs` response) | `404` job not found |
-| Resolve a candidate's display name | `api/candidates.js: getCandidateIdentity(candidateId)` *(not yet built — backend ready)* | `GET /v1/candidates/{candidate_id}/identity` **IMPLEMENTED** | `candidate_id`, `name`, `email` (`CandidateIdentityResponse` — no `phone`, no other fields) | `401` no/invalid JWT · `404` unknown candidate · `502` Resume Intelligence unavailable |
-| Select a qualified candidate | `api/applications.js: selectMatch(matchId)` *(proposed)* | `POST /v1/matches/{match_id}/select` | `ApplicationResponse` (see below) | `404` match not found · `422` not qualified · `409` already selected |
-| Track applications for a job | `api/applications.js: getApplications(jobId)` *(proposed)* | `GET /v1/jobs/{job_id}/applications` | `ApplicationResponse[]` | `404` job not found |
-| Invite to VoiceHR | `api/applications.js: invite(applicationId, language)` *(proposed)* | `POST /v1/applications/{application_id}/invite` | `ApplicationResponse` (now `status: "invited"`) | `404` not found · `409` not invitable in current status · `422` candidate contact not found · `502` contact lookup or VoiceHR call failed |
+| List jobs | `api/jobs.js: getJobs()` *(implemented)* | `GET /v1/jobs` **IMPLEMENTED** | `job_id`, `title`, `created_at`, `match_count` (`JobSummaryResponse`, newest-first) | `401` no/invalid JWT |
+| Create a job from a JD | `api/jobs.js: createJob({ title, raw_description, threshold?, top_k? })` *(implemented)* | `POST /v1/jobs` | `job_id`, `job_description_id`, `version`, `title`, `required_skills`, `preferred_skills`, `min_years_experience`, `titles`, `threshold`, `scoring_config_version`, `matches: MatchResultResponse[]` (matches here have `explanation: null` — see next row) | `502` JD structuring / Second Brain retrieval or lookup failed · `422` unknown `scoring_config_version` · `500` no scoring config exists |
+| View ranked candidates | `api/jobs.js: getJobMatches(jobId)` *(implemented)* | `GET /v1/jobs/{job_id}/matches` | `match_id`, `candidate_id`, `semantic_score`, `skill_score`, `experience_score`, `title_score`, `deterministic_score`, `final_score`, `hard_gate_passed`, `matched_requirements`, `missing_requirements`, `qualified`, `explanation` (populated lazily here, unlike the `POST /v1/jobs` response) | `404` job not found |
+| Resolve a candidate's display name | `api/candidates.js: getCandidateIdentity(candidateId)` *(implemented)* | `GET /v1/candidates/{candidate_id}/identity` **IMPLEMENTED** | `candidate_id`, `name`, `email` (`CandidateIdentityResponse` — no `phone`, no other fields) | `401` no/invalid JWT · `404` unknown candidate · `502` Resume Intelligence unavailable |
+| Select a qualified candidate | `api/applications.js: selectMatch(matchId)` *(implemented)* | `POST /v1/matches/{match_id}/select` | `ApplicationResponse` (see below) | `404` match not found · `422` not qualified · `409` already selected |
+| Track applications for a job | `api/applications.js: getApplications(jobId)` *(implemented)* | `GET /v1/jobs/{job_id}/applications` | `ApplicationResponse[]` | `404` job not found |
+| Invite to VoiceHR | `api/applications.js: invite(applicationId, language?)` *(implemented)* | `POST /v1/applications/{application_id}/invite` | `ApplicationResponse` (now `status: "invited"`) | `404` not found · `409` not invitable in current status · `422` candidate contact not found · `502` contact lookup or VoiceHR call failed |
 | Accept | `api/applications.js: accept(applicationId)` *(proposed)* | `POST /v1/applications/{application_id}/accept` | `ApplicationResponse` (now `status: "accepted"`) | `404` not found · `409` not in a decidable state |
 | Reject | `api/applications.js: reject(applicationId)` *(proposed)* | `POST /v1/applications/{application_id}/reject` | `ApplicationResponse` (now `status: "rejected"`) | `404` not found · `409` not in a decidable state |
 
@@ -272,11 +273,13 @@ VoiceHR-to-RWS only).
 - Form inputs (login form — implemented; future job-creation form, upload form).
 - Upload result (`candidate_id`/`is_new` after a resume upload).
 
-**Cache** (module-level singleton, outside React state — proposed, `hooks/
-useCandidateIdentity.js`):
-- Candidate identity, keyed by `candidate_id`, shared read access across
-  `JobDetailPage` and `ApplicationsPage` so the same candidate's name isn't re-fetched
-  on every page visit within a session.
+**Cache** (module-level singleton, outside React state — `hooks/useCandidateIdentity.js`,
+**implemented**):
+- Candidate identity, keyed by `candidate_id`, shared read access across every
+  `CandidateRow` on `JobDetailPage` and every `ApplicationRow` on `ApplicationsPage` so
+  the same candidate's name isn't re-fetched on every row re-render or page revisit
+  within a session. A failed lookup is cached too (`status: "error"`), so a broken
+  `candidate_id` degrades once per session rather than being hammered on every render.
 
 **Temporary** (local to `ApplicationsPage`, via `hooks/usePolling.js` — proposed):
 - The interview-status poll timer. Created on mount while needed, cleared on unmount or
@@ -326,12 +329,15 @@ wrapper this section originally proposed, built directly on top of the existing
   generic `detail` (no upstream exception text, no PII, in either the response or RWS's
   own logs).
 
-**Frontend caching rule**: `useCandidateIdentity` caches resolved names in an
-in-memory `Map`, scoped to the current browser session/runtime only (a plain module
-variable, not `sessionStorage`/`localStorage`). It is deliberately not persisted to any
-browser storage and not sent anywhere but the identity endpoint itself — this keeps the
-frontend from becoming a third place candidate PII is retained, even transiently across
-reloads.
+**Frontend caching rule — implemented** (`src/hooks/useCandidateIdentity.js`):
+caches resolved identities in an in-memory `Map`, scoped to the current browser
+session/runtime only (a plain module variable, not `sessionStorage`/`localStorage`). It
+is deliberately not persisted to any browser storage and not sent anywhere but the
+identity endpoint itself — this keeps the frontend from becoming a third place
+candidate PII is retained, even transiently across reloads. A lookup failure resolves
+to `{ status: "error", name: null, email: null }` rather than throwing, so it is
+cached and rendered like any other outcome — never allowed to break the row, let alone
+the page (live-verified: see §20).
 
 ---
 
@@ -351,19 +357,32 @@ reloads.
 - **Navigation behavior**: if already authenticated (token present), renders
   `<Navigate to="/jobs" replace />` instead of the form.
 
-### JobsListPage — **placeholder only**
+### JobsListPage — **implemented**
 - **Purpose**: landing page after login; browse existing jobs, start a new one.
-- **API calls (planned)**: `GET /v1/jobs` **(implemented on RWS, not yet called from
-  this page)**, `POST /v1/jobs`.
-- **Primary components (planned)**: `JobCard` list, an inline "New Job" form (title +
-  JD textarea, threshold/top_k tucked behind a collapsed "Advanced" section with the
-  backend's own defaults — `threshold=0.6`, `top_k=20` — pre-filled).
-- **State (planned)**: `jobs`, `loading`, `error`, new-job form fields, `creating`.
-- **Actions (planned)**: create job → on success, navigate to `/jobs/{job_id}` to view
-  its ranked matches immediately (the `POST /v1/jobs` response already includes them).
+- **API calls**: `GET /v1/jobs` via `api/jobs.js: getJobs()` (fetched fresh on every
+  mount — a hard reload or a return visit always reflects current backend state, never
+  stale local data); `POST /v1/jobs` via `api/jobs.js: createJob()`.
+- **Primary components**: job list rendered as clickable cards (title + `match_count` +
+  formatted `created_at`), plus an inline "New Job" form (title input + JD textarea,
+  threshold/top_k tucked behind a collapsed "Advanced options" toggle, pre-filled with
+  the backend's own defaults — `threshold=0.6`, `top_k=20`). No separate `JobCard`
+  component file — the card markup is a `<button>` inline in `JobsListPage.jsx`, not
+  reused elsewhere yet.
+- **State**: `jobs`, `loading`, `error` (list); `showForm`, `title`, `rawDescription`,
+  `showAdvanced`, `threshold`, `topK`, `creating`, `createError` (form) — all local
+  `useState`.
+- **Actions**: create job → on success, `navigate("/jobs/{job_id}")` to view its ranked
+  matches immediately.
 - **Loading/empty/error**: "Loading jobs…" / "No jobs yet — create one to get
-  started." / error banner with backend `detail`.
+  started." / error banner with the backend's own `detail`.
 - **Navigation behavior**: clicking a job card → `/jobs/:jobId`.
+- **Known live behavior**: `POST /v1/jobs` runs the full JD-structuring (Gemini) +
+  Second Brain retrieval + scoring pipeline server-side before responding, so job
+  creation can take several seconds and — same as resume upload (§20) — can surface a
+  real transient `502` if Gemini's free tier is under load at that moment. The submit
+  button's label reflects this ("Creating job… (this runs matching, may take a
+  moment)"); the error banner shows the backend's real `detail` verbatim so a recruiter
+  knows to retry, not a generic frontend failure message.
 
 ### ResumeUploadPage — **implemented**
 - **Purpose**: add a candidate's resume to the pool (independent of any specific job).
@@ -392,42 +411,98 @@ reloads.
 - **Navigation behavior**: none forced — a standalone action; deliberately no link to a
   candidate-detail page (none exists yet).
 
-### JobDetailPage (`/jobs/:jobId`) — **placeholder only**
+### JobDetailPage (`/jobs/:jobId`) — **implemented**
 - **Purpose**: the ranked-candidates view — the core recruiter screen.
-- **API calls (planned)**: `GET /v1/jobs/{job_id}/matches`; `GET
-  /v1/candidates/{id}/identity` per visible row (via `useCandidateIdentity`); `POST
-  /v1/matches/{match_id}/select` on Select.
-- **Primary components (planned)**: `JobHeader` (title/requirements/threshold — held in
-  page state from navigation, or re-derived once a job-detail source exists), `Candidat
-  eTable` → `CandidateRow` (resolved name, `ScoreBar`, qualified badge,
-  `RequirementChips` for matched/missing, expandable `ExplanationPanel`, `SelectButton`).
-- **State (planned)**: `matches`, `loading`, `error`, `selectingMatchId` (per-row
-  in-flight indicator).
-- **Actions (planned)**: expand a row for score detail; Select (disabled once
-  `!qualified` or already selected) → on success, navigate to
-  `/jobs/:jobId/applications`.
+- **API calls**: `GET /v1/jobs/{job_id}/matches` via `api/jobs.js: getJobMatches()`
+  (always re-fetched on mount, keyed off the `:jobId` route param — never trusts
+  navigation state, so a hard browser refresh on this URL works correctly from backend
+  state alone, per this task's explicit requirement); `GET /v1/jobs` via `getJobs()` as
+  a **best-effort** source for the header's title/`created_at`/`match_count` (no
+  dedicated `GET /v1/jobs/{job_id}` exists on RWS — see §20 — so the job list is
+  searched client-side for the matching `job_id`; if this call fails, the page still
+  renders the matches table with a generic "Job Detail" heading rather than failing the
+  whole page over a decoration); `GET /v1/candidates/{id}/identity` per visible row via
+  the `useCandidateIdentity` hook; `POST /v1/matches/{match_id}/select` via
+  `api/applications.js: selectMatch()` on Select.
+- **Primary components**: a candidate table with one `CandidateRow` per match
+  (resolved/fallback name, `ScoreBar`, qualified/not-qualified badge, Select button) and
+  an expandable detail row (score breakdown, `hard_gate_passed`, matched/missing
+  requirement chips, AI explanation). `CandidateRow`/`ScoreBar`/`ScoreDetail`/
+  `RequirementChips` are defined as page-local functions inside `JobDetailPage.jsx`
+  (not `components/`) — `ApplicationsPage` turned out to need its own distinct
+  row shape (status/interview-status/invite, not scores), so nothing has needed these
+  yet; promote them only once a second page genuinely needs the same pieces.
+- **State**: `job` (best-effort header, `null` until resolved), `matches`, `loading`,
+  `error` at the page level; per-row `expanded`, `selectStatus`
+  (`idle|selecting|selected|error`), `selectError` inside each `CandidateRow`.
+- **Actions**: click a row to expand/collapse its score detail; Select (disabled while
+  `!qualified` or once already `selected`) → on success **or** on a `409` conflict
+  (already selected — treated as the same real end state, not an error), the row shows
+  "Selected ✓" inline. **Does not auto-navigate to `/jobs/:jobId/applications`** on
+  select — the recruiter stays on this page and sees the confirmation in place;
+  `ApplicationsPage` is reachable via the header's "View Applications" link instead
+  (added alongside `ApplicationsPage` itself — see below).
 - **Loading/empty/error**: "Loading candidates…" / "No candidates matched this job." /
-  error banner (e.g. `404` job not found).
-- **Navigation behavior**: Select → `/jobs/:jobId/applications`.
+  error banner showing the backend's own `detail` (e.g. `404` job not found). A
+  per-row candidate-identity failure never blocks the table — see `useCandidateIdentity`
+  below; the row falls back to a short `candidate_id` prefix with an inline "(name
+  unavailable)" note instead.
+- **Navigation behavior**: none forced from Select (see above); a recruiter navigates
+  back to `/jobs` via the sidebar, or forward to `/jobs/:jobId/applications` via a new
+  "View Applications" link in the header (added this pass, alongside
+  `ApplicationsPage` itself — see below).
+- **Known live behavior**: `explanation` on each match is generated lazily by RWS on
+  first read of this endpoint (at most once per match, then cached server-side per
+  `match_explanations` — see `main.py: get_job_matches`); on a cold, never-read job this
+  can mean several sequential Gemini calls before the response returns, and — same
+  external condition documented throughout this project — a Gemini free-tier
+  slow/`503` period can make a first cold read of a several-match job take a long time
+  or return some rows with `explanation: null` where generation failed. This is a
+  pre-existing backend/Gemini characteristic, not something introduced or fixable by
+  this frontend task; the frontend correctly renders whatever the backend returns,
+  including a `null` explanation (the "AI explanation" block simply doesn't render for
+  that row).
 
-### ApplicationsPage (`/jobs/:jobId/applications`) — **placeholder only**
-- **Purpose**: track selected candidates through invite → interview → decision.
-- **API calls (planned)**: `GET /v1/jobs/{job_id}/applications` (initial load + polled);
-  `GET /v1/candidates/{id}/identity` per row; `POST
-  /v1/applications/{id}/invite`; `POST .../accept`; `POST .../reject`.
-- **Primary components (planned)**: `ApplicationTable` → `ApplicationRow` (resolved
-  name, `StatusBadge`, Invite/Resend-Invite button, `AssessmentPanel` once
-  `interview_assessment` is non-null, Accept/Reject buttons).
-- **State (planned)**: `applications`, `loading`, `error`, per-row action-in-flight
-  flags.
-- **Actions (planned)**: Invite (label depends on `status`: "Invite" when `selected`,
-  "Resend Invite" when `invited`); Accept/Reject (available once status is `selected`,
-  `invited`, or `interviewed`, per the backend's own transition rule — the frontend
-  does not restrict this further than the backend already does).
+### ApplicationsPage (`/jobs/:jobId/applications`) — **implemented (partial — see §24)**
+- **Purpose**: track selected candidates through invitation. Polling, VoiceHR
+  assessment rendering, and Accept/Reject are explicitly out of scope for this pass
+  (Phase 6/7 — see §24); this page currently shows a static snapshot, refreshed only on
+  navigation/reload.
+- **API calls**: `GET /v1/jobs/{job_id}/applications` via
+  `api/applications.js: getApplications()` (always re-fetched on mount, keyed off the
+  `:jobId` route param — same "never trust navigation state" pattern as
+  `JobDetailPage`, so a hard refresh on this URL reflects real backend state); `GET
+  /v1/jobs` via `getJobs()` as a **best-effort** header source (same pattern as
+  `JobDetailPage` — no dedicated `GET /v1/jobs/{id}` exists on RWS); `GET
+  /v1/candidates/{id}/identity` per row via the existing `useCandidateIdentity` hook;
+  `POST /v1/applications/{id}/invite` via `api/applications.js: invite()` on
+  Invite/Resend Invite.
+- **Primary components**: a table with one `ApplicationRow` per application
+  (resolved/fallback name, a status badge, an interview-status cell showing `—` when
+  `interview_status` is `null`, and an Invite/Resend-Invite button). `ApplicationRow`
+  is a page-local function inside `ApplicationsPage.jsx` (not `components/`), same
+  reasoning as `JobDetailPage`'s `CandidateRow` — promote only once genuinely shared.
+  No `AssessmentPanel` and no Accept/Reject buttons this pass (Phase 6/7).
+- **State**: `job` (best-effort header), `applications`, `loading`, `error` at the page
+  level; per-row `inviting`, `inviteError` inside each `ApplicationRow`.
+- **Actions**: Invite/Resend Invite — shown **only** when `status` is `"selected"` or
+  `"invited"` (`INVITABLE_STATUSES`, mirroring `main.py: invite_application`'s own
+  gate; a UX hint, not a substitute for RWS's real `409` check — §22), labeled "Invite"
+  for `selected` and "Resend Invite" for `invited`, disabled while the request is in
+  flight. On success, the row is updated in place from the real returned
+  `ApplicationResponse` (no local status guessing); on failure, an inline error banner
+  shows the backend's own `detail` (`409`/`422`/`502` all rendered verbatim via
+  `ApiError.message`, per §14 — no special-cased wording for any one status).
 - **Loading/empty/error**: "Loading applications…" / "No applications yet — select a
-  candidate from the ranking table." / error banner.
-- **Navigation behavior**: none forced; recruiter navigates back to `/jobs/:jobId` or
-  `/jobs` via the sidebar.
+  candidate from the ranking table." / error banner with the backend's own `detail`. A
+  per-row candidate-identity failure never blocks the table (same
+  `useCandidateIdentity` fallback as `JobDetailPage`: a short `candidate_id` prefix
+  with an inline "(name unavailable)" note).
+- **Navigation behavior**: reachable from `JobDetailPage` via a new "View Applications"
+  link in its header (`JobDetailPage.jsx`, this pass — the only route to this page,
+  since it's job-scoped and the sidebar's nav is global); no navigation forced from
+  this page itself — a recruiter goes back to `/jobs/:jobId` or `/jobs` via the
+  sidebar.
 
 ---
 
@@ -692,13 +767,12 @@ future phase.
 
 - [x] **Phase 1 — React/Vite foundation + auth**
 - [x] **Phase 2 — Resume upload**
-- [ ] **Phase 3 — Jobs list + job creation** *(both backend prerequisites — `GET
-  /v1/jobs` and `GET /v1/candidates/{id}/identity` — are now implemented and
-  live-verified on RWS; see §20 and §24. No frontend work has landed yet.)*
-- [ ] **Phase 4 — Candidate ranking / identity / selection** *(no longer backend-blocked
-  — `GET /v1/candidates/{candidate_id}/identity` is implemented; see §24)*
-- [ ] **Phase 5 — Applications + invitation**
-- [ ] **Phase 6 — Polling + VoiceHR assessment display**
+- [x] **Phase 3 — Jobs list + job creation**
+- [x] **Phase 4 — Candidate ranking / identity / selection**
+- [x] **Phase 5 — Applications + invitation** *(list + invite/resend-invite only, by
+  explicit scope — polling and assessment display are Phase 6, accept/reject is Phase
+  7)*
+- [ ] **Phase 6 — Polling + VoiceHR assessment display** *(next — see §24)*
 - [ ] **Phase 7 — Accept/reject**
 - [ ] **Phase 8 — Visual polish / responsive states**
 - [ ] **Phase 9 — Docker production build + FastAPI serving**
@@ -724,33 +798,146 @@ already captured here — extend it.
 - `src/pages/Layout.jsx` + `.module.css`, `src/components/Sidebar.jsx` + `.module.css`,
   `src/components/TopBar.jsx` + `.module.css`.
 - `src/pages/LoginPage.jsx` + `.module.css` — fully functional, not a placeholder.
-- `src/pages/ResumeUploadPage.jsx` + `.module.css` — **fully functional as of this
-  pass** (see below): click-or-drop file selection, upload via `api/resumes.js`,
-  loading/success/error states, "Upload another resume" reset.
-- `src/api/resumes.js` (`uploadResume(file)`) — new, this pass.
-- `src/api/client.js`'s `request()` — extended this pass to accept a `FormData` body
-  (used by `uploadResume`) alongside the existing JSON-body path; no `Content-Type` is
-  set when the body is `FormData`, so the browser supplies the correct multipart
-  boundary itself. The JSON path (used by `login()`) is unchanged.
-- `src/pages/JobsListPage.jsx`, `JobDetailPage.jsx`, `ApplicationsPage.jsx` —
-  **placeholder content only** (a heading + "coming in a future pass"), routes wired
-  correctly including `:jobId` param extraction.
-- `src/styles/variables.css`, `src/styles/global.css`.
-- **Not yet created**: `src/api/jobs.js`, `applications.js`, `candidates.js`;
-  `src/hooks/` directory (does not exist yet — no `useAsync`, `usePolling`, or
-  `useCandidateIdentity` implemented); any component beyond `Sidebar`/`TopBar`
-  (`StatusBadge`, `ScoreBar`, `RequirementChips`, etc. do not exist yet).
+- `src/pages/ResumeUploadPage.jsx` + `.module.css` — fully functional: click-or-drop
+  file selection, upload via `api/resumes.js`, loading/success/error states, "Upload
+  another resume" reset.
+- `src/api/resumes.js` (`uploadResume(file)`).
+- `src/api/client.js`'s `request()` — accepts a `FormData` body (used by
+  `uploadResume`) alongside the existing JSON-body path; no `Content-Type` is set when
+  the body is `FormData`, so the browser supplies the correct multipart boundary
+  itself. The JSON path (used by `login()`) is unchanged.
+- `src/pages/JobsListPage.jsx` + `.module.css` — fully functional: fetches and renders
+  the real jobs list, and a "New Job" creation form.
+- `src/pages/JobDetailPage.jsx` + `.module.css` — fully functional: fetches and renders
+  real ranked matches, with per-row candidate-identity resolution, expandable
+  score/requirements/explanation detail, candidate selection, and (**new this pass**) a
+  "View Applications" header link to `/jobs/:jobId/applications`.
+- `src/pages/ApplicationsPage.jsx` + `.module.css` — **fully functional as of this
+  pass** for its current scope: fetches and renders the real applications list for a
+  job, per-row candidate-identity resolution, status + interview-status display, and
+  Invite/Resend Invite. Polling, VoiceHR assessment rendering, and Accept/Reject are
+  explicitly not built this pass (Phase 6/7 — see §24).
+- `src/api/jobs.js` (`getJobs()`, `createJob()`, `getJobMatches()`).
+- `src/api/candidates.js` (`getCandidateIdentity()`).
+- `src/api/applications.js` — `selectMatch()` (prior pass); `getApplications(jobId)`
+  and `invite(applicationId, language?)` (**new this pass**). `accept()`/`reject()`
+  remain unbuilt (Phase 7).
+- `src/hooks/useCandidateIdentity.js` — module-level in-memory cache (§8, §9) plus the
+  resolving hook itself; a lookup failure resolves to a distinct `"error"` status
+  rather than throwing, so it can never break the page it's used on. Reused as-is by
+  `ApplicationsPage` this pass — no changes needed to the hook itself.
+- `src/styles/variables.css`, `src/styles/global.css` — unchanged.
+- **Not yet created**: `src/api/applications.js`'s `accept()`/`reject()` (Phase 7);
+  `src/hooks/usePolling.js` (Phase 6); `AssessmentPanel` / any VoiceHR-assessment
+  rendering on `ApplicationsPage` (Phase 6); Accept/Reject buttons (Phase 7) — see §24.
 
 **Build verified**: `npm install` (66 packages, 0 errors) and `npm run build` both
-succeeded, both before this pass (53 modules) and after adding resume upload (55
-modules, built cleanly in ~1.6s, `dist/` produced).
+succeeded before this pass (61 modules) and after adding the Applications +
+invitation workflow (62 modules, built cleanly in ~0.9s, `dist/` produced, 0
+errors/warnings).
 
 **Live-tested — login (prior pass)**: `POST /v1/auth/login` through the Vite dev proxy
 against the real running RWS container — valid credentials returned a real JWT (`200`);
 invalid password returned the real backend `401` with `{"detail": "Invalid email or
 password"}`.
 
-**Live-tested — resume upload (this pass)**, through the exact request path
+**Live-tested — Jobs experience (prior pass)**, through the exact dev-proxy path
+(`http://localhost:5173` → real `csb-recruitment-workflow` container → real Resume
+Intelligence / Second Brain / Gemini / Postgres), issuing the same requests the app's
+own `api/*.js` modules issue:
+- `GET /v1/jobs`: unauthenticated → real `401`; authenticated → real `200` with the
+  live seeded job (`"Backend Engineer"`, `match_count: 5`); after creating a second job
+  (below), the list returned both, **newest-first**, with correct `match_count`s (`7`
+  then `5`) — confirms ordering and the aggregate count are both real, not assumed.
+- `POST /v1/jobs`: a real JD ("Senior Backend Engineer… Required skills: Python,
+  PostgreSQL, FastAPI, Docker… Preferred: Kubernetes, Redis") submitted end to end. The
+  first attempt hit a real transient Gemini `503` ("high demand") and correctly
+  surfaced as RWS's own `502` — the same honest, undoctored external condition
+  documented for resume upload; production model config was not touched. A retry of
+  the identical request succeeded: real `200` with 7 real persisted `MatchResult` rows,
+  correctly-structured requirements (`required_skills`, `preferred_skills`,
+  `min_years_experience: 5.0`, `titles`), scored and sorted by RWS itself.
+- `GET /v1/jobs/{job_id}/matches`: real `200` with 5 real `MatchResult` rows for the
+  pre-existing job, correctly sorted by `final_score` descending, `qualified: true` on
+  all 5, `matched_requirements`/`missing_requirements` populated. `explanation` came
+  back `null` on every row in this run — RWS's lazy per-match Gemini explanation calls
+  hit the same live `503` "high demand" condition (RWS's own `match_explanation_
+  generation_failed` warning logged per match, matching `main.py: get_job_matches`'s
+  documented behavior of never failing the endpoint over a missing explanation). This
+  confirms the frontend's "AI explanation" block correctly renders nothing rather than
+  breaking when `explanation` is `null` (verified by code review of the render
+  condition, since no browser is available in this environment — see the note below).
+  A second attempt against the freshly-created 7-match job (a cold job, meaning more
+  sequential lazy Gemini calls than the already-cached 5-match job) exceeded a 200s
+  client-side wait during the same live Gemini slow period and was abandoned
+  client-side; RWS's own request/health logging showed the service itself stayed
+  healthy throughout and continued serving other requests normally (`GET /v1/jobs`,
+  identity lookups) while that one request was still being processed server-side. This
+  is the same well-documented, external, honestly-reported Gemini free-tier flakiness
+  as every prior pass in this project — not a defect in the endpoint (already proven
+  correct by the successful 5-match run) or in the frontend code that calls it, and no
+  workaround was applied.
+- `GET /v1/candidates/{candidate_id}/identity`: real `200` with a real name/email
+  (`"Smoketest Candidate"` / `smoketest.rws.notify@example.com`) for a candidate_id
+  taken directly from a live match row — the exact call `useCandidateIdentity` makes.
+- `POST /v1/matches/{match_id}/select`: real `201` (`status: "selected"`) on first
+  selection of a qualified match; the identical request repeated returned a real `409`
+  ("This candidate has already been selected for this job") — confirms the frontend's
+  409-as-already-selected handling in `CandidateRow` reacts to genuine backend state,
+  not an invented case; selecting a real **unqualified** match returned a real `422`
+  ("Cannot select a candidate that did not qualify"), confirming the Select button's
+  `disabled={!match.qualified}` is backed by the real server-side rule it mirrors, not
+  a substitute for it; an unauthenticated select attempt returned a real `401`.
+- Not yet tested: the rendered UI in an actual browser (no browser available in this
+  environment, same limitation as every prior frontend pass) — verification is at the
+  network-contract level (the exact requests/response shapes the app's own code issues
+  and consumes, through the exact dev-proxy path it uses) plus a clean production
+  build and direct code review of the render paths (expand/collapse, score-bar width,
+  chip rendering, disabled-button states, the "Selected ✓"/"(name unavailable)" inline
+  states) against the real response shapes captured above.
+
+**Live-tested — Applications + invitation workflow (this pass)**, through the exact
+dev-proxy path, issuing the same requests `ApplicationsPage`/`api/applications.js`
+issue, against real applications already present from prior live-testing (one
+`"selected"` application from the Jobs-experience pass, and one pre-existing
+`"interviewed"` application — with a real `interview_assessment` — from an even
+earlier end-to-end pass):
+- `GET /v1/jobs/{job_id}/applications`: unauthenticated → real `401`; authenticated →
+  real `200` with both real applications, exactly the shape `ApplicationRow` consumes
+  (`status`, `interview_status`, `interview_assessment` present but — correctly for
+  this pass's scope — not read by any component).
+- `POST /v1/applications/{id}/invite` on the `"selected"` application: real `200`,
+  `status` became `"invited"`, `invite_attempt_number: 1`, `invited_at` populated —
+  this went all the way through RWS's real contact-lookup-then-VoiceHR-call chain, not
+  a stub. Calling it again on the now-`"invited"` application (Resend Invite) returned
+  another real `200` with `invite_attempt_number: 2` — confirms the frontend's
+  "Resend Invite" label and continued-enabled button for `status: "invited"` matches
+  real backend-allowed behavior, not an assumption.
+- `POST /v1/applications/{id}/invite` on the pre-existing `"interviewed"` application
+  returned a real `409` (`"Application is not invitable (current status:
+  interviewed)"`) — confirms `INVITABLE_STATUSES` correctly excludes `"interviewed"`
+  (the button never renders for that row) and, independently, that if it somehow were
+  called anyway, the inline error banner would render the backend's real `409` detail
+  verbatim, not a generic or invented message.
+- An invite on an unknown `application_id` returned a real `404` (`"Application not
+  found"`) — the same `ApiError`-message rendering path handles it correctly.
+- `GET /v1/candidates/{candidate_id}/identity` resolved real names for both
+  candidates referenced in the applications list above (`"Smoketest Candidate"` and
+  `"Smoketest Convergence Candidate"`) — the exact calls each `ApplicationRow` makes
+  via `useCandidateIdentity`.
+- **Correct state after refresh**: re-fetching `GET /v1/jobs/{job_id}/applications`
+  after both invite calls returned the updated real state (`status: "invited"`,
+  `invite_attempt_number: 2`) — since `ApplicationsPage` always re-fetches fresh on
+  mount (never trusts stale local state or navigation state), a hard browser refresh
+  on this URL is confirmed to reflect genuine backend truth, not a stale local copy.
+- Not yet tested: the rendered UI in an actual browser (same no-browser limitation as
+  every prior pass) — verified at the network-contract level plus a clean production
+  build and direct code review of the render paths (status-badge/interview-status
+  cells, Invite-vs-Resend-Invite label switching, disabled-while-inviting state, the
+  "View Applications" link added to `JobDetailPage`) against the real response shapes
+  captured above.
+
+**Live-tested — resume upload (prior pass)**, through the exact request path
 `ResumeUploadPage`/`api/resumes.js` use (Vite dev proxy → real RWS container → real
 Resume Intelligence → real Gemini → real Postgres):
 - Unauthenticated upload attempt → real `401` (matches `client.js`'s expected shape).
@@ -770,8 +957,8 @@ Resume Intelligence → real Gemini → real Postgres):
   drag styling, the success panel actually rendering) were verified by code review, not
   by clicking through them.
 
-**Backend prerequisites — both now implemented and live-verified on RWS** (this pass;
-no frontend code was touched):
+**Backend prerequisites — both implemented and live-verified on RWS** (prior,
+backend-only pass; no frontend code was touched then):
 - `GET /v1/jobs` — recruiter-JWT-protected, newest-first, returns
   `JobSummaryResponse[]` (`job_id`, `title`, `created_at`, `match_count`); a service API
   key does not satisfy the JWT requirement. `match_count` comes from a single grouped
@@ -785,7 +972,7 @@ no frontend code was touched):
   generic detail (no upstream exception text or PII in the response or in RWS's logs).
 
 Both verified with real requests against the live Docker Compose stack (`csb-
-recruitment-workflow` rebuilt and recreated for this pass): `GET /v1/jobs` returned the
+recruitment-workflow` rebuilt and recreated for that pass): `GET /v1/jobs` returned the
 one real seeded job (`"Backend Engineer"`, `match_count: 5`); `GET /v1/candidates/
 7e664e04-4230-47d1-918d-461b97e0d11d/identity` returned Jean Dupont's real name/email
 from the live Resume Intelligence container with no `phone` field; an unknown
@@ -870,35 +1057,42 @@ Before starting frontend work:
 
 ## 24. [NEXT]
 
-**Phase 2 — Resume upload** is done and verified (§19, §20). This pass (backend-only,
-no frontend code touched) implemented and live-verified RWS's two remaining frontend
-blockers: `GET /v1/jobs` and `GET /v1/candidates/{candidate_id}/identity` (§7, §9,
-§20). Every endpoint every planned page needs now exists on RWS.
+**Applications + invitation workflow** is now **done and verified for its scoped
+slice** (§19, §20): `ApplicationsPage` fetches and renders the real applications list
+for a job (`GET /v1/jobs/{job_id}/applications`), resolves each candidate's name via
+the existing `useCandidateIdentity` hook, shows current `status` and `interview_status`,
+and supports Invite/Resend Invite (`POST /v1/applications/{id}/invite`) gated on the
+same statuses RWS itself accepts. `JobDetailPage` gained a "View Applications" link so
+the page is reachable from a selected candidate. All of it was exercised live against
+the real running stack, including a real invite, a real resend, a real `409` on a
+non-invitable application, a real `404` on an unknown one, and confirmation that a
+fresh reload reflects true backend state — see §20 for the full results. Explicitly
+**not** built this pass, by the task's own scope: polling, VoiceHR assessment
+rendering, and Accept/Reject.
 
-**React Jobs experience: Jobs list + create job + ranked candidate display + transient
-candidate identity resolution.**
+**Polling + VoiceHR assessment display** (Phase 6 — extends `ApplicationsPage`,
+`/jobs/:jobId/applications`):
 
-- Build `src/api/jobs.js` with `getJobs()` (`GET /v1/jobs`), `createJob({ title,
-  raw_description, threshold?, top_k? })` (`POST /v1/jobs`), and `getJobMatches(jobId)`
-  (`GET /v1/jobs/{job_id}/matches`).
-- Build `src/api/candidates.js` with `getCandidateIdentity(candidateId)` (`GET
-  /v1/candidates/{candidate_id}/identity`).
-- Turn `JobsListPage` into a real browsable list — fetch `GET /v1/jobs`, render each
-  job's `title`/`created_at`/`match_count`, plus the "New Job" creation form (title + JD
-  textarea, threshold/top_k behind a collapsed "Advanced" section with the backend's own
-  defaults). On successful creation, navigate to `/jobs/:jobId`.
-- Build the real `JobDetailPage`: header (title/requirements/threshold from the `POST
-  /v1/jobs` response, or re-fetched) + ranked candidates table using `GET
-  /v1/jobs/{job_id}/matches` for the score breakdown and lazily-populated `explanation`
-  (§11) — every field listed in §11, displayed as-is, never recalculated.
-- Build `hooks/useCandidateIdentity.js` (§8, §9): resolves and caches `name`/`email` per
-  `candidate_id` in an in-memory `Map` scoped to the current session only (not
-  `sessionStorage`/`localStorage`); each `CandidateRow` uses it to show a resolved name
-  instead of a bare UUID. Do not render `email` by default in the row — keep the visible
-  surface to `name` per §9.
-- Selecting a candidate (`POST /v1/matches/{match_id}/select`) may be included if it
-  fits in the same bounded pass, but `ApplicationsPage` itself stays a placeholder —
-  that's Phase 5.
+- Build `hooks/usePolling.js` (§12): polls `GET /v1/jobs/{job_id}/applications` every
+  ~6–8s, enabled only while at least one visible application is `status: "invited"`,
+  paused on `document.hidden`, resumed on `visibilitychange`, stopped entirely once
+  nothing is pending — no manual "stop polling" control needed. Wire it into
+  `ApplicationsPage` so an interview's completion (`invited → interviewed`, arriving
+  server-side via RWS's `POST /v1/webhooks/voicehr`) becomes visible without a manual
+  reload.
+- Once an interview completes, render `interview_assessment` per §13's exact field
+  list (`AssessmentPanel`, part of `ApplicationsPage`) — render only while
+  `interview_assessment` is non-null, and branch its layout on `evaluation_status`
+  rather than assuming every score field is present (e.g. on `"failed"`, scores may be
+  null). Real test data already exists to verify against: the pre-existing
+  `"interviewed"` application exercised this pass carries a real, complete
+  `interview_assessment` (`overall_score: 93`, `cefr_level: "C1"`, `evaluation_status:
+  "completed"`, etc.) — a real fixture, not one that needs to be fabricated.
+- Do not implement Accept/Reject in this pass — that is Phase 7, a separate bounded
+  task.
+- Do not implement VoiceHR-side anything (interview conduct, candidate-facing flow) —
+  entirely out of this frontend's scope, per §1/§2.
 
-Follow §11's hard rule: the frontend renders `MatchResult` fields as-is and never
-recomputes `qualified`/`final_score`/any component score.
+Follow §11's/§13's hard rule throughout: render `ApplicationResponse`/
+`interview_assessment` fields exactly as RWS returns them — never compute, adjust, or
+second-guess an evaluation, a score, or a workflow-state transition.

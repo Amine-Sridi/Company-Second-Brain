@@ -1,0 +1,130 @@
+.page {
+  max-width: 960px;
+}
+
+.header {
+  margin-bottom: var(--spacing-4);
+}
+
+.title {
+  margin: 0;
+  font-size: 1.4rem;
+}
+
+.status {
+  color: var(--color-text-muted);
+  font-size: 0.95rem;
+}
+
+.error {
+  background: var(--color-danger-bg);
+  color: var(--color-danger);
+  padding: var(--spacing-2) var(--spacing-3);
+  border-radius: var(--radius);
+  font-size: 0.9rem;
+}
+
+.tableWrapper {
+  overflow-x: auto;
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius);
+}
+
+.table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.9rem;
+}
+
+.table th {
+  text-align: left;
+  padding: var(--spacing-2) var(--spacing-3);
+  color: var(--color-text-muted);
+  font-weight: 600;
+  font-size: 0.8rem;
+  text-transform: uppercase;
+  letter-spacing: 0.02em;
+  border-bottom: 1px solid var(--color-border);
+}
+
+.table td {
+  padding: var(--spacing-2) var(--spacing-3);
+  border-bottom: 1px solid var(--color-border);
+  vertical-align: middle;
+}
+
+.table tr:last-child td {
+  border-bottom: none;
+}
+
+.candidateName {
+  font-weight: 500;
+}
+
+.identityWarning {
+  color: var(--color-text-muted);
+  font-size: 0.8rem;
+}
+
+.statusBadge {
+  display: inline-block;
+  border-radius: 999px;
+  padding: 2px 10px;
+  font-size: 0.8rem;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.statusSelected {
+  background: #f1f2f4;
+  color: var(--color-text-muted);
+}
+
+.statusInvited {
+  background: #eaf0fd;
+  color: var(--color-primary);
+}
+
+.statusInterviewed {
+  background: #f1eafd;
+  color: #6b3fc4;
+}
+
+.statusAccepted {
+  background: #e5f7ec;
+  color: #1f7a45;
+}
+
+.statusRejected {
+  background: var(--color-danger-bg);
+  color: var(--color-danger);
+}
+
+.interviewStatus {
+  font-size: 0.85rem;
+}
+
+.interviewStatusEmpty {
+  color: var(--color-text-muted);
+}
+
+.inviteButton {
+  background: var(--color-primary);
+  color: #ffffff;
+  border: none;
+  border-radius: var(--radius);
+  padding: var(--spacing-1) var(--spacing-3);
+  font-size: 0.85rem;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.inviteButton:hover:not(:disabled) {
+  background: var(--color-primary-hover);
+}
+
+.inviteButton:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
