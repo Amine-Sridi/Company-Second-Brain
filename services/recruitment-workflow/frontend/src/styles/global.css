@@ -11,14 +11,56 @@ body,
 body {
   margin: 0;
   font-family: var(--font-sans);
+  font-size: var(--font-size-base);
+  line-height: 1.5;
   color: var(--color-text);
   background: var(--color-bg);
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+h1,
+h2,
+h3,
+h4,
+p {
+  margin: 0;
 }
 
 button {
   font-family: inherit;
+  cursor: pointer;
+}
+
+button:disabled {
+  cursor: not-allowed;
 }
 
 a {
   color: inherit;
+}
+
+input,
+textarea,
+select {
+  font-family: inherit;
+  font-size: inherit;
+  color: inherit;
+}
+
+/* A shared focus treatment so every page looks and behaves the same way for keyboard
+   navigation -- form controls get a soft focus ring (matches the primary color),
+   everything else (buttons, links, custom clickable rows/cards) gets a plain visible
+   outline. Applies only on keyboard focus (:focus-visible), not on every mouse click. */
+:focus-visible {
+  outline: 2px solid var(--color-primary);
+  outline-offset: 2px;
+}
+
+input:focus-visible,
+textarea:focus-visible,
+select:focus-visible {
+  outline: none;
+  border-color: var(--color-primary);
+  box-shadow: 0 0 0 3px var(--color-primary-bg);
 }

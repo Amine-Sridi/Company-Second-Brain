@@ -4,28 +4,29 @@
 
 .title {
   margin: 0 0 var(--spacing-1);
-  font-size: 1.4rem;
+  font-size: var(--font-size-xl);
+  font-weight: 700;
 }
 
 .subtitle {
   margin: 0 0 var(--spacing-4);
   color: var(--color-text-muted);
-  font-size: 0.95rem;
+  font-size: var(--font-size-base);
 }
 
 .dropZone {
   border: 2px dashed var(--color-border);
   border-radius: var(--radius);
   background: var(--color-surface);
-  padding: var(--spacing-4);
+  padding: var(--spacing-5) var(--spacing-4);
   text-align: center;
-  cursor: pointer;
+  transition: border-color var(--transition-fast), background-color var(--transition-fast);
 }
 
 .dropZone:hover,
 .dropZoneActive {
   border-color: var(--color-primary);
-  background: #f2f5fd;
+  background: var(--color-primary-bg);
 }
 
 .dropZoneDisabled {
@@ -36,7 +37,7 @@
 .dropZoneHint {
   margin: var(--spacing-1) 0 0;
   color: var(--color-text-muted);
-  font-size: 0.85rem;
+  font-size: var(--font-size-sm);
 }
 
 .fileInput {
@@ -53,7 +54,7 @@
   align-items: center;
   justify-content: space-between;
   gap: var(--spacing-2);
-  font-size: 0.9rem;
+  font-size: var(--font-size-base);
 }
 
 .selectedFileName {
@@ -66,9 +67,9 @@
   border: none;
   background: none;
   color: var(--color-text-muted);
-  cursor: pointer;
-  font-size: 0.85rem;
+  font-size: var(--font-size-sm);
   padding: 0;
+  transition: color var(--transition-fast);
 }
 
 .clearButton:hover {
@@ -87,11 +88,12 @@
   border: none;
   border-radius: var(--radius);
   padding: var(--spacing-2) var(--spacing-4);
-  font-size: 1rem;
-  cursor: pointer;
+  font-size: var(--font-size-md);
+  font-weight: 600;
+  transition: background-color var(--transition-fast);
 }
 
-.uploadButton:hover {
+.uploadButton:hover:not(:disabled) {
   background: var(--color-primary-hover);
 }
 
@@ -106,7 +108,7 @@
   color: var(--color-danger);
   padding: var(--spacing-2) var(--spacing-3);
   border-radius: var(--radius);
-  font-size: 0.9rem;
+  font-size: var(--font-size-base);
 }
 
 .success {
@@ -114,19 +116,19 @@
   border: 1px solid var(--color-border);
   border-radius: var(--radius);
   padding: var(--spacing-3);
-  background: #f0fbf4;
+  background: var(--color-success-bg);
 }
 
 .successTitle {
   margin: 0 0 var(--spacing-2);
   font-weight: 600;
-  color: #1f7a45;
+  color: var(--color-success);
 }
 
 .successField {
   display: flex;
   gap: var(--spacing-1);
-  font-size: 0.9rem;
+  font-size: var(--font-size-base);
   padding: 2px 0;
 }
 
@@ -146,10 +148,25 @@
   background: var(--color-surface);
   border-radius: var(--radius);
   padding: var(--spacing-2) var(--spacing-3);
-  cursor: pointer;
-  font-size: 0.9rem;
+  font-size: var(--font-size-base);
+  transition: background-color var(--transition-fast);
 }
 
 .resetButton:hover {
   background: var(--color-bg);
+}
+
+@media (max-width: 480px) {
+  .selectedFile {
+    flex-direction: column;
+    align-items: flex-start;
+  }
+
+  .actions {
+    flex-direction: column;
+  }
+
+  .uploadButton {
+    width: 100%;
+  }
 }

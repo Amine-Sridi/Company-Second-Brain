@@ -14,9 +14,12 @@ import hashlib
 import hmac
 import logging
 import uuid
+from pathlib import Path
 from typing import Annotated
 
 from fastapi import BackgroundTasks, Depends, FastAPI, File, Header, HTTPException, Request, UploadFile, status
+from fastapi.responses import FileResponse
+from fastapi.staticfiles import StaticFiles
 from pydantic import ValidationError
 from pydantic_settings import BaseSettings, SettingsConfigDict
 from sqlalchemy.exc import IntegrityError
@@ -933,3 +936,47 @@ async def voicehr_webhook(
         extra={**log_fields, "outcome": "processed", "application_id": str(application_id)},
     )
     return {"status": "processed"}
+
+
+# ---------------------------------------------------------------------------
+# React frontend -- static asset + SPA-fallback serving (production only)
+#
+# Registered last, after every /v1/* and /health route above -- FastAPI/Starlette
+# matches routes in registration order, so a catch-all path route defined earlier
+# would shadow the real API routes. As long as this block stays physically last in
+# the file, that can't happen (see FRONTEND_HANDOFF.md §17).
+#
+# frontend/dist/ only exists after `npm run build` -- produced by the Docker image's
+# Node build stage (Dockerfile) and .gitignored, never committed. It deliberately does
+# NOT exist in a plain host checkout or in the test/dev environment this project's own
+# test suite and `npm run dev` (Vite, port 5173, proxying to this service) run in. If
+# it's missing, these routes are simply never registered -- every /v1/* and /health
+# route above is completely unaffected either way, and this must never be the thing
+# that makes `import main` (or the test suite, which does exactly that) fail on a
+# machine that has never run a frontend build. This conditional guard is the one
+# deliberate addition beyond §17's original sketch, added for exactly that reason.
+# ---------------------------------------------------------------------------
+
+_FRONTEND_DIST = Path(__file__).resolve().parent / "frontend" / "dist"
+
+if _FRONTEND_DIST.is_dir():
+    app.mount(
+        "/assets", StaticFiles(directory=_FRONTEND_DIST / "assets"), name="frontend-assets"
+    )
+
+    @app.get("/", include_in_schema=False)
+    @app.get("/{full_path:path}", include_in_schema=False)
+    async def serve_react_app(full_path: str = "") -> FileResponse:
+        """
+        Every non-API path (including a client-side route like /jobs/:id on a hard
+        browser refresh) falls through to the SPA shell; BrowserRouter then takes over
+        client-side and renders the right page from the URL. full_path is accepted but
+        unused -- index.html is always the same file regardless of which route asked
+        for it.
+        """
+        return FileResponse(_FRONTEND_DIST / "index.html")
+else:
+    logger.info(
+        "frontend_dist_not_found",
+        extra={"path": str(_FRONTEND_DIST)},
+    )

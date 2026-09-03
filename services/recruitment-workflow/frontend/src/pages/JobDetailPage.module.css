@@ -7,18 +7,20 @@
   align-items: flex-start;
   justify-content: space-between;
   gap: var(--spacing-3);
+  flex-wrap: wrap;
   margin-bottom: var(--spacing-4);
 }
 
 .title {
   margin: 0 0 var(--spacing-1);
-  font-size: 1.4rem;
+  font-size: var(--font-size-xl);
+  font-weight: 700;
 }
 
 .subtitle {
   margin: 0;
   color: var(--color-text-muted);
-  font-size: 0.9rem;
+  font-size: var(--font-size-base);
 }
 
 .applicationsLink {
@@ -28,9 +30,11 @@
   background: var(--color-surface);
   border-radius: var(--radius);
   padding: var(--spacing-2) var(--spacing-3);
-  font-size: 0.9rem;
+  font-size: var(--font-size-base);
+  font-weight: 500;
   text-decoration: none;
   white-space: nowrap;
+  transition: border-color var(--transition-fast), color var(--transition-fast);
 }
 
 .applicationsLink:hover {
@@ -40,7 +44,7 @@
 
 .status {
   color: var(--color-text-muted);
-  font-size: 0.95rem;
+  font-size: var(--font-size-base);
 }
 
 .error {
@@ -48,7 +52,7 @@
   color: var(--color-danger);
   padding: var(--spacing-2) var(--spacing-3);
   border-radius: var(--radius);
-  font-size: 0.9rem;
+  font-size: var(--font-size-base);
 }
 
 .tableWrapper {
@@ -56,12 +60,14 @@
   background: var(--color-surface);
   border: 1px solid var(--color-border);
   border-radius: var(--radius);
+  box-shadow: var(--shadow-sm);
 }
 
 .table {
   width: 100%;
+  min-width: 620px;
   border-collapse: collapse;
-  font-size: 0.9rem;
+  font-size: var(--font-size-base);
 }
 
 .table th {
@@ -69,7 +75,7 @@
   padding: var(--spacing-2) var(--spacing-3);
   color: var(--color-text-muted);
   font-weight: 600;
-  font-size: 0.8rem;
+  font-size: var(--font-size-xs);
   text-transform: uppercase;
   letter-spacing: 0.02em;
   border-bottom: 1px solid var(--color-border);
@@ -81,12 +87,17 @@
   vertical-align: middle;
 }
 
+.table tr:last-child td {
+  border-bottom: none;
+}
+
 .row {
   cursor: pointer;
+  transition: background-color var(--transition-fast);
 }
 
 .row:hover {
-  background: #f7f9fd;
+  background: var(--color-hover-bg);
 }
 
 .candidateName {
@@ -95,27 +106,29 @@
 
 .identityWarning {
   color: var(--color-text-muted);
-  font-size: 0.8rem;
+  font-size: var(--font-size-xs);
 }
 
 .badgeQualified {
   display: inline-block;
-  background: #e5f7ec;
-  color: #1f7a45;
-  border-radius: 999px;
+  background: var(--color-success-bg);
+  color: var(--color-success);
+  border-radius: var(--radius-pill);
   padding: 2px 10px;
-  font-size: 0.8rem;
+  font-size: var(--font-size-xs);
   font-weight: 600;
+  white-space: nowrap;
 }
 
 .badgeNotQualified {
   display: inline-block;
-  background: #f1f2f4;
+  background: var(--color-neutral-bg);
   color: var(--color-text-muted);
-  border-radius: 999px;
+  border-radius: var(--radius-pill);
   padding: 2px 10px;
-  font-size: 0.8rem;
+  font-size: var(--font-size-xs);
   font-weight: 600;
+  white-space: nowrap;
 }
 
 .selectButton {
@@ -124,9 +137,10 @@
   border: none;
   border-radius: var(--radius);
   padding: var(--spacing-1) var(--spacing-3);
-  font-size: 0.85rem;
-  cursor: pointer;
+  font-size: var(--font-size-sm);
+  font-weight: 600;
   white-space: nowrap;
+  transition: background-color var(--transition-fast);
 }
 
 .selectButton:hover:not(:disabled) {
@@ -139,8 +153,8 @@
 }
 
 .selectedLabel {
-  color: #1f7a45;
-  font-size: 0.85rem;
+  color: var(--color-success);
+  font-size: var(--font-size-sm);
   font-weight: 600;
   white-space: nowrap;
 }
@@ -156,7 +170,7 @@
   height: 8px;
   background: var(--color-bg);
   border: 1px solid var(--color-border);
-  border-radius: 999px;
+  border-radius: var(--radius-pill);
   overflow: hidden;
 }
 
@@ -166,7 +180,7 @@
 }
 
 .scoreBarLabel {
-  font-size: 0.85rem;
+  font-size: var(--font-size-sm);
   font-weight: 600;
   min-width: 34px;
 }
@@ -190,7 +204,7 @@
 .scoreDetailRow {
   display: flex;
   justify-content: space-between;
-  font-size: 0.85rem;
+  font-size: var(--font-size-sm);
   padding: 2px 0;
 }
 
@@ -205,7 +219,7 @@
 }
 
 .chipGroupLabel {
-  font-size: 0.75rem;
+  font-size: var(--font-size-xs);
   text-transform: uppercase;
   letter-spacing: 0.02em;
   color: var(--color-text-muted);
@@ -219,19 +233,19 @@
 }
 
 .chipMatched {
-  background: #e5f7ec;
-  color: #1f7a45;
-  border-radius: 999px;
+  background: var(--color-success-bg);
+  color: var(--color-success);
+  border-radius: var(--radius-pill);
   padding: 2px 10px;
-  font-size: 0.8rem;
+  font-size: var(--font-size-xs);
 }
 
 .chipMissing {
   background: var(--color-danger-bg);
   color: var(--color-danger);
-  border-radius: 999px;
+  border-radius: var(--radius-pill);
   padding: 2px 10px;
-  font-size: 0.8rem;
+  font-size: var(--font-size-xs);
 }
 
 .explanation {
@@ -240,7 +254,7 @@
 }
 
 .explanationLabel {
-  font-size: 0.75rem;
+  font-size: var(--font-size-xs);
   text-transform: uppercase;
   letter-spacing: 0.02em;
   color: var(--color-text-muted);
@@ -249,6 +263,13 @@
 
 .explanation p {
   margin: var(--spacing-1) 0 0;
-  font-size: 0.9rem;
+  font-size: var(--font-size-base);
   line-height: 1.5;
+}
+
+@media (max-width: 480px) {
+  .applicationsLink {
+    width: 100%;
+    text-align: center;
+  }
 }

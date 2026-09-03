@@ -43,3 +43,25 @@ export function invite(applicationId, language = "en") {
     body: { language },
   });
 }
+
+/**
+ * Terminal recruiter decisions. RWS itself enforces which states are decidable
+ * (db.py: _DECIDABLE_STATUSES -- "selected", "invited", or "interviewed"; anything
+ * else, including an already-decided application, is a 409). Showing these buttons
+ * only for those statuses in the UI is a mirror of that rule, not a substitute for it
+ * (§22: don't duplicate backend business rules) -- the 409 is the real backstop.
+ *
+ * @param {string} applicationId
+ * @returns {Promise<object>} ApplicationResponse (status: "accepted")
+ */
+export function accept(applicationId) {
+  return request(`/v1/applications/${applicationId}/accept`, { method: "POST" });
+}
+
+/**
+ * @param {string} applicationId
+ * @returns {Promise<object>} ApplicationResponse (status: "rejected")
+ */
+export function reject(applicationId) {
+  return request(`/v1/applications/${applicationId}/reject`, { method: "POST" });
+}

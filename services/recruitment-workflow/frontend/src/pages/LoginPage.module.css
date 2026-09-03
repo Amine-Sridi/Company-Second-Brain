@@ -4,36 +4,43 @@
   align-items: center;
   justify-content: center;
   background: var(--color-bg);
+  padding: var(--spacing-3);
 }
 
 .card {
   background: var(--color-surface);
   border: 1px solid var(--color-border);
   border-radius: var(--radius);
-  padding: var(--spacing-4);
-  width: 320px;
+  box-shadow: var(--shadow-md);
+  padding: var(--spacing-5);
+  width: 100%;
+  max-width: 340px;
   display: flex;
   flex-direction: column;
   gap: var(--spacing-3);
 }
 
 .title {
-  margin: 0 0 var(--spacing-2);
-  font-size: 1.25rem;
+  margin: 0 0 var(--spacing-1);
+  font-size: var(--font-size-xl);
+  font-weight: 700;
 }
 
 .field {
   display: flex;
   flex-direction: column;
   gap: var(--spacing-1);
-  font-size: 0.9rem;
+  font-size: var(--font-size-sm);
+  font-weight: 500;
+  color: var(--color-text-muted);
 }
 
 .field input {
   padding: var(--spacing-2);
   border: 1px solid var(--color-border);
   border-radius: var(--radius);
-  font-size: 1rem;
+  font-size: var(--font-size-md);
+  color: var(--color-text);
 }
 
 .error {
@@ -41,7 +48,7 @@
   color: var(--color-danger);
   padding: var(--spacing-2);
   border-radius: var(--radius);
-  font-size: 0.9rem;
+  font-size: var(--font-size-sm);
 }
 
 .submitButton {
@@ -50,11 +57,12 @@
   border: none;
   border-radius: var(--radius);
   padding: var(--spacing-2);
-  font-size: 1rem;
-  cursor: pointer;
+  font-size: var(--font-size-md);
+  font-weight: 600;
+  transition: background-color var(--transition-fast);
 }
 
-.submitButton:hover {
+.submitButton:hover:not(:disabled) {
   background: var(--color-primary-hover);
 }
 

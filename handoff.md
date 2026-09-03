@@ -1868,13 +1868,96 @@ implementation — see the bootstrap instructions.
     experience: Jobs list + create job + ranked candidate display + transient candidate identity
     resolution." No frontend UI work was started in this task, per its own explicit scope.
 
+- **RWS deployment/runtime change: production static-frontend serving + a real two-stage Docker
+  build** (`services/recruitment-workflow/main.py`, `services/recruitment-workflow/Dockerfile`, a
+  new root-level `.dockerignore`) — DONE, verified live. This is the culmination of several
+  frontend-only sessions (React app build-out, tracked entirely in `FRONTEND_HANDOFF.md`, not
+  re-narrated here) landing on RWS's own deployment shape for the first time.
+  - **`main.py`**: a new, guarded block appended as the literal last thing in the file — after
+    every existing `@app.get`/`@app.post` route, including `/v1/webhooks/voicehr` — mounts
+    `/assets` against `frontend/dist/assets` and serves `frontend/dist/index.html` for every other
+    non-API path (`GET /` and a catch-all `GET /{full_path:path}`), letting `BrowserRouter` take
+    over client-side after a hard refresh on a nested route like `/jobs/:id/applications`. Ordering
+    is load-bearing here: FastAPI/Starlette matches routes in registration order, so this block
+    being physically last is what prevents it from ever shadowing a real `/v1/*` route — verified
+    live, not just asserted (see below).
+  - **The one deliberate addition beyond a naive "always mount static files" version**: the whole
+    block is guarded by `Path(...).is_dir()` on `frontend/dist/`. That directory only exists after
+    a real `npm run build` (produced by the Docker image's new Node build stage, and
+    `.gitignore`d — never committed); mounting FastAPI's `StaticFiles` against a directory that
+    doesn't exist raises `RuntimeError` at import time, which would otherwise break `import main` —
+    and therefore RWS's own host-side `pytest tests/` suite (which does exactly that on every run)
+    and the `npm run dev` Vite-proxy dev workflow — on any machine that has never run a frontend
+    build (a fresh clone, CI, or simply a backend-only dev session). With the guard: dist present →
+    the three SPA routes register; dist absent → they're silently never registered, and every
+    `/v1/*`/`/health` route is completely unaffected either way. This was actually verified both
+    ways this session (see below), not just reasoned about.
+  - **`Dockerfile`**: rewritten as a two-stage build. Stage 1 (`node:20-slim`) runs `npm ci` +
+    `npm run build` to produce `frontend/dist/`; stage 2 (`python:3.12-slim`, the actual runtime
+    image) never contains Node. One extra step beyond the obvious sketch was needed: the existing
+    `COPY services/recruitment-workflow/ /app/` line copies the *entire* service directory as one
+    tree, which includes the frontend's unbuilt source (`frontend/src/`, `node_modules/` if
+    present locally, etc.) — nothing about a directory-level `COPY` excludes a subdirectory. A
+    `RUN rm -rf /app/frontend` immediately after that `COPY`, followed by `COPY --from=frontend-
+    build /frontend/dist /app/frontend/dist`, is what actually guarantees the runtime image ends up
+    with only the built `dist/` output and never frontend source or `node_modules` — "the build
+    happens to work" is not the same guarantee as "only dist/ is in the image," and this project's
+    task explicitly asked for the latter.
+  - **New root-level `.dockerignore`** (did not exist anywhere in the repo before): excludes
+    `**/frontend/node_modules/`, `**/frontend/dist/`, and standard Python/VCS hygiene
+    (`__pycache__/`, `.venv/`, `.pytest_cache/`, `.git/`, mirroring the existing root `.gitignore`)
+    from the Docker build *context*. Because `recruitment-workflow`, `resume-intelligence`, and
+    `second-brain` all share the repo root as their build context (`context: ..` in
+    `infra/docker-compose.yml`), this one file benefits all three; VoiceHR builds from its own
+    subdirectory context (`services/voicehr`) and is unaffected by it, confirmed by inspecting its
+    own compose entry before assuming otherwise.
+  - **Regression verification, both directions, host-side**: `python -c "import main"` and the
+    full `pytest tests/` suite (27 tests) were run twice — once with a real local `frontend/dist/`
+    present (21 routes registered) and once with it renamed away to simulate a fresh checkout (18
+    routes, SPA block absent, a `frontend_dist_not_found` log line instead) — **27/27 passed both
+    times**, confirming the guard genuinely protects the existing test/dev workflow rather than
+    merely being asserted to.
+  - **Live Docker verification, real stack**: `docker compose -f infra/docker-compose.yml build
+    recruitment-workflow` — a real multi-stage build (Node stage ran `npm ci`/`npm run build`
+    inside the image build itself, 63 modules, identical output to the host build) — followed by
+    `up -d --no-deps --force-recreate recruitment-workflow`, healthy within 10s. Also rebuilt
+    `resume-intelligence` and `second-brain` to confirm the new root `.dockerignore` doesn't break
+    their builds (their contexts are also the repo root) — both built successfully.
+  - **Inside the real running container**: `which node`/`which npm` both exit `1` (not found) —
+    checked directly inside the container, not inferred from the Dockerfile's shape.
+    `frontend/dist/` contains exactly `index.html` + `assets/` with the two hashed JS/CSS files the
+    build produced — no `src/`, no `node_modules/`, no `package.json`.
+  - **Live HTTP verification through the real production port (8003), no Vite dev proxy
+    involved**: `GET /` returns the real built `index.html` referencing the real asset filenames
+    actually present under `/assets/`; `GET /jobs`, `GET /jobs/abc-123/applications`, and `GET
+    /upload` all return real `200`s serving that same `index.html` — the specific hard-refresh
+    behavior this whole change exists to guarantee, not merely a client-side navigation that never
+    hits the server. `GET /health` returns the real health JSON (not HTML); `POST /v1/auth/login`
+    with wrong credentials returns a real `401` with the real backend detail; `GET /v1/jobs`
+    without a JWT returns a real `401` — none of the real API routes were shadowed by the new
+    catch-all. Then, for real: logged in as the seeded recruiter through port 8003 directly and
+    called `GET /v1/jobs` with the resulting JWT — real `200` with the real jobs list, the same
+    recruiter flow the frontend itself performs, now proven working end to end through the actual
+    production origin. Static assets (`/assets/*.js`, `/assets/*.css`) returned real `200`s with
+    correct `Content-Type` headers.
+  - **Not done this pass, deliberately**: no change to `vite.config.js` or the dev-proxy workflow
+    (Phase 9 adds a separate production path alongside it, not a replacement); no new frontend
+    feature, page, or API call (packaging only, per the task's own explicit scope); no browser was
+    available to click through the served app, so that remains the one honestly-reported gap —
+    every request a browser would make was instead issued directly and its response verified.
+  - **Documentation**: `FRONTEND_HANDOFF.md` §17 (production serving plan, now marked implemented
+    with the real final code and both deliberate additions explained), §16 (dev-proxy note
+    clarifying Phase 9 didn't touch it), §19 (Phase 9 checked), §20 (new implemented-file entries
+    plus a full live-verification block), and §24 (`[NEXT]` rewritten to: "Final frontend E2E +
+    demo-readiness audit").
+
 ## Exact Next Steps
 
 Nothing is currently marked `[NEXT]` on this file. `FRONTEND_HANDOFF.md` §24 now names the next
-frontend task ("React Jobs experience..."), now fully unblocked on the backend side — see that
-file for the bounded task description; it is out of this file's scope to schedule frontend-only
-work. The items below predate this session's work and remain genuine open design questions, not
-gaps surfaced by this session.
+frontend task ("Final frontend E2E + demo-readiness audit"), the last remaining frontend phase —
+see that file for the bounded task description; it is out of this file's scope to schedule
+frontend-only work. The items below predate this session's work and remain genuine open design
+questions, not gaps surfaced by this session.
 
 1. Nothing currently reads `second_brain.candidate_feedback` — it's a write-back sink only.
    Whether/how it should ever influence retrieval or scoring (e.g. down-weighting a candidate

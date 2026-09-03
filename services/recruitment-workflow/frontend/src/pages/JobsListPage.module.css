@@ -7,18 +7,20 @@
   align-items: flex-start;
   justify-content: space-between;
   gap: var(--spacing-3);
+  flex-wrap: wrap;
   margin-bottom: var(--spacing-4);
 }
 
 .title {
   margin: 0 0 var(--spacing-1);
-  font-size: 1.4rem;
+  font-size: var(--font-size-xl);
+  font-weight: 700;
 }
 
 .subtitle {
   margin: 0;
   color: var(--color-text-muted);
-  font-size: 0.95rem;
+  font-size: var(--font-size-base);
 }
 
 .newJobButton {
@@ -28,9 +30,10 @@
   border: none;
   border-radius: var(--radius);
   padding: var(--spacing-2) var(--spacing-4);
-  font-size: 0.95rem;
-  cursor: pointer;
+  font-size: var(--font-size-base);
+  font-weight: 600;
   white-space: nowrap;
+  transition: background-color var(--transition-fast);
 }
 
 .newJobButton:hover {
@@ -41,6 +44,7 @@
   background: var(--color-surface);
   border: 1px solid var(--color-border);
   border-radius: var(--radius);
+  box-shadow: var(--shadow-sm);
   padding: var(--spacing-4);
   margin-bottom: var(--spacing-4);
   display: flex;
@@ -52,7 +56,9 @@
   display: flex;
   flex-direction: column;
   gap: var(--spacing-1);
-  font-size: 0.9rem;
+  font-size: var(--font-size-sm);
+  font-weight: 500;
+  color: var(--color-text-muted);
 }
 
 .field input,
@@ -60,8 +66,9 @@
   padding: var(--spacing-2);
   border: 1px solid var(--color-border);
   border-radius: var(--radius);
-  font-size: 0.95rem;
+  font-size: var(--font-size-base);
   font-family: inherit;
+  color: var(--color-text);
   resize: vertical;
 }
 
@@ -70,8 +77,8 @@
   border: none;
   background: none;
   color: var(--color-primary);
-  cursor: pointer;
-  font-size: 0.85rem;
+  font-size: var(--font-size-sm);
+  font-weight: 500;
   padding: 0;
 }
 
@@ -99,11 +106,12 @@
   border: none;
   border-radius: var(--radius);
   padding: var(--spacing-2) var(--spacing-4);
-  font-size: 1rem;
-  cursor: pointer;
+  font-size: var(--font-size-md);
+  font-weight: 600;
+  transition: background-color var(--transition-fast);
 }
 
-.submitButton:hover {
+.submitButton:hover:not(:disabled) {
   background: var(--color-primary-hover);
 }
 
@@ -114,7 +122,7 @@
 
 .status {
   color: var(--color-text-muted);
-  font-size: 0.95rem;
+  font-size: var(--font-size-base);
 }
 
 .error {
@@ -122,7 +130,7 @@
   color: var(--color-danger);
   padding: var(--spacing-2) var(--spacing-3);
   border-radius: var(--radius);
-  font-size: 0.9rem;
+  font-size: var(--font-size-base);
 }
 
 .jobList {
@@ -141,24 +149,40 @@
   border: 1px solid var(--color-border);
   border-radius: var(--radius);
   padding: var(--spacing-3);
-  cursor: pointer;
   display: flex;
   flex-direction: column;
   gap: var(--spacing-1);
   font-family: inherit;
+  transition: border-color var(--transition-fast), background-color var(--transition-fast),
+    box-shadow var(--transition-fast);
 }
 
 .jobCard:hover {
   border-color: var(--color-primary);
-  background: #f2f5fd;
+  background: var(--color-primary-bg);
+  box-shadow: var(--shadow-sm);
 }
 
 .jobTitle {
   font-weight: 600;
-  font-size: 1.05rem;
+  font-size: var(--font-size-lg);
 }
 
 .jobMeta {
   color: var(--color-text-muted);
-  font-size: 0.85rem;
+  font-size: var(--font-size-sm);
+}
+
+@media (max-width: 480px) {
+  .newJobButton {
+    width: 100%;
+  }
+
+  .advancedFields {
+    flex-direction: column;
+  }
+
+  .submitButton {
+    width: 100%;
+  }
 }

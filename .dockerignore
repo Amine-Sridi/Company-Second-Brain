@@ -1,0 +1,37 @@
+# Root-level .dockerignore -- applies to every service whose docker-compose build
+# context is the repo root (recruitment-workflow, resume-intelligence, second-brain;
+# see infra/docker-compose.yml). VoiceHR builds from its own subdirectory context and
+# is unaffected by this file.
+#
+# Primary reason this exists (see FRONTEND_HANDOFF.md §17): without it, every one of
+# those three builds would upload the frontend's local node_modules/ (large,
+# irrelevant to any Python image) and a stale local dist/ (rebuilt fresh by the
+# Docker image's own Node build stage -- see services/recruitment-workflow/Dockerfile)
+# as part of the build context, even though nothing ever COPYs them in that shape.
+
+# Frontend build artifacts -- rebuilt fresh inside the Docker image itself
+**/frontend/node_modules/
+**/frontend/dist/
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+venv/
+.pytest_cache/
+*.egg-info/
+
+# Env files -- passed to containers via docker-compose's env_file:, never COPYed
+.env
+.env.local
+!.env.example
+
+# VCS / editor / OS
+.git/
+.DS_Store
+
+# VoiceHR's own runtime data (its build context doesn't include the repo root, but
+# excluding it here too is harmless and keeps this file consistent with intent)
+storage/recordings/
+storage/transcripts/
+*.db

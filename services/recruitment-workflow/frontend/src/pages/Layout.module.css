@@ -18,4 +18,14 @@
   .shell {
     grid-template-columns: 1fr;
   }
+
+  .content {
+    padding: var(--spacing-3);
+  }
+}
+
+@media (max-width: 480px) {
+  .content {
+    padding: var(--spacing-2);
+  }
 }

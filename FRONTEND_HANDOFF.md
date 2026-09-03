@@ -106,7 +106,7 @@ cross-service call in the diagram's lower half happens server-side, inside RWS.
 |---|---|
 | **React** | Component structure genuinely helps here — multiple stateful, interactive pages (ranking table, tracking table, forms) — more than a hand-rolled DOM-manipulation approach would stay maintainable for. |
 | **Vite** | Fast dev server, zero-config React support via `@vitejs/plugin-react`, trivial static production build (`vite build` → `dist/`). No custom webpack config to maintain in a 2-month project. |
-| **react-router-dom (BrowserRouter)** | Clean URLs (`/jobs/:jobId`) rather than hash fragments — the conventional choice for a real React app. Requires one small, well-understood FastAPI serving change later (§17); not a reason to prefer `HashRouter`. |
+| **react-router-dom (BrowserRouter)** | Clean URLs (`/jobs/:jobId`) rather than hash fragments — the conventional choice for a real React app. Required one small, well-understood FastAPI serving change (§17, implemented in Phase 9); not a reason to prefer `HashRouter`. |
 | **native `fetch`** | Every call this app makes is either a simple JSON request or one `multipart/form-data` upload — both are native `fetch`/`FormData` capabilities. No interceptor/cancellation/transform need that would justify a client library. |
 | **CSS Modules + shared `variables.css`** | Component-scoped class names with zero extra dependency (built into Vite). Shared tokens (`variables.css`) keep color/spacing consistent without a theming library. |
 | **React Context for auth only** | Auth (token + recruiter identity) is the one piece of state genuinely needed across unrelated parts of the tree — every API call and every route guard needs it. Nothing else in this app has that shape. |
@@ -135,14 +135,14 @@ services/recruitment-workflow/frontend/
 ├── src/
 │   ├── api/           # One module per resource; each wraps client.js for a specific
 │   │                   # RWS resource -- auth.js/resumes.js/jobs.js/candidates.js/
-│   │                   # applications.js (selectMatch/getApplications/invite) all
-│   │                   # exist; accept()/reject() land with Phase 7, see §20/§24
+│   │                   # applications.js (selectMatch/getApplications/invite/
+│   │                   # accept/reject) all exist and are used
 │   ├── auth/           # Plain JS (no React) JWT storage + decode -- callable from
 │   │                    # anywhere, including api/client.js, without a hook
 │   ├── context/          # AuthContext -- the one global store this app has
 │   ├── router/            # AppRouter (route table) + ProtectedRoute (auth guard)
-│   ├── hooks/               # Reusable custom hooks -- useCandidateIdentity exists;
-│   │                          # usePolling remains proposed (Phase 6)
+│   ├── hooks/               # Reusable custom hooks -- useCandidateIdentity and
+│   │                          # usePolling both exist
 │   ├── components/           # Reusable, presentational pieces shared across pages
 │   │                           # (StatusBadge, ScoreBar, Sidebar, TopBar, ...)
 │   ├── pages/                  # One component per route, owns its own local state
@@ -245,8 +245,8 @@ marked **PROPOSED** are not yet implemented on the backend — see §20.
 | Select a qualified candidate | `api/applications.js: selectMatch(matchId)` *(implemented)* | `POST /v1/matches/{match_id}/select` | `ApplicationResponse` (see below) | `404` match not found · `422` not qualified · `409` already selected |
 | Track applications for a job | `api/applications.js: getApplications(jobId)` *(implemented)* | `GET /v1/jobs/{job_id}/applications` | `ApplicationResponse[]` | `404` job not found |
 | Invite to VoiceHR | `api/applications.js: invite(applicationId, language?)` *(implemented)* | `POST /v1/applications/{application_id}/invite` | `ApplicationResponse` (now `status: "invited"`) | `404` not found · `409` not invitable in current status · `422` candidate contact not found · `502` contact lookup or VoiceHR call failed |
-| Accept | `api/applications.js: accept(applicationId)` *(proposed)* | `POST /v1/applications/{application_id}/accept` | `ApplicationResponse` (now `status: "accepted"`) | `404` not found · `409` not in a decidable state |
-| Reject | `api/applications.js: reject(applicationId)` *(proposed)* | `POST /v1/applications/{application_id}/reject` | `ApplicationResponse` (now `status: "rejected"`) | `404` not found · `409` not in a decidable state |
+| Accept | `api/applications.js: accept(applicationId)` *(implemented)* | `POST /v1/applications/{application_id}/accept` | `ApplicationResponse` (now `status: "accepted"`) | `404` not found · `409` not in a decidable state |
+| Reject | `api/applications.js: reject(applicationId)` *(implemented)* | `POST /v1/applications/{application_id}/reject` | `ApplicationResponse` (now `status: "rejected"`) | `404` not found · `409` not in a decidable state |
 
 `ApplicationResponse` fields (from `schemas.py`, used by select/invite/accept/reject/list
 above): `application_id`, `job_id`, `match_result_id`, `candidate_id`, `status`
@@ -281,9 +281,12 @@ VoiceHR-to-RWS only).
   within a session. A failed lookup is cached too (`status: "error"`), so a broken
   `candidate_id` degrades once per session rather than being hammered on every render.
 
-**Temporary** (local to `ApplicationsPage`, via `hooks/usePolling.js` — proposed):
-- The interview-status poll timer. Created on mount while needed, cleared on unmount or
-  once no application is left in `invited` status.
+**Temporary** (local to `ApplicationsPage`, via `hooks/usePolling.js` — **implemented**):
+- The interview-status poll timer. Started only while at least one visible application
+  has `status: "invited"` (derived from the page's own `applications` state on every
+  render, not tracked separately), stopped on unmount, on tab-hidden, and automatically
+  the moment nothing is left `invited` (the hook's own effect dependency array reacts
+  to `enabled` flipping to `false` — no manual "stop" call needed from the page).
 
 **Why no global application store**: no two pages ever need simultaneous access to the
 same piece of non-auth data. Jobs, matches, and applications are each read by exactly
@@ -448,9 +451,8 @@ the page (live-verified: see §20).
   below; the row falls back to a short `candidate_id` prefix with an inline "(name
   unavailable)" note instead.
 - **Navigation behavior**: none forced from Select (see above); a recruiter navigates
-  back to `/jobs` via the sidebar, or forward to `/jobs/:jobId/applications` via a new
-  "View Applications" link in the header (added this pass, alongside
-  `ApplicationsPage` itself — see below).
+  back to `/jobs` via the sidebar, or forward to `/jobs/:jobId/applications` via the
+  "View Applications" link in the header.
 - **Known live behavior**: `explanation` on each match is generated lazily by RWS on
   first read of this endpoint (at most once per match, then cached server-side per
   `match_explanations` — see `main.py: get_job_matches`); on a cold, never-read job this
@@ -463,46 +465,84 @@ the page (live-verified: see §20).
   including a `null` explanation (the "AI explanation" block simply doesn't render for
   that row).
 
-### ApplicationsPage (`/jobs/:jobId/applications`) — **implemented (partial — see §24)**
-- **Purpose**: track selected candidates through invitation. Polling, VoiceHR
-  assessment rendering, and Accept/Reject are explicitly out of scope for this pass
-  (Phase 6/7 — see §24); this page currently shows a static snapshot, refreshed only on
-  navigation/reload.
+### ApplicationsPage (`/jobs/:jobId/applications`) — **implemented**
+- **Purpose**: track selected candidates through invitation, interview completion, and
+  the recruiter's final accept/reject decision — every transition in §12's state
+  diagram is now request-able from this page.
 - **API calls**: `GET /v1/jobs/{job_id}/applications` via
-  `api/applications.js: getApplications()` (always re-fetched on mount, keyed off the
-  `:jobId` route param — same "never trust navigation state" pattern as
-  `JobDetailPage`, so a hard refresh on this URL reflects real backend state); `GET
-  /v1/jobs` via `getJobs()` as a **best-effort** header source (same pattern as
-  `JobDetailPage` — no dedicated `GET /v1/jobs/{id}` exists on RWS); `GET
-  /v1/candidates/{id}/identity` per row via the existing `useCandidateIdentity` hook;
-  `POST /v1/applications/{id}/invite` via `api/applications.js: invite()` on
-  Invite/Resend Invite.
+  `api/applications.js: getApplications()` — called both on mount (`loadApplications`,
+  drives `loading`/`error`) and on every poll tick (`pollApplications`, silent — see
+  §12); always re-fetched fresh, keyed off the `:jobId` route param, same "never trust
+  navigation state" pattern as `JobDetailPage`, so a hard refresh on this URL reflects
+  real backend state; `GET /v1/jobs` via `getJobs()` as a **best-effort** header source
+  (same pattern as `JobDetailPage` — no dedicated `GET /v1/jobs/{id}` exists on RWS);
+  `GET /v1/candidates/{id}/identity` per row via the existing `useCandidateIdentity`
+  hook; `POST /v1/applications/{id}/invite` via `api/applications.js: invite()` on
+  Invite/Resend Invite; `POST /v1/applications/{id}/accept` /
+  `POST /v1/applications/{id}/reject` via `api/applications.js: accept()`/`reject()`
+  on Accept/Reject.
 - **Primary components**: a table with one `ApplicationRow` per application
   (resolved/fallback name, a status badge, an interview-status cell showing `—` when
-  `interview_status` is `null`, and an Invite/Resend-Invite button). `ApplicationRow`
-  is a page-local function inside `ApplicationsPage.jsx` (not `components/`), same
-  reasoning as `JobDetailPage`'s `CandidateRow` — promote only once genuinely shared.
-  No `AssessmentPanel` and no Accept/Reject buttons this pass (Phase 6/7).
+  `interview_status` is `null`, and an actions cell holding whichever of
+  Invite/Resend-Invite/Accept/Reject currently apply, or a terminal "Accepted ✓"/
+  "Rejected" label once decided), plus an expandable `AssessmentPanel` (§13) for rows
+  whose `interview_assessment` is non-null. `ApplicationRow` and `AssessmentPanel` are
+  page-local functions inside `ApplicationsPage.jsx` (not `components/`), same
+  reasoning as `JobDetailPage`'s `CandidateRow` family — promote only once genuinely
+  shared.
 - **State**: `job` (best-effort header), `applications`, `loading`, `error` at the page
-  level; per-row `inviting`, `inviteError` inside each `ApplicationRow`.
-- **Actions**: Invite/Resend Invite — shown **only** when `status` is `"selected"` or
-  `"invited"` (`INVITABLE_STATUSES`, mirroring `main.py: invite_application`'s own
-  gate; a UX hint, not a substitute for RWS's real `409` check — §22), labeled "Invite"
-  for `selected` and "Resend Invite" for `invited`, disabled while the request is in
-  flight. On success, the row is updated in place from the real returned
-  `ApplicationResponse` (no local status guessing); on failure, an inline error banner
-  shows the backend's own `detail` (`409`/`422`/`502` all rendered verbatim via
-  `ApiError.message`, per §14 — no special-cased wording for any one status).
+  level; per-row `inviting`, `inviteError`, `deciding` (`null | "accept" | "reject"`),
+  `decideError`, `expanded` inside each `ApplicationRow`. `hasInvitedApplication`
+  (whether to poll) is not separate state — it's derived straight from `applications`
+  on every render.
+- **Actions**:
+  - Invite/Resend Invite — shown **only** when `status` is `"selected"` or `"invited"`
+    (`INVITABLE_STATUSES`, mirroring `main.py: invite_application`'s own gate; a UX
+    hint, not a substitute for RWS's real `409` check — §22), labeled "Invite" for
+    `selected` and "Resend Invite" for `invited`.
+  - Accept/Reject — shown **only** when `status` is `"selected"`, `"invited"`, or
+    `"interviewed"` (`DECIDABLE_STATUSES`, mirroring `db.py: _DECIDABLE_STATUSES`; same
+    UX-hint-not-substitute relationship to RWS's real `409` — a decision can be made
+    from `"selected"` directly, before any invite, matching RWS's own documented
+    behavior that the interview is informative for the decision, not a mandatory
+    gate). Reject prompts a native `window.confirm()` ("Reject this candidate? This
+    cannot be undone.") before sending the request — the one place in this frontend a
+    confirmation was judged worth the friction (§15's "no confirmation modals unless
+    clearly beneficial"); Accept does not prompt. Once `status` becomes
+    `"accepted"`/`"rejected"`, no button reappears for that row — these are terminal in
+    the UI, backed by RWS's own terminal state (leaving `DECIDABLE_STATUSES` means a
+    repeat call gets a real `409`, independently confirmed live — see §20).
+  - Every action on a row (Invite, Accept, Reject) disables **all** of that row's
+    buttons while any one is in flight (`rowBusy = inviting || deciding !== null`) —
+    a UX safeguard against firing two conflicting mutations on the same application at
+    once; RWS's own per-endpoint checks remain the real authority regardless. On
+    success, the row is updated in place from the real returned `ApplicationResponse`
+    (no local status guessing); on failure, an inline error banner (separate for
+    invite vs. decide, so one doesn't clobber the other) shows the backend's own
+    `detail` verbatim (`409`/`422`/`404`/`502` all rendered the same way, via
+    `ApiError.message`, per §14 — no special-cased wording for any one status).
+  - Click a row whose `interview_assessment` is non-null to expand/collapse
+    `AssessmentPanel` (§13); rows without an assessment are not clickable at all (no
+    `cursor: pointer`, no `role="button"`) — nothing to expand yet.
+  - **Polling** (§12, `hooks/usePolling.js`): while any application is `"invited"`,
+    the page silently re-fetches every ~7s so an interview's completion (webhook-driven
+    `invited → interviewed` on RWS, entirely server-side) becomes visible without a
+    manual reload — no accept/reject or invite action triggers this directly, it's
+    purely an observer of backend state; deciding an application never itself starts
+    or stops polling beyond what the resulting status naturally implies (an
+    `"invited"` application decided straight to `"accepted"`/`"rejected"` simply stops
+    being counted as `"invited"`, same as any other status change).
 - **Loading/empty/error**: "Loading applications…" / "No applications yet — select a
-  candidate from the ranking table." / error banner with the backend's own `detail`. A
-  per-row candidate-identity failure never blocks the table (same
-  `useCandidateIdentity` fallback as `JobDetailPage`: a short `candidate_id` prefix
-  with an inline "(name unavailable)" note).
-- **Navigation behavior**: reachable from `JobDetailPage` via a new "View Applications"
-  link in its header (`JobDetailPage.jsx`, this pass — the only route to this page,
-  since it's job-scoped and the sidebar's nav is global); no navigation forced from
-  this page itself — a recruiter goes back to `/jobs/:jobId` or `/jobs` via the
-  sidebar.
+  candidate from the ranking table." / error banner with the backend's own `detail` —
+  all driven by the initial `loadApplications` call only; a polling failure never
+  touches any of these three states, so already-rendered data stays exactly as it was
+  through a transient poll error (see §12). A per-row candidate-identity failure never
+  blocks the table either (same `useCandidateIdentity` fallback as `JobDetailPage`: a
+  short `candidate_id` prefix with an inline "(name unavailable)" note).
+- **Navigation behavior**: reachable from `JobDetailPage` via a "View Applications"
+  link in its header (the only route to this page, since it's job-scoped and the
+  sidebar's nav is global); no navigation forced from this page itself — a recruiter
+  goes back to `/jobs/:jobId` or `/jobs` via the sidebar.
 
 ---
 
@@ -548,18 +588,31 @@ browser; the webhook that actually advances `invited → interviewed` happens en
 server-side, on RWS's `POST /v1/webhooks/voicehr` (HMAC-authenticated, VoiceHR → RWS
 only).
 
-**Polling** (PROPOSED — `hooks/usePolling.js`, not yet created):
-- Runs only on `ApplicationsPage`.
-- `GET /v1/jobs/{job_id}/applications` every **~6–8 seconds**.
-- Only while **at least one visible application has `status: "invited"`** — the hook's
-  `enabled` flag is derived from the current applications list, so it turns itself off
-  automatically once nothing is left waiting.
-- **Pauses when `document.hidden`** (tab not visible) and resumes via the
-  `visibilitychange` event.
-- **Stops entirely** once no application is in a pending-interview state — no manual
-  "stop polling" button needed.
+**Polling — implemented** (`hooks/usePolling.js`, generic; wired into `ApplicationsPage`):
+- Runs only on `ApplicationsPage`, via `usePolling(pollApplications, { intervalMs:
+  7000, enabled: hasInvitedApplication })`.
+- `GET /v1/jobs/{job_id}/applications` every **~7 seconds** — `pollApplications()` is a
+  silent background refresh, deliberately separate from the page's initial
+  `loadApplications()` (which drives `loading`/`error`): a failed poll never touches
+  `loading` or `error`, so already-rendered data is never blanked out or replaced with
+  an error banner over a transient failure. Only a successful poll response ever calls
+  `setApplications`.
+- Only while **at least one visible application has `status: "invited"`** —
+  `hasInvitedApplication` is computed fresh from the current `applications` state on
+  every render (`applications.some(a => a.status === "invited")`), so it turns itself
+  off automatically the moment nothing is left waiting (a webhook-driven transition to
+  `interviewed`, or there was never anything invited to begin with).
+- **Pauses when `document.hidden`**: the hook stops its `setInterval` entirely (not
+  just skipping the fetch) and restarts it via the `visibilitychange` event once the
+  tab becomes visible again.
+- **Stops entirely** once no application is in a pending-interview state, and its
+  timer/listener are cleaned up on unmount — no manual "stop polling" button needed.
 - **No WebSockets** — polling a list endpoint is sufficient for this flow's timing and
   matches the project's explicit no-new-infrastructure stance.
+- **No direct VoiceHR calls, ever** — the frontend only ever re-reads RWS's own
+  `GET /v1/jobs/{job_id}/applications`; the `invited → interviewed` transition itself
+  happens entirely server-side via RWS's `POST /v1/webhooks/voicehr`, before polling
+  ever sees it.
 
 ---
 
@@ -582,9 +635,21 @@ beyond this list**:
 | `inconclusive` | `bool` | If `true`, the assessment should be visually flagged as low-confidence rather than presented at face value. |
 | `evaluation_status` | `"completed" \| "failed" \| "inconclusive"` | Drives which of the above are meaningful to show — e.g. on `"failed"`, scores may be absent/null and the UI should say so plainly rather than render a table of blanks. |
 
-`AssessmentPanel` (planned, part of `ApplicationsPage`, §10) should render only while
-`interview_assessment` is non-null, and should branch its layout on `evaluation_status`
-rather than assuming all score fields are always present.
+`AssessmentPanel` — **implemented**, part of `ApplicationsPage.jsx` (page-local
+function, same convention as `JobDetailPage`'s `CandidateRow` family). Renders only
+while `interview_assessment` is non-null (a row with no assessment is not even
+click-expandable — `hasAssessment` gates both the expand affordance and the panel
+itself). Branches on `evaluation_status`: `"failed"` renders a single plain sentence
+("Evaluation failed — no scores are available for this interview.") instead of a grid
+of blanks; `"completed"`/`"inconclusive"` render the full score grid, with each
+individual score defensively rendered as `"—"` rather than assumed present
+(`value == null ? "—" : "${value}/100"` — note this correctly distinguishes a real `0`
+score from a missing one, since `== null` only matches `null`/`undefined`). The
+`inconclusive` boolean is rendered as its own "Low-confidence evaluation" note
+independent of `evaluation_status` — it can be `true` on a `"completed"` evaluation
+too, per the schema, so it's not folded into the status badge. No field beyond §13's
+table is rendered or invented, live-verified against two real fixtures with different
+shapes — see §20.
 
 ---
 
@@ -615,36 +680,70 @@ General rules:
 
 ---
 
-## 15. UX / visual direction
+## 15. UX / visual direction — **implemented** (Phase 8, see §20 for full results)
 
 This should read as a real, lightweight ATS/recruiter dashboard — not an "AI product
 demo." Concretely:
 
-- Clean sidebar navigation (implemented: Jobs, Upload Resume) + a top bar showing the
-  logged-in recruiter and Logout (implemented).
+- Clean sidebar navigation (Jobs, Upload Resume) + a top bar showing the logged-in
+  recruiter and Logout — implemented, and (Phase 8) the sidebar now becomes a compact
+  horizontal top bar below the tablet breakpoint instead of a tall vertical block
+  (`Sidebar.module.css`'s own `@media (max-width: 768px)`).
 - Restrained color palette — one primary accent color (`--color-primary`), neutral
-  surfaces/borders, and semantic colors used only for status/error, not decoration
-  (already the shape of `variables.css`).
+  surfaces/borders, and semantic colors used only for status/error, not decoration.
+  (Phase 8) `variables.css` now carries the full semantic set as shared tokens —
+  `--color-success`/`-bg`, `--color-warning`/`-bg`, `--color-danger`/`-bg`,
+  `--color-accent`/`-bg`, plus `--color-primary-bg`/`--color-hover-bg`/
+  `--color-neutral-bg` — replacing hand-picked hex values that had drifted slightly
+  different (e.g. `#f2f5fd` vs `#eaf0fd` vs `#f7f9fd` for what was meant to be the
+  same "light primary tint") across `JobsListPage`/`JobDetailPage`/`ApplicationsPage`.
+  Every status/qualified/evaluation badge and every action button across all five
+  pages now pulls from this one set, so "green" and "red" mean the same thing
+  everywhere.
 - Readable tables/cards over anything dense or cramped — this is presented on a laptop
-  or projector to a jury, not optimized for information density.
+  or projector to a jury, not optimized for information density. (Phase 8) tables
+  (`JobDetailPage`, `ApplicationsPage`) gained a `box-shadow: var(--shadow-sm)` for a
+  subtle card lift and a `min-width` on the `<table>` itself (620px/640px) so a
+  narrower viewport scrolls the table horizontally via the existing `.tableWrapper`
+  rather than squeezing columns illegibly.
 - Status badges with clear, distinct colors per state
-  (`selected/invited/interviewed/accepted/rejected`).
+  (`selected/invited/interviewed/accepted/rejected`) — implemented since Phase 7;
+  (Phase 8) now backed by the shared semantic tokens above rather than five
+  independently-chosen hex pairs.
 - Strong information hierarchy: `final_score` and `qualified` are the first things a
   recruiter should see per candidate; component scores, matched/missing requirements,
-  and explanation are one interaction away (expand), not all shown at once.
+  and explanation are one interaction away (expand), not all shown at once —
+  unchanged this pass (a presentation-only pass, no interaction logic touched).
 - Score visualization without gimmicks — a plain horizontal bar or number is enough; no
-  chart library, no radial gauges, no animated counters.
-- Expandable match details (collapsed by default) rather than a permanently dense row.
+  chart library, no radial gauges, no animated counters. Unchanged — no chart or gauge
+  was added.
+- Expandable match details (collapsed by default) rather than a permanently dense row —
+  unchanged.
 - Minimal animation — at most a subtle loading-state transition; nothing decorative.
-- Laptop/projector-first layout; basic responsive behavior only (sidebar collapses
-  under `~768px` — already implemented in `Layout.module.css`), not a full mobile
-  redesign.
+  (Phase 8) a shared `--transition-fast: 120ms ease` token now backs every
+  hover/focus color change across the app (buttons, links, cards, table rows) — no
+  keyframe animation, spinner, or motion beyond that was added, deliberately, to stay
+  inside this constraint.
+- Laptop/projector-first layout; basic responsive behavior only. (Phase 8) two shared
+  breakpoints (768px tablet, 480px phone-width) are now used consistently across every
+  page's own `@media` rules — sidebar collapse (existing), plus new: page headers wrap
+  and their action buttons/links go full-width, forms stack to one column, and the
+  drop zone/selected-file row on `ResumeUploadPage` stacks vertically. Not a full
+  mobile redesign — still laptop/projector-first, per this section's own scope.
 
 **Where "AI" should visibly show up**: the match explanation text, the score
 breakdown/insight it's attached to, and the VoiceHR assessment — i.e., in the *content*
 RWS already generated, not in the frontend's own visual branding. No AI-themed iconography,
 gradients, or "powered by AI" chrome — the product should look like a hiring tool that
-happens to use AI internally, not an AI showcase.
+happens to use AI internally, not an AI showcase. Unchanged this pass — no icon, badge,
+or gradient referencing "AI" was added anywhere.
+
+**A shared keyboard-focus treatment was added to `global.css`** (not previously
+documented, since it didn't exist before Phase 8): every focusable element gets a
+visible `:focus-visible` outline in `--color-primary`; text inputs/textareas/selects
+get a softer box-shadow ring instead of the plain outline, for a more form-appropriate
+look. This is additive only — it changes what a keyboard-focused element looks like,
+never what any element does.
 
 ---
 
@@ -663,44 +762,70 @@ npm run preview # serves the dist/ build locally, for a pre-deploy sanity check
 (`RWS_DEV_TARGET` env var, default `http://localhost:8003` — matching
 `infra/.env`'s `RECRUITMENT_WORKFLOW_PORT` mapping). This means every API call in the
 frontend code is a **relative path** (`fetch("/v1/...")`) — identical in dev (proxied)
-and in the eventual production same-origin serving (§17). Never hardcode an absolute
-backend URL anywhere in `src/`.
+and in production same-origin serving (§17, now implemented). Never hardcode an
+absolute backend URL anywhere in `src/`. This dev-proxy path is unchanged by Phase 9 —
+`vite.config.js` was not touched — and remains the day-to-day frontend dev workflow;
+§17's production path is a separate, additional way to run the same built app.
 
-Verified working: `npm install` and `npm run build` both succeed cleanly (0 errors, 53
-modules, ~1.6s build). A live login smoke test through this exact proxy path against the
-real running RWS container returned a real JWT on valid credentials and the backend's
-own `"Invalid email or password"` on an invalid one.
+Verified working: `npm install` and `npm run build` both succeed cleanly (0 errors, 63
+modules as of Phase 8/9, ~0.8s build). A live login smoke test through this exact proxy
+path against the real running RWS container returned a real JWT on valid credentials
+and the backend's own `"Invalid email or password"` on an invalid one. Separately,
+§20 now also has a live-tested production path (`docker compose build` → real
+container → `http://localhost:8003/`) with no Vite dev server involved at all.
 
 ---
 
-## 17. Production serving plan (PROPOSED — Phase 9, not yet implemented)
+## 17. Production serving plan — **implemented and live-verified** (Phase 9, see §20)
 
-Intended shape: `npm run build` → `frontend/dist/` → served by RWS's own FastAPI app,
-same-origin (no CORS configuration needed anywhere).
+Shape: `npm run build` → `frontend/dist/` → served by RWS's own FastAPI app,
+same-origin (no CORS configuration needed anywhere, and none was added).
 
 **Critical ordering rule**: FastAPI/Starlette matches routes in registration order —
 first match wins. `main.py` already defines every `/v1/*` route and `/health` via
-decorators. The SPA-serving routes must be added **last**, after all of those, so they
-only ever catch a request that didn't match an API route first:
+decorators. The SPA-serving routes are added **last**, physically after all of those
+(the final block in the file), so they only ever catch a request that didn't match an
+API route first:
 
 ```python
-# main.py -- appended AFTER every existing @app.get/post(...) route, never before
+# main.py -- the final block in the file, after every existing @app.get/post(...)
+# route including the /v1/webhooks/voicehr handler
 
-app.mount("/assets", StaticFiles(directory="frontend/dist/assets"), name="frontend-assets")
+_FRONTEND_DIST = Path(__file__).resolve().parent / "frontend" / "dist"
 
-@app.get("/", include_in_schema=False)
-@app.get("/{full_path:path}", include_in_schema=False)
-async def serve_react_app(full_path: str = ""):
-    return FileResponse("frontend/dist/index.html")
+if _FRONTEND_DIST.is_dir():
+    app.mount(
+        "/assets", StaticFiles(directory=_FRONTEND_DIST / "assets"), name="frontend-assets"
+    )
+
+    @app.get("/", include_in_schema=False)
+    @app.get("/{full_path:path}", include_in_schema=False)
+    async def serve_react_app(full_path: str = "") -> FileResponse:
+        return FileResponse(_FRONTEND_DIST / "index.html")
+else:
+    logger.info("frontend_dist_not_found", extra={"path": str(_FRONTEND_DIST)})
 ```
 
 `/assets/*` (Vite's hashed JS/CSS bundle output) is served directly; every other
 non-API path falls through to `index.html`, letting `BrowserRouter` take over
 client-side. As long as this block stays physically after the `/v1/*` route
-definitions in the file, there is no shadowing risk.
+definitions in the file, there is no shadowing risk — live-verified, see §20.
+
+**One deliberate addition beyond the original sketch**: the whole block is guarded by
+`_FRONTEND_DIST.is_dir()`. `frontend/dist/` only exists after a real `npm run build`
+(produced by the Docker image's Node build stage below, and `.gitignore`d — never
+committed). Mounting `StaticFiles` against a directory that doesn't exist raises
+`RuntimeError` at import time in FastAPI, which would break `import main` — and
+therefore this project's own host-side test suite (`pytest tests/`, which does exactly
+that) and `npm run dev`'s Vite-proxy dev workflow — on any machine that has never run
+a frontend build. The guard means: dist present (the Docker image, or a host checkout
+where someone ran `npm run build` locally) → SPA routes registered; dist absent (a
+fresh checkout, CI, the normal dev workflow) → those three routes are simply never
+registered, and every `/v1/*`/`/health` route is completely unaffected either way.
+Live-verified both ways — see §20.
 
 **Docker**: Node is needed only to *build* the frontend, never in the runtime image —
-multi-stage `Dockerfile`:
+multi-stage `services/recruitment-workflow/Dockerfile`:
 
 ```dockerfile
 FROM node:20-slim AS frontend-build
@@ -716,17 +841,29 @@ COPY services/recruitment-workflow/requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 COPY shared/ /app/shared/
 COPY services/recruitment-workflow/ /app/
+RUN rm -rf /app/frontend
 COPY --from=frontend-build /frontend/dist /app/frontend/dist
 CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000"]
 ```
 
-A root-level `.dockerignore` (does not currently exist anywhere in this repo) should
-exclude `**/frontend/node_modules` and `**/frontend/dist` from the Docker build
-*context* before this is implemented, so `docker build` doesn't upload a large
-`node_modules` tree unnecessarily.
+**One deliberate addition beyond the original sketch here too**: `COPY
+services/recruitment-workflow/ /app/` copies the *entire* service directory as one
+tree, which includes `services/recruitment-workflow/frontend/` — its unbuilt JS/JSX
+source, since nothing excludes a subdirectory from a directory-level `COPY`. The
+`RUN rm -rf /app/frontend` immediately after removes that whole tree before the built
+`dist/` is copied back in from the `frontend-build` stage, so the runtime image ends
+up with only `frontend/dist/` — never frontend source, `node_modules`, or Node itself.
+This is what actually delivers "copy only `frontend/dist` into the runtime image," not
+just "the build happens to work."
 
-None of this is implemented yet — it is documented here so Phase 9 doesn't need to
-re-derive it.
+A root-level `.dockerignore` (`/`, not `services/recruitment-workflow/`) excludes
+`**/frontend/node_modules/` and `**/frontend/dist/` from the Docker build *context* —
+this matters because `resume-intelligence`/`second-brain`/`recruitment-workflow` all
+share the repo root as their build context (`context: ..` in
+`infra/docker-compose.yml`), so one root-level file benefits all three; VoiceHR builds
+from its own subdirectory context and is unaffected by it. Also excludes
+`__pycache__/`, `.venv/`, `.pytest_cache/`, `.git/`, and other standard hygiene, mostly
+mirroring the existing root `.gitignore`.
 
 ---
 
@@ -772,11 +909,11 @@ future phase.
 - [x] **Phase 5 — Applications + invitation** *(list + invite/resend-invite only, by
   explicit scope — polling and assessment display are Phase 6, accept/reject is Phase
   7)*
-- [ ] **Phase 6 — Polling + VoiceHR assessment display** *(next — see §24)*
-- [ ] **Phase 7 — Accept/reject**
-- [ ] **Phase 8 — Visual polish / responsive states**
-- [ ] **Phase 9 — Docker production build + FastAPI serving**
-- [ ] **Phase 10 — Final frontend E2E/demo audit**
+- [x] **Phase 6 — Polling + VoiceHR assessment display**
+- [x] **Phase 7 — Accept/reject**
+- [x] **Phase 8 — Visual polish / responsive states**
+- [x] **Phase 9 — Docker production build + FastAPI serving**
+- [ ] **Phase 10 — Final frontend E2E/demo audit** *(next — see §24)*
 
 Future sessions: update the checkboxes and the relevant page/section status above as
 each phase lands. Do not duplicate this checklist elsewhere or restate history that's
@@ -796,45 +933,182 @@ already captured here — extend it.
 - `src/context/AuthContext.jsx` (`AuthProvider`, `useAuth`).
 - `src/router/AppRouter.jsx`, `src/router/ProtectedRoute.jsx`.
 - `src/pages/Layout.jsx` + `.module.css`, `src/components/Sidebar.jsx` + `.module.css`,
-  `src/components/TopBar.jsx` + `.module.css`.
-- `src/pages/LoginPage.jsx` + `.module.css` — fully functional, not a placeholder.
+  `src/components/TopBar.jsx` + `.module.css` — behavior unchanged; **this pass**
+  restyled `Layout.module.css`/`Sidebar.module.css`/`TopBar.module.css` (see below).
+- `src/pages/LoginPage.jsx` + `.module.css` — fully functional, not a placeholder;
+  `.module.css` restyled this pass (see below), `.jsx` untouched.
 - `src/pages/ResumeUploadPage.jsx` + `.module.css` — fully functional: click-or-drop
   file selection, upload via `api/resumes.js`, loading/success/error states, "Upload
-  another resume" reset.
+  another resume" reset; `.module.css` restyled this pass, `.jsx` untouched.
 - `src/api/resumes.js` (`uploadResume(file)`).
 - `src/api/client.js`'s `request()` — accepts a `FormData` body (used by
   `uploadResume`) alongside the existing JSON-body path; no `Content-Type` is set when
   the body is `FormData`, so the browser supplies the correct multipart boundary
   itself. The JSON path (used by `login()`) is unchanged.
 - `src/pages/JobsListPage.jsx` + `.module.css` — fully functional: fetches and renders
-  the real jobs list, and a "New Job" creation form.
+  the real jobs list, and a "New Job" creation form; `.module.css` restyled this pass,
+  `.jsx` untouched.
 - `src/pages/JobDetailPage.jsx` + `.module.css` — fully functional: fetches and renders
   real ranked matches, with per-row candidate-identity resolution, expandable
-  score/requirements/explanation detail, candidate selection, and (**new this pass**) a
-  "View Applications" header link to `/jobs/:jobId/applications`.
-- `src/pages/ApplicationsPage.jsx` + `.module.css` — **fully functional as of this
-  pass** for its current scope: fetches and renders the real applications list for a
-  job, per-row candidate-identity resolution, status + interview-status display, and
-  Invite/Resend Invite. Polling, VoiceHR assessment rendering, and Accept/Reject are
-  explicitly not built this pass (Phase 6/7 — see §24).
+  score/requirements/explanation detail, candidate selection, and a "View
+  Applications" header link to `/jobs/:jobId/applications`; `.module.css` restyled
+  this pass, `.jsx` untouched.
+- `src/pages/ApplicationsPage.jsx` + `.module.css` — fully functional: fetches and
+  renders the real applications list for a job, per-row candidate-identity resolution,
+  status + interview-status display, Invite/Resend Invite, background polling while
+  any application is `"invited"`, a real `AssessmentPanel` rendering
+  `interview_assessment` once an interview completes, and Accept/Reject decision
+  buttons, disabled while a decision is pending, terminal "Accepted ✓"/"Rejected"
+  labels once decided, and a native `window.confirm()` guard on Reject only;
+  `.module.css` restyled this pass, `.jsx` untouched.
 - `src/api/jobs.js` (`getJobs()`, `createJob()`, `getJobMatches()`).
 - `src/api/candidates.js` (`getCandidateIdentity()`).
-- `src/api/applications.js` — `selectMatch()` (prior pass); `getApplications(jobId)`
-  and `invite(applicationId, language?)` (**new this pass**). `accept()`/`reject()`
-  remain unbuilt (Phase 7).
+- `src/api/applications.js` — `selectMatch()`, `getApplications(jobId)`,
+  `invite(applicationId, language?)`, `accept(applicationId)`, `reject(applicationId)`.
 - `src/hooks/useCandidateIdentity.js` — module-level in-memory cache (§8, §9) plus the
   resolving hook itself; a lookup failure resolves to a distinct `"error"` status
-  rather than throwing, so it can never break the page it's used on. Reused as-is by
-  `ApplicationsPage` this pass — no changes needed to the hook itself.
-- `src/styles/variables.css`, `src/styles/global.css` — unchanged.
-- **Not yet created**: `src/api/applications.js`'s `accept()`/`reject()` (Phase 7);
-  `src/hooks/usePolling.js` (Phase 6); `AssessmentPanel` / any VoiceHR-assessment
-  rendering on `ApplicationsPage` (Phase 6); Accept/Reject buttons (Phase 7) — see §24.
+  rather than throwing, so it can never break the page it's used on.
+- `src/hooks/usePolling.js` — generic `usePolling(callback, { intervalMs, enabled })`
+  (§12). Not fired immediately on mount (the owning page's own initial fetch covers
+  first load); stops its timer entirely on `document.hidden` and restarts it on
+  `visibilitychange`; cleans up on unmount and whenever `enabled`/`intervalMs`
+  changes; swallows any error thrown by `callback` so a transient poll failure can
+  never crash the page or blank out already-rendered data.
+- `src/styles/variables.css` — **substantially expanded this pass** (§15): semantic
+  color tokens (`--color-success`/`-bg`, `--color-warning`/`-bg`, `--color-accent`/
+  `-bg`, `--color-primary-bg`, `--color-hover-bg`, `--color-neutral-bg`), `--radius-pill`,
+  `--shadow-sm`/`--shadow-md`, a `--spacing-5` step, a `--font-size-*` type scale
+  (`xs`/`sm`/`base`/`md`/`lg`/`xl`), and `--transition-fast`. CSS custom properties
+  can't be read inside a `@media` condition, so the two shared breakpoints (768px,
+  480px) are documented as a plain comment convention there instead, reused literally
+  by every page's own `@media` rules.
+- `src/styles/global.css` — **extended this pass**: base typography (font smoothing,
+  `line-height: 1.5`, a heading/paragraph margin reset that every page's own more
+  specific `.title`/`.subtitle` class still overrides via normal CSS specificity), a
+  default `cursor: pointer` on buttons (`not-allowed` on `:disabled`), and the shared
+  `:focus-visible` treatment described in §15.
+- `services/recruitment-workflow/main.py` — **extended this pass** (Phase 9, §17): a
+  new final block (`Path`/`FileResponse`/`StaticFiles` imports added at the top,
+  guarded SPA-serving routes appended after every existing route, including the
+  `/v1/webhooks/voicehr` handler). No existing route, dependency, or business logic
+  was touched — confirmed by the diff being purely additive at the end of the file.
+- `services/recruitment-workflow/Dockerfile` — **rewritten this pass** as a two-stage
+  build (Node stage builds `frontend/dist/`; the runtime `python:3.12-slim` stage
+  copies it in and deletes the frontend source tree that the blanket service-directory
+  `COPY` would otherwise have carried along — see §17 for exactly why that extra `RUN
+  rm -rf` is necessary).
+- `.dockerignore` (repo root) — **new this pass**: excludes
+  `**/frontend/node_modules/`/`**/frontend/dist/` plus standard Python/VCS hygiene from
+  the Docker build context shared by `recruitment-workflow`/`resume-intelligence`/
+  `second-brain` (§17).
+- **Not yet built**: nothing remaining in the Applications flow itself, and the app is
+  now packaged for production same-origin serving. Remaining work is Phase 10 (final
+  E2E/demo audit) — see §24.
 
 **Build verified**: `npm install` (66 packages, 0 errors) and `npm run build` both
-succeeded before this pass (61 modules) and after adding the Applications +
-invitation workflow (62 modules, built cleanly in ~0.9s, `dist/` produced, 0
-errors/warnings).
+succeeded after the visual-polish pass — still 63 modules, JS bundle size unchanged
+(193.45 kB, same as the prior pass) though its output filename hash changed (Vite
+embeds a reference to the CSS asset's own hash inside the JS entry, so a CSS-only
+change still produces a new JS filename — this is expected and not evidence of a
+behavior change). The actual guarantee against behavior change is `git status`
+confirming zero `.jsx` files were touched this pass — every edit was to a
+`.module.css` file or to `variables.css`/`global.css`. Only the CSS bundle grew,
+16.55 kB → 21.80 kB, from the added rules. Built cleanly in ~0.8s, `dist/` produced,
+0 errors/warnings.
+
+**Verified — visual polish + responsive states (this pass)**, no backend involved so
+verification is build- and code-level rather than a live network smoke test (no
+network call was added, changed, or removed this pass):
+- **Zero behavior change, structurally guaranteed**: `git status` after the pass shows
+  only `.module.css`/`variables.css`/`global.css` files touched — no `.jsx` file in
+  `src/` was modified. Since CSS Modules only ever change what an existing class name
+  *looks like*, never what triggers a state change or a network call, this is a
+  stronger guarantee than eyeballing a diff for behavioral changes.
+- **No dropped or renamed classes**: for every page/component `.jsx` file, every
+  `styles.xxx` (and the two dynamic `styles[STATUS_STYLES[...]]`/
+  `styles[EVALUATION_STATUS_STYLES[...]]` lookups in `ApplicationsPage.jsx`) was
+  cross-checked against its `.module.css`'s actual class list — confirmed present in
+  every case. A rewritten CSS file that silently dropped a class still referenced by
+  JSX would compile fine (Vite doesn't fail on an unresolved CSS Module property, it's
+  just `undefined`) and only show up as a visual bug, so this was checked explicitly
+  rather than assumed from a clean build.
+- **No undefined CSS custom properties**: every `var(--...)` reference across
+  `styles/`, `pages/`, and `components/` was cross-checked against the tokens actually
+  defined in `variables.css` — zero mismatches. An undefined custom property silently
+  falls back to nothing (no visible error), so this was checked explicitly too.
+- **Status/evaluation color distinctness**: `selected` (neutral gray), `invited`
+  (primary blue), `interviewed` (accent purple), `accepted` (success green), `rejected`
+  (danger red) each resolve to a visually distinct hue via the new shared semantic
+  tokens — confirmed by reading the final token values, not just assumed from naming.
+- **No overflow at laptop widths**: every page's own `max-width` (560–960px) sits
+  comfortably inside any laptop/projector viewport (1280px+); the two table
+  `min-width`s added this pass (620px/640px) are both well under every page's own
+  `max-width`, so they change nothing at those widths — they only start to matter
+  below ~640–680px, where `.tableWrapper`'s pre-existing `overflow-x: auto` takes over
+  and the table scrolls horizontally instead of squeezing columns illegibly.
+- **Responsive behavior added**: sidebar collapses to a horizontal top bar below
+  768px (was already collapsing the grid to one column; now the nav itself adapts
+  too); page headers, action buttons/links, and form fields wrap or stack at 768px/
+  480px across `JobsListPage`/`JobDetailPage`/`ApplicationsPage`/`ResumeUploadPage`;
+  the login card becomes fluid-width with a safe minimum padding instead of a fixed
+  320px.
+- Not yet tested, no browser available in this environment (same limitation as every
+  prior pass): the actual rendered result at any specific viewport width, hover/focus
+  states firing correctly, and the sidebar's horizontal-scroll behavior on a genuinely
+  narrow phone width — all verified by direct code review of the final CSS against the
+  DOM structure each page's `.jsx` already produces (unchanged this pass), not by
+  loading the app in a browser and resizing it.
+
+**Live-tested — Production Docker build + FastAPI serving (this pass)**, against the
+real Docker Compose stack — a rebuilt image, a real container recreate, and real HTTP
+requests against the production port (`8003`), not the Vite dev proxy:
+- **Backend regression, both with and without `frontend/dist/` present**: host-side
+  `python -c "import main"` and the full `pytest tests/` suite (27 tests) were run
+  twice — once with the local `frontend/dist/` in place (21 routes registered,
+  matching the SPA block's 3 extra routes over baseline) and once with it renamed away
+  to simulate a fresh checkout (18 routes, SPA block absent, `frontend_dist_not_found`
+  logged) — **27/27 passed both times**, confirming the guard in §17 genuinely
+  protects the existing test/dev workflow rather than just being asserted to.
+- **`docker compose build recruitment-workflow`**: real multi-stage build — the
+  `frontend-build` stage ran `npm ci` (66 packages) and `npm run build` (63 modules,
+  identical output to the host build) *inside the image build itself*, then the
+  runtime stage copied only `frontend/dist/` in. Also rebuilt `resume-intelligence`
+  and `second-brain` (both share the new root `.dockerignore`'s build context) to
+  confirm the new root-level file doesn't break their builds — both built successfully.
+- **Container recreated and healthy**: `docker compose up -d --no-deps --force-recreate
+  recruitment-workflow` → healthy within 10s.
+- **No Node in the runtime container**: `which node`/`which npm` inside the running
+  container both exit `1` (not found) — a real check inside the actual container, not
+  an assumption from the Dockerfile's shape.
+- **`frontend/dist/` layout inside the container**: confirmed via `docker exec` —
+  `index.html` + `assets/` containing exactly the two hashed JS/CSS files the local
+  build produced, nothing else (no `src/`, no `node_modules/`, no `package.json`).
+- **`GET /` serves the real built `index.html`** (`200`, contains the actual
+  `<script type="module" src="/assets/index-HASH.js">`/`<link ... href="/assets/
+  index-HASH.css">` tags matching the files really present in `/assets/`).
+- **Client-side routes resolve on a direct/hard-refresh request, not just client-side
+  navigation**: `GET /jobs`, `GET /jobs/abc-123/applications`, and `GET /upload` all
+  returned real `200`s serving the same `index.html` — exactly what lets
+  `BrowserRouter` take over and render the right page after a hard refresh on a nested
+  URL, the specific behavior this whole plan exists to guarantee.
+- **`/v1/*` and `/health` are completely unshadowed**: `GET /health` returned the real
+  `{"status": "ok", "service": "recruitment-workflow"}` JSON (not HTML); `POST
+  /v1/auth/login` with wrong credentials returned a real `401` with the real backend
+  `detail` (not swallowed by the catch-all); `GET /v1/jobs` with no `Authorization`
+  header returned a real `401` JSON body. Then, for real: logged in with the seeded
+  recruiter's actual credentials through port `8003` (not the dev proxy) and called
+  `GET /v1/jobs` with the resulting JWT — real `200` with the real jobs list. This is
+  the same recruiter flow the frontend itself makes, now proven to work end to end
+  through the exact production port/origin a demo would actually use.
+- **Static assets serve correctly**: both `/assets/index-HASH.js` and
+  `/assets/index-HASH.css` returned real `200`s with correct `Content-Type` headers
+  (`text/javascript`, `text/css`).
+- Not yet tested, no browser available in this environment (same limitation as every
+  prior pass): actually loading `http://localhost:8003/` in a real browser and
+  clicking through it. Every request the browser would make was issued directly via
+  `curl` instead and its response verified, which covers the network-contract level
+  this project has consistently used as its verification bar when no browser is
+  available — see §18.
 
 **Live-tested — login (prior pass)**: `POST /v1/auth/login` through the Vite dev proxy
 against the real running RWS container — valid credentials returned a real JWT (`200`);
@@ -896,7 +1170,7 @@ own `api/*.js` modules issue:
   chip rendering, disabled-button states, the "Selected ✓"/"(name unavailable)" inline
   states) against the real response shapes captured above.
 
-**Live-tested — Applications + invitation workflow (this pass)**, through the exact
+**Live-tested — Applications + invitation workflow (prior pass)**, through the exact
 dev-proxy path, issuing the same requests `ApplicationsPage`/`api/applications.js`
 issue, against real applications already present from prior live-testing (one
 `"selected"` application from the Jobs-experience pass, and one pre-existing
@@ -904,8 +1178,9 @@ issue, against real applications already present from prior live-testing (one
 earlier end-to-end pass):
 - `GET /v1/jobs/{job_id}/applications`: unauthenticated → real `401`; authenticated →
   real `200` with both real applications, exactly the shape `ApplicationRow` consumes
-  (`status`, `interview_status`, `interview_assessment` present but — correctly for
-  this pass's scope — not read by any component).
+  (`status`, `interview_status`, `interview_assessment` present in the payload but —
+  correctly, given that pass's own scope — not yet read by any component; that
+  changed in the following pass, see below).
 - `POST /v1/applications/{id}/invite` on the `"selected"` application: real `200`,
   `status` became `"invited"`, `invite_attempt_number: 1`, `invited_at` populated —
   this went all the way through RWS's real contact-lookup-then-VoiceHR-call chain, not
@@ -936,6 +1211,107 @@ earlier end-to-end pass):
   cells, Invite-vs-Resend-Invite label switching, disabled-while-inviting state, the
   "View Applications" link added to `JobDetailPage`) against the real response shapes
   captured above.
+
+**Live-tested — Polling + VoiceHR assessment display (prior pass)**, against the exact
+real applications left by the prior pass (one `"invited"` application, one
+pre-existing `"interviewed"` application with a real assessment):
+- **A real webhook-driven `invited → interviewed` transition**, the exact one polling
+  is meant to pick up: called VoiceHR's own `backend.services.processing.
+  process_interview` directly inside the running `csb-voicehr` container (standing in
+  only for real browser audio/ASR, as established in every prior end-to-end pass in
+  this project) against the pending interview for the `"invited"` application, with a
+  real multi-turn transcript and a 360s duration (long enough and with enough
+  candidate turns to avoid the `inconclusive` fallback). This produced a real Gemini
+  evaluation, and RWS's own logs confirm the full real chain: `webhook_received` →
+  `outcome: "processed"` → `POST /v1/webhooks/voicehr HTTP/1.1 200 OK`, for that exact
+  `application_id`. Re-fetching `GET /v1/jobs/{job_id}/applications` immediately after
+  confirmed `status: "interviewed"`, `interview_status: "completed"`, and a real
+  `interview_assessment` object — exactly the transition `pollApplications()` would
+  have picked up on its next tick had a browser been polling live. This is the
+  strongest form of verification available without an actual browser: the real
+  backend-side event `usePolling` exists to observe was independently triggered and
+  independently confirmed to have landed correctly.
+- **Two distinct real assessment fixtures**, both re-fetched (i.e. as a hard refresh
+  would show them) and reasoned through `AssessmentPanel`'s exact render logic: the
+  pre-existing fixture (`evaluation_status: "completed"`, `overall_score: 93`,
+  `cefr_level: "C1"`, `inconclusive: false`) and the fixture produced this pass
+  (`evaluation_status: "completed"`, all scores `0`, `cefr_level: "A2"`,
+  `inconclusive: false`) — the second one incidentally exercises the
+  `value == null ? "—" : ...` distinction for real (a genuine `0`, correctly not
+  rendered as `"—"`), not just as a hypothetical. Both are `"completed"`, so neither
+  exercised the `"failed"`-branch plain-text path in this run; that branch was
+  confirmed by direct code review of `AssessmentPanel`'s `evaluation_status === "failed"`
+  check instead. Neither fixture had `inconclusive: true`, so the "Low-confidence
+  evaluation" note was likewise confirmed by code review of that same conditional
+  rather than by triggering a live inconclusive result.
+- **Correct state after refresh**: both applications' final state — `"interviewed"`
+  with a real `interview_assessment`, `"interviewed"` with the pre-existing one — was
+  confirmed via a fresh, un-cached `GET /v1/jobs/{job_id}/applications` call, the exact
+  request `loadApplications()` issues on mount; since that call is always re-issued
+  fresh (never trusts stale state), this confirms a hard browser refresh on this URL
+  would show the true persisted state, assessments included.
+- **Polling stopping appropriately**: after the transition above, zero applications
+  remained `"invited"` for that job — confirmed directly from the re-fetched list — so
+  `hasInvitedApplication` would evaluate `false` and `usePolling`'s effect would tear
+  its interval down on the next render, verified by code review of the hook's
+  `[enabled, intervalMs]` dependency array (§12) rather than by observing a live
+  browser's network panel.
+- Not yet tested, no browser available in this environment (same limitation as every
+  prior pass): the interval actually firing every ~7s in a live tab, the
+  `visibilitychange` pause/resume behavior, and the expand/collapse click interaction
+  — all three are DOM/browser-API-dependent behaviors with no curl-level equivalent;
+  each was verified by direct code review against `usePolling.js`'s and
+  `ApplicationsPage.jsx`'s actual implementation instead (the same standard applied to
+  every prior pass's button-disabling/drag-styling/panel-rendering claims).
+
+**Live-tested — Accept/Reject decision actions (prior pass)**, through the exact
+dev-proxy path, issuing the same requests `ApplicationsPage`/`api/applications.js`
+issue, against the two real `"interviewed"` applications left by the prior pass (one
+with a real assessment produced that pass, one pre-existing) plus one freshly-selected
+`"selected"` application created specifically to test deciding before any invite:
+- `POST /v1/applications/{id}/accept` on a real `"interviewed"` application: real
+  `200`, `status` became `"accepted"`, `decided_at` populated — a real, persisted
+  terminal decision, not a stub.
+- `POST /v1/applications/{id}/reject` on the other real `"interviewed"` application:
+  real `200`, `status` became `"rejected"`, `decided_at` populated.
+- **Repeat/invalid terminal transitions, both directions**: calling `accept` again on
+  the now-`"accepted"` application returned a real `409` (`"Application is not in a
+  decidable state (current status: accepted)"`); calling `reject` again on the
+  now-`"rejected"` one returned a real `409` with the equivalent message for
+  `"rejected"` — confirms `DECIDABLE_STATUSES` correctly excludes both terminal
+  statuses (no button reappears for either row) and, independently, that the inline
+  error banner would render the real `409` detail verbatim if the check were somehow
+  bypassed. An accept on an unknown `application_id` returned a real `404`
+  (`"Application not found"`); an unauthenticated accept attempt returned a real `401`.
+- **Deciding directly from `"selected"`, before any invite**: selected a fresh
+  qualified match (`POST /v1/matches/{match_id}/select` → real `201`, `status:
+  "selected"`, `invited_at: null`), then called `reject` on it directly — real `200`,
+  `status` became `"rejected"` with `invited_at` still `null`. This confirms
+  `DECIDABLE_STATUSES` correctly includes `"selected"` (not just `"invited"`/
+  `"interviewed"`) and that the frontend's Accept/Reject buttons correctly render
+  *alongside* the Invite button for `"selected"`/`"invited"` rows (both `canInvite`
+  and `canDecide` are `true` simultaneously for those two statuses) — a real,
+  independently-triggered exercise of RWS's own documented rule that "the interview is
+  informative for the recruiter's decision, not a mandatory gate before deciding"
+  (`db.py: transition_application`'s docstring), not just a hypothetical reading of it.
+- **Correct state after refresh**: re-fetching `GET /v1/jobs/{job_id}/applications`
+  after all three decisions returned the updated real terminal states
+  (`"accepted"`/`"rejected"`/`"rejected"`, each with `decided_at` populated) — the
+  exact request `loadApplications()` issues on mount, confirming a hard browser
+  refresh on this URL would show the true persisted decision, not a stale local one.
+- **Polling remains stopped for terminal applications**: the same re-fetched list
+  confirmed zero applications remained `"invited"` for that job after the decisions
+  (`any invited? False`, checked directly against the response) — so
+  `hasInvitedApplication` would evaluate `false` and `usePolling`'s effect would never
+  start (or would tear down) its interval; deciding an application never touches
+  polling directly in the code, only the resulting status change does, same as any
+  other transition (verified by code review of `pollApplications`/`hasInvitedApplication`
+  alongside the live data above, not merely asserted).
+- Not yet tested, no browser available in this environment (same limitation as every
+  prior pass): the actual click flow (button → `window.confirm()` → request), the
+  `confirm()` dialog itself appearing and blocking on Reject specifically, and the
+  buttons visually disabling/re-enabling during a request — verified by direct code
+  review of `handleDecide`/`rowBusy` against the real response shapes captured above.
 
 **Live-tested — resume upload (prior pass)**, through the exact request path
 `ResumeUploadPage`/`api/resumes.js` use (Vite dev proxy → real RWS container → real
@@ -1057,42 +1433,60 @@ Before starting frontend work:
 
 ## 24. [NEXT]
 
-**Applications + invitation workflow** is now **done and verified for its scoped
-slice** (§19, §20): `ApplicationsPage` fetches and renders the real applications list
-for a job (`GET /v1/jobs/{job_id}/applications`), resolves each candidate's name via
-the existing `useCandidateIdentity` hook, shows current `status` and `interview_status`,
-and supports Invite/Resend Invite (`POST /v1/applications/{id}/invite`) gated on the
-same statuses RWS itself accepts. `JobDetailPage` gained a "View Applications" link so
-the page is reachable from a selected candidate. All of it was exercised live against
-the real running stack, including a real invite, a real resend, a real `409` on a
-non-invitable application, a real `404` on an unknown one, and confirmation that a
-fresh reload reflects true backend state — see §20 for the full results. Explicitly
-**not** built this pass, by the task's own scope: polling, VoiceHR assessment
-rendering, and Accept/Reject.
+**Production Docker build + FastAPI serving** is now **done and verified** (§17, §19,
+§20): `services/recruitment-workflow/main.py` gained a guarded, final SPA-serving
+block (mounts `/assets`, serves `index.html` for everything else) registered after
+every `/v1/*`/`/health` route, so it can never shadow them; the `Dockerfile` is now a
+two-stage build (Node builds `frontend/dist/`, the runtime image copies in only that
+output and never contains Node, `node_modules`, or frontend source); a new root
+`.dockerignore` keeps `node_modules`/`dist` out of the shared Docker build context.
+Live-verified against a real rebuilt image and a real recreated container: `GET /`
+serves the real built app, nested client routes (`/jobs`, `/upload`,
+`/jobs/:id/applications`) all resolve correctly on a direct/hard-refresh request
+instead of 404ing, `/v1/*`/`/health` remain completely real and unshadowed (including
+a full real login → `GET /v1/jobs` round trip through the production port), static
+assets serve with correct content types, and `which node`/`which npm` both fail inside
+the running container. The host-side test suite was also confirmed to pass identically
+whether `frontend/dist/` is present or absent, which is what makes the guard in §17
+more than an assumption. See §20 for the complete results.
 
-**Polling + VoiceHR assessment display** (Phase 6 — extends `ApplicationsPage`,
-`/jobs/:jobId/applications`):
+Every phase of frontend work through packaging is now done: the app is feature-complete
+(Phases 1–7), visually consistent (Phase 8), and ships as a single deployable artifact
+with RWS (Phase 9). What remains is a dedicated audit pass, not new building.
 
-- Build `hooks/usePolling.js` (§12): polls `GET /v1/jobs/{job_id}/applications` every
-  ~6–8s, enabled only while at least one visible application is `status: "invited"`,
-  paused on `document.hidden`, resumed on `visibilitychange`, stopped entirely once
-  nothing is pending — no manual "stop polling" control needed. Wire it into
-  `ApplicationsPage` so an interview's completion (`invited → interviewed`, arriving
-  server-side via RWS's `POST /v1/webhooks/voicehr`) becomes visible without a manual
-  reload.
-- Once an interview completes, render `interview_assessment` per §13's exact field
-  list (`AssessmentPanel`, part of `ApplicationsPage`) — render only while
-  `interview_assessment` is non-null, and branch its layout on `evaluation_status`
-  rather than assuming every score field is present (e.g. on `"failed"`, scores may be
-  null). Real test data already exists to verify against: the pre-existing
-  `"interviewed"` application exercised this pass carries a real, complete
-  `interview_assessment` (`overall_score: 93`, `cefr_level: "C1"`, `evaluation_status:
-  "completed"`, etc.) — a real fixture, not one that needs to be fabricated.
-- Do not implement Accept/Reject in this pass — that is Phase 7, a separate bounded
-  task.
-- Do not implement VoiceHR-side anything (interview conduct, candidate-facing flow) —
-  entirely out of this frontend's scope, per §1/§2.
+**Final frontend E2E + demo-readiness audit** (Phase 10 — the last frontend phase):
 
-Follow §11's/§13's hard rule throughout: render `ApplicationResponse`/
-`interview_assessment` fields exactly as RWS returns them — never compute, adjust, or
-second-guess an evaluation, a score, or a workflow-state transition.
+- This is a **verification and hardening pass**, not a feature pass — go in expecting
+  to find and fix small gaps, not to build anything new. If a gap turns out to need
+  real feature work, stop and report it rather than silently scope-creeping into a
+  Phase 11.
+- Walk the **entire real flow end to end, live, in one continuous pass**, through the
+  production-served app if practical (§17 — same-origin, closest to how the actual
+  demo will run) or the dev-proxy path otherwise: log in → upload a resume → create a
+  job → view ranked candidates → select a qualified candidate → view applications →
+  invite → (if a real interview completion can be triggered, as prior passes have done
+  via VoiceHR's `process_interview` directly) watch polling pick up the
+  `interviewed` transition and the assessment render → accept or reject. This project's
+  own §18 testing strategy has always treated this kind of live run as the primary
+  verification method — this phase is where it's done once, deliberately, front to
+  back, rather than piecemeal per feature as in every phase before it.
+- Re-check §14's error-handling table against live behavior for at least one real
+  error case per status code that's practical to trigger honestly (e.g. a real `401`
+  via an expired/cleared token, a real `409` via a duplicate action, a real `422` via
+  an actual bad upload) — not by inventing a fake response, by triggering the real
+  condition, consistent with every prior pass's discipline in this project.
+- Confirm the recruiter-facing copy is consistent and jury-presentable: no leftover
+  placeholder text, no developer-facing wording (`"undefined"`, raw error codes, stack
+  traces) reaching the screen anywhere in the flow above.
+- Confirm §21's "known limitations" list is still accurate and complete — add anything
+  discovered this pass, remove anything that turned out to already be handled.
+- If a real browser becomes available for this pass, this is the point to finally
+  close the "verified by code review, not by clicking through it" caveat that has
+  applied to every interaction detail (button disabling, drag-and-drop styling,
+  expand/collapse, hover states, responsive breakpoints) across every prior phase —
+  note explicitly in §20 which specific things were newly confirmed by actually
+  clicking through them, versus still only code-reviewed, so the next reader knows the
+  true state rather than assuming this pass closed every such gap.
+- Do not add new pages, new API calls, or new visual design work — that's Phases 1–8's
+  territory, already closed. This phase only confirms what's already built actually
+  works end to end and looks demo-ready.

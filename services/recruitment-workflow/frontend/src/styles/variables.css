@@ -1,21 +1,68 @@
-/* Shared design tokens. Plain CSS custom properties -- no CSS-in-JS, no theme library. */
+/* Shared design tokens. Plain CSS custom properties -- no CSS-in-JS, no theme library.
+   Every page/component pulls colors, spacing, radii, shadows, and type sizes from
+   here so the app reads as one consistent product rather than five separately-styled
+   pages (see FRONTEND_HANDOFF.md §15). */
 :root {
+  /* Base surfaces */
   --color-bg: #f7f8fa;
   --color-surface: #ffffff;
   --color-border: #e2e5ea;
   --color-text: #1f2430;
   --color-text-muted: #6b7280;
+
+  /* Brand / primary action */
   --color-primary: #2f5fdb;
   --color-primary-hover: #2549ad;
+  --color-primary-bg: #eaf0fd;
+
+  /* A slightly cooler tint than --color-bg, used for hover states on rows/cards --
+     one shared value instead of each page inventing its own near-identical hex. */
+  --color-hover-bg: #f7f9fd;
+  --color-neutral-bg: #f1f2f4;
+
+  /* Semantic status colors -- used only for status/error signal, never decoration
+     (§15). Shared across qualified/matched-requirement/status/evaluation badges so
+     "green" and "red" mean the same thing everywhere in the app. */
   --color-danger: #c0392b;
   --color-danger-bg: #fdecea;
+  --color-success: #1f7a45;
+  --color-success-bg: #e5f7ec;
+  --color-warning: #9a6b0a;
+  --color-warning-bg: #fdf3e0;
+  --color-accent: #6b3fc4;
+  --color-accent-bg: #f1eafd;
 
   --radius: 8px;
+  --radius-pill: 999px;
+
+  /* Subtle elevation only -- a card/surface lift, never a decorative drop shadow. */
+  --shadow-sm: 0 1px 2px rgba(16, 24, 40, 0.06), 0 1px 1px rgba(16, 24, 40, 0.04);
+  --shadow-md: 0 8px 24px rgba(16, 24, 40, 0.10), 0 2px 6px rgba(16, 24, 40, 0.05);
+
   --spacing-1: 4px;
   --spacing-2: 8px;
   --spacing-3: 16px;
   --spacing-4: 24px;
+  --spacing-5: 32px;
+
+  /* A small type scale so heading/body/label sizes are chosen from a fixed set
+     rather than ad hoc rem values scattered per file. */
+  --font-size-xs: 0.75rem;
+  --font-size-sm: 0.85rem;
+  --font-size-base: 0.95rem;
+  --font-size-md: 1rem;
+  --font-size-lg: 1.1rem;
+  --font-size-xl: 1.4rem;
 
   --font-sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial,
     sans-serif;
+
+  /* Hover/focus color changes only -- no new animation beyond this (§15). */
+  --transition-fast: 120ms ease;
 }
+
+/* Custom properties can't be read inside a @media condition, so the two shared
+   breakpoints live here as a plain convention instead of a token: 768px (sidebar
+   collapses to a top bar -- Layout.module.css) and 480px (a second tier for tighter
+   phone-width layouts). Every page's own @media rules below reuse these two literal
+   values rather than inventing a third. */
