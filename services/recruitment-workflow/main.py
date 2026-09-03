@@ -43,6 +43,7 @@ from db import (
     get_scoring_config_by_version,
     insert_webhook_event,
     list_applications_for_job,
+    list_jobs_with_match_counts,
     list_match_results_for_job,
     mark_webhook_event_processed,
     record_interview_result,
@@ -54,9 +55,11 @@ from clients import SecondBrainClientError
 from resume_intelligence_client import ResumeIntelligenceClientError
 from schemas import (
     ApplicationResponse,
+    CandidateIdentityResponse,
     InviteApplicationRequest,
     JobResponse,
     JobSubmissionRequest,
+    JobSummaryResponse,
     LoginRequest,
     LoginResponse,
     MatchResultResponse,
@@ -280,6 +283,29 @@ async def upload_candidate_resume(
             detail = "Resume upload rejected"
         raise HTTPException(status_code=resp.status_code, detail=detail)
     return resp.json()
+
+
+@app.get("/v1/jobs", response_model=list[JobSummaryResponse])
+def get_jobs(
+    db: Session = Depends(get_db),
+    recruiter: Recruiter = Depends(require_recruiter),
+):
+    """
+    Recruiter-facing: a lightweight, newest-first list of every job, for the jobs list
+    page. Deliberately not paginated/filterable/searchable -- this project's current
+    scale doesn't need it (see FRONTEND_HANDOFF.md); revisit only if a real dataset
+    size makes the full list impractical. match_count comes from a single grouped
+    query (list_jobs_with_match_counts), not an N+1 loop.
+    """
+    return [
+        JobSummaryResponse(
+            job_id=job.id,
+            title=job.title,
+            created_at=job.created_at,
+            match_count=match_count,
+        )
+        for job, match_count in list_jobs_with_match_counts(db)
+    ]
 
 
 @app.post("/v1/jobs", response_model=JobResponse, status_code=200)
@@ -700,6 +726,55 @@ def get_job_applications(
     if get_job(db, job_id) is None:
         raise HTTPException(status_code=404, detail="Job not found")
     return [_application_response(a) for a in list_applications_for_job(db, job_id)]
+
+
+# ---------------------------------------------------------------------------
+# Candidate identity -- recruiter-facing, transient proxy to Resume Intelligence
+#
+# RWS's own data is PII-free (candidate_id only); this is the one endpoint that hands
+# the recruiter UI a display name, so a ranked-candidates table isn't just a list of
+# UUIDs. It reuses the exact same resume_intelligence_client.get_contact() call
+# invite_application already makes server-side -- fetched fresh per request, never
+# written to any RWS table. Only name/email are returned: no phone, no raw resume
+# text, no candidate_json (see schemas.CandidateIdentityResponse).
+# ---------------------------------------------------------------------------
+
+@app.get(
+    "/v1/candidates/{candidate_id}/identity",
+    response_model=CandidateIdentityResponse,
+)
+async def get_candidate_identity(
+    candidate_id: uuid.UUID,
+    recruiter: Recruiter = Depends(require_recruiter),
+):
+    """Recruiter-facing candidate display identity. Requires a recruiter JWT -- a
+    service API key does not satisfy this (require_recruiter reads a different header
+    and secret than require_service_key)."""
+    try:
+        contact = await resume_intelligence_client.get_contact(
+            settings.resume_intelligence_url,
+            settings.resume_intelligence_api_key,
+            candidate_id,
+        )
+    except ResumeIntelligenceClientError as exc:
+        # Only the exception type and the (non-PII) candidate_id are logged -- never
+        # the exception message, which can in principle wrap response text from
+        # upstream. The client-facing detail is generic for the same reason: this is a
+        # dependency failure, not something about the request itself worth detailing.
+        logger.error(
+            "candidate_identity_lookup_failed",
+            extra={"error_type": type(exc).__name__, "candidate_id": str(candidate_id)},
+        )
+        raise HTTPException(status_code=502, detail="Resume Intelligence unavailable")
+
+    if contact is None:
+        raise HTTPException(status_code=404, detail="Candidate not found")
+
+    return CandidateIdentityResponse(
+        candidate_id=candidate_id,
+        name=contact["name"],
+        email=contact.get("email"),
+    )
 
 
 # ---------------------------------------------------------------------------

@@ -236,11 +236,11 @@ marked **PROPOSED** are not yet implemented on the backend — see §20.
 | Frontend action | Frontend API function | Endpoint | Key response fields | Expected errors |
 |---|---|---|---|---|
 | Log in | `api/auth.js: login(email, password)` *(exists)* | `POST /v1/auth/login` | `access_token`, `token_type`, `expires_at` | `401` invalid credentials |
-| Upload a resume | `api/resumes.js: uploadResume(file)` *(proposed)* | `POST /v1/resumes` | `candidate_id`, `is_new` | `401` no/invalid JWT · `422` unsupported file type · `502` Resume Intelligence unreachable/failed |
-| List jobs | `api/jobs.js: getJobs()` *(proposed, needs backend work)* | `GET /v1/jobs` **PROPOSED** | not yet defined — likely `job_id`, `title`, `created_at` | n/a until implemented |
+| Upload a resume | `api/resumes.js: uploadResume(file)` *(implemented)* | `POST /v1/resumes` | `candidate_id`, `is_new` | `401` no/invalid JWT · `422` unsupported file type · `502` Resume Intelligence unreachable/failed |
+| List jobs | `api/jobs.js: getJobs()` *(not yet built — backend ready)* | `GET /v1/jobs` **IMPLEMENTED** | `job_id`, `title`, `created_at`, `match_count` (`JobSummaryResponse`, newest-first) | `401` no/invalid JWT |
 | Create a job from a JD | `api/jobs.js: createJob({ title, raw_description, threshold?, top_k?, scoring_config_version? })` *(proposed)* | `POST /v1/jobs` | `job_id`, `job_description_id`, `version`, `title`, `required_skills`, `preferred_skills`, `min_years_experience`, `titles`, `threshold`, `scoring_config_version`, `matches: MatchResultResponse[]` (matches here have `explanation: null` — see next row) | `502` JD structuring / Second Brain retrieval or lookup failed · `422` unknown `scoring_config_version` · `500` no scoring config exists |
 | View ranked candidates | `api/jobs.js: getJobMatches(jobId)` *(proposed)* | `GET /v1/jobs/{job_id}/matches` | `match_id`, `candidate_id`, `semantic_score`, `skill_score`, `experience_score`, `title_score`, `deterministic_score`, `final_score`, `hard_gate_passed`, `matched_requirements`, `missing_requirements`, `qualified`, `explanation` (populated lazily here, unlike the `POST /v1/jobs` response) | `404` job not found |
-| Resolve a candidate's display name | `api/candidates.js: getCandidateIdentity(candidateId)` *(proposed, needs backend work)* | `GET /v1/candidates/{candidate_id}/identity` **PROPOSED** | not yet defined — see §9 for the expected minimal shape | n/a until implemented |
+| Resolve a candidate's display name | `api/candidates.js: getCandidateIdentity(candidateId)` *(not yet built — backend ready)* | `GET /v1/candidates/{candidate_id}/identity` **IMPLEMENTED** | `candidate_id`, `name`, `email` (`CandidateIdentityResponse` — no `phone`, no other fields) | `401` no/invalid JWT · `404` unknown candidate · `502` Resume Intelligence unavailable |
 | Select a qualified candidate | `api/applications.js: selectMatch(matchId)` *(proposed)* | `POST /v1/matches/{match_id}/select` | `ApplicationResponse` (see below) | `404` match not found · `422` not qualified · `409` already selected |
 | Track applications for a job | `api/applications.js: getApplications(jobId)` *(proposed)* | `GET /v1/jobs/{job_id}/applications` | `ApplicationResponse[]` | `404` job not found |
 | Invite to VoiceHR | `api/applications.js: invite(applicationId, language)` *(proposed)* | `POST /v1/applications/{application_id}/invite` | `ApplicationResponse` (now `status: "invited"`) | `404` not found · `409` not invitable in current status · `422` candidate contact not found · `502` contact lookup or VoiceHR call failed |
@@ -305,21 +305,26 @@ at all, only `candidate_id: UUID4`.
 interface — a recruiter cannot meaningfully "select candidate
 `a637c23e-d302-407e-b9cf-27e327715965`."
 
-**The RWS identity proxy** (`GET /v1/candidates/{candidate_id}/identity`) is
-**PROPOSED, not yet implemented**. The pattern it should follow already exists and
-works in RWS today for a different purpose: `resume_intelligence_client.get_contact()`
-(used internally, server-side only, inside `invite_application` to fetch a candidate's
-name/email right before calling VoiceHR — never returned to any HTTP caller today). The
-identity endpoint should be a thin, JWT-protected wrapper around that same call:
-- Resume Intelligence remains the PII owner; RWS never persists what it returns.
+**The RWS identity proxy** (`GET /v1/candidates/{candidate_id}/identity`) is now
+**IMPLEMENTED and live-verified** (see §20). It is exactly the thin, JWT-protected
+wrapper this section originally proposed, built directly on top of the existing
+`resume_intelligence_client.get_contact()` call (previously internal-only, used by
+`invite_application`):
+- Resume Intelligence remains the PII owner; RWS never persists what it returns — the
+  route (`get_candidate_identity` in `main.py`) takes no `db` parameter at all, so
+  there is nothing for it to write to.
 - The call is transient — made fresh per request, not cached in RWS's own database.
-- The response should carry the minimum needed for display: a `name`. Do not add
-  `phone` to this endpoint or render it anywhere in this frontend unless a concrete
-  screen genuinely needs it (none currently does — invitation is entirely server-side
-  in RWS already, via the existing internal `get_contact()` call). `email` may be
-  present in the payload (Resume Intelligence's `ContactLookupResponse` includes it),
-  but the frontend should not render it by default in list views — keep the visible
-  surface to `name` unless a specific screen has a stated reason to show more.
+- The response (`CandidateIdentityResponse`, `extra="forbid"`) carries only
+  `candidate_id`, `name`, and `email` (`Optional[EmailStr]`). No `phone`, no
+  `candidate_json`, no other field — confirmed by test (`phone` asserted absent from
+  the response body). Do not render `phone` anywhere in this frontend; nothing
+  currently needs it (invitation is entirely server-side in RWS already, via the
+  existing internal `get_contact()` call). `email` is present in the payload but the
+  frontend should not render it by default in list views — keep the visible surface to
+  `name` unless a specific screen has a stated reason to show more.
+- Unknown `candidate_id` → `404`; Resume Intelligence unreachable/failed → `502` with a
+  generic `detail` (no upstream exception text, no PII, in either the response or RWS's
+  own logs).
 
 **Frontend caching rule**: `useCandidateIdentity` caches resolved names in an
 in-memory `Map`, scoped to the current browser session/runtime only (a plain module
@@ -348,8 +353,8 @@ reloads.
 
 ### JobsListPage — **placeholder only**
 - **Purpose**: landing page after login; browse existing jobs, start a new one.
-- **API calls (planned)**: `GET /v1/jobs` **(needs backend work first)**, `POST
-  /v1/jobs`.
+- **API calls (planned)**: `GET /v1/jobs` **(implemented on RWS, not yet called from
+  this page)**, `POST /v1/jobs`.
 - **Primary components (planned)**: `JobCard` list, an inline "New Job" form (title +
   JD textarea, threshold/top_k tucked behind a collapsed "Advanced" section with the
   backend's own defaults — `threshold=0.6`, `top_k=20` — pre-filled).
@@ -360,18 +365,32 @@ reloads.
   started." / error banner with backend `detail`.
 - **Navigation behavior**: clicking a job card → `/jobs/:jobId`.
 
-### ResumeUploadPage — **placeholder only**
+### ResumeUploadPage — **implemented**
 - **Purpose**: add a candidate's resume to the pool (independent of any specific job).
-- **API calls (planned)**: `POST /v1/resumes` via `api/resumes.js: uploadResume(file)`.
-- **Primary components (planned)**: file input (`accept=".pdf,.docx,.jpg,.jpeg,.png"`
-  as a UX hint only — the backend is authoritative on rejection), result panel.
-- **State (planned)**: selected `file`, `uploading`, `result` (`{candidate_id, is_new}`
-  or `null`), `error`.
-- **Actions (planned)**: pick file → submit → show `candidate_id`/`is_new` on success.
-- **Loading/empty/error**: "Uploading…" / no explicit empty state (form-only page) /
-  error banner with backend `detail` (e.g. `422` for an unsupported type).
-- **Navigation behavior**: none required — a standalone action; no forced redirect
-  after success.
+- **API calls**: `POST /v1/resumes` via `api/resumes.js: uploadResume(file)` — builds a
+  `FormData` with one `file` field and posts it through the shared `api/client.js`
+  wrapper (no `Content-Type` set manually; the browser sets the multipart boundary).
+- **Primary components**: a single click-or-drop zone (native HTML5 drag-and-drop
+  events, no library), `accept=".pdf,.docx,.jpg,.jpeg,.png"` on the underlying file
+  input as a UX hint only (the backend is authoritative on rejection), a selected-file
+  chip with a Remove action, and a success panel.
+- **State**: `file`, `status` (`"idle" | "uploading" | "success" | "error"`), `result`
+  (`{candidate_id, is_new} | null`), `error`, `dragActive` — all local `useState`, no
+  page-external state.
+- **Actions**: choose/drop a file → Upload (disabled while no file is selected or a
+  request is in flight) → on success, shows `candidate_id` and a plain-language
+  new/deduplicated message derived from `is_new`; "Upload another resume" resets to a
+  clean `idle` state for a new attempt.
+- **Loading state**: Upload button reads "Uploading…" and is disabled; the drop zone
+  and file input are also disabled during the request, preventing both a second submit
+  and a mid-upload file swap.
+- **Empty state**: no file selected → Upload button stays disabled; no separate
+  "empty" message needed since the drop zone's own idle copy covers it.
+- **Error state**: inline banner rendering the backend's own `detail` verbatim via
+  `ApiError.message` (`422` unsupported type, `502` integration failure, or the
+  generic network-failure message from `client.js`).
+- **Navigation behavior**: none forced — a standalone action; deliberately no link to a
+  candidate-detail page (none exists yet).
 
 ### JobDetailPage (`/jobs/:jobId`) — **placeholder only**
 - **Purpose**: the ranked-candidates view — the core recruiter screen.
@@ -672,9 +691,12 @@ future phase.
 ## 19. Implementation phases
 
 - [x] **Phase 1 — React/Vite foundation + auth**
-- [ ] **Phase 2 — Resume upload**
-- [ ] **Phase 3 — Jobs list + job creation** *(blocked on `GET /v1/jobs` backend work — see §20/§21)*
-- [ ] **Phase 4 — Candidate ranking / identity / selection** *(blocked on `GET /v1/candidates/{id}/identity` backend work)*
+- [x] **Phase 2 — Resume upload**
+- [ ] **Phase 3 — Jobs list + job creation** *(both backend prerequisites — `GET
+  /v1/jobs` and `GET /v1/candidates/{id}/identity` — are now implemented and
+  live-verified on RWS; see §20 and §24. No frontend work has landed yet.)*
+- [ ] **Phase 4 — Candidate ranking / identity / selection** *(no longer backend-blocked
+  — `GET /v1/candidates/{candidate_id}/identity` is implemented; see §24)*
 - [ ] **Phase 5 — Applications + invitation**
 - [ ] **Phase 6 — Polling + VoiceHR assessment display**
 - [ ] **Phase 7 — Accept/reject**
@@ -702,41 +724,83 @@ already captured here — extend it.
 - `src/pages/Layout.jsx` + `.module.css`, `src/components/Sidebar.jsx` + `.module.css`,
   `src/components/TopBar.jsx` + `.module.css`.
 - `src/pages/LoginPage.jsx` + `.module.css` — fully functional, not a placeholder.
-- `src/pages/JobsListPage.jsx`, `ResumeUploadPage.jsx`, `JobDetailPage.jsx`,
-  `ApplicationsPage.jsx` — **placeholder content only** (a heading + "coming in a
-  future pass"), routes wired correctly including `:jobId` param extraction.
+- `src/pages/ResumeUploadPage.jsx` + `.module.css` — **fully functional as of this
+  pass** (see below): click-or-drop file selection, upload via `api/resumes.js`,
+  loading/success/error states, "Upload another resume" reset.
+- `src/api/resumes.js` (`uploadResume(file)`) — new, this pass.
+- `src/api/client.js`'s `request()` — extended this pass to accept a `FormData` body
+  (used by `uploadResume`) alongside the existing JSON-body path; no `Content-Type` is
+  set when the body is `FormData`, so the browser supplies the correct multipart
+  boundary itself. The JSON path (used by `login()`) is unchanged.
+- `src/pages/JobsListPage.jsx`, `JobDetailPage.jsx`, `ApplicationsPage.jsx` —
+  **placeholder content only** (a heading + "coming in a future pass"), routes wired
+  correctly including `:jobId` param extraction.
 - `src/styles/variables.css`, `src/styles/global.css`.
-- **Not yet created**: `src/api/jobs.js`, `applications.js`, `candidates.js`,
-  `resumes.js`; `src/hooks/` directory (does not exist yet — no `useAsync`,
-  `usePolling`, or `useCandidateIdentity` implemented); any component beyond
-  `Sidebar`/`TopBar` (`StatusBadge`, `ScoreBar`, `RequirementChips`, etc. do not exist
-  yet).
+- **Not yet created**: `src/api/jobs.js`, `applications.js`, `candidates.js`;
+  `src/hooks/` directory (does not exist yet — no `useAsync`, `usePolling`, or
+  `useCandidateIdentity` implemented); any component beyond `Sidebar`/`TopBar`
+  (`StatusBadge`, `ScoreBar`, `RequirementChips`, etc. do not exist yet).
 
-**Build verified**: `npm install` (66 packages, 0 errors) and `npm run build` (53
-modules, built cleanly in ~1.6s, `dist/` produced) both succeeded.
+**Build verified**: `npm install` (66 packages, 0 errors) and `npm run build` both
+succeeded, both before this pass (53 modules) and after adding resume upload (55
+modules, built cleanly in ~1.6s, `dist/` produced).
 
-**Live-tested**: `POST /v1/auth/login` through the Vite dev proxy against the real
-running RWS container — valid credentials returned a real JWT (`200`); invalid password
-returned the real backend `401` with `{"detail": "Invalid email or password"}`. Not yet
-tested: the rendered UI in an actual browser (no browser available in the environment
-this was built in) — verification so far is at the network-contract level plus a clean
-production build.
+**Live-tested — login (prior pass)**: `POST /v1/auth/login` through the Vite dev proxy
+against the real running RWS container — valid credentials returned a real JWT (`200`);
+invalid password returned the real backend `401` with `{"detail": "Invalid email or
+password"}`.
 
-**Known backend prerequisites — do not build frontend features against these as if they
-exist**:
-- `GET /v1/jobs` (list all jobs) — **not implemented on RWS**. Required for
-  `JobsListPage` to show anything beyond jobs created in the current browser session.
-- `GET /v1/candidates/{candidate_id}/identity` — **not implemented on RWS**. Required
-  before any candidate name can be displayed anywhere (§9). The closest existing
-  precedent is `resume_intelligence_client.get_contact()`, already used internally by
-  `invite_application` but never exposed over HTTP to RWS's own callers.
+**Live-tested — resume upload (this pass)**, through the exact request path
+`ResumeUploadPage`/`api/resumes.js` use (Vite dev proxy → real RWS container → real
+Resume Intelligence → real Gemini → real Postgres):
+- Unauthenticated upload attempt → real `401` (matches `client.js`'s expected shape).
+- Authenticated upload, unsupported extension (`.exe`) → real `422` with
+  `{"detail": "Unsupported file type '.exe'. Allowed: [...]"}`.
+- Authenticated upload, a real `.docx` resume → first attempt hit a transient Gemini
+  `503` (high demand) and correctly surfaced as RWS's own `502` — a real, honest
+  external-condition result, not a code defect; production model configuration was not
+  changed to work around it. A retry of the same real action succeeded end to end:
+  real `201` with `{"candidate_id": "1cca02e3-...", "is_new": true}`, independently
+  confirmed present in `resume_intel.candidates` via `psql` against the live container.
+- Not yet tested: the rendered UI in an actual browser (no browser available in the
+  environment this was built in, in either this pass or the previous one) — verification
+  is at the network-contract level (the exact requests the app's own code issues,
+  through the exact dev proxy path it uses) plus a clean production build. Interaction
+  details that only a browser can confirm (button disabling during upload, drop-zone
+  drag styling, the success panel actually rendering) were verified by code review, not
+  by clicking through them.
+
+**Backend prerequisites — both now implemented and live-verified on RWS** (this pass;
+no frontend code was touched):
+- `GET /v1/jobs` — recruiter-JWT-protected, newest-first, returns
+  `JobSummaryResponse[]` (`job_id`, `title`, `created_at`, `match_count`); a service API
+  key does not satisfy the JWT requirement. `match_count` comes from a single grouped
+  query (`db.py: list_jobs_with_match_counts`, `LEFT JOIN` + `GROUP BY Job.id`), not an
+  N+1 loop. Empty database → `[]`.
+- `GET /v1/candidates/{candidate_id}/identity` — recruiter-JWT-protected, transiently
+  proxies `resume_intelligence_client.get_contact()`, returns
+  `CandidateIdentityResponse` (`candidate_id`, `name`, `email`; no `phone`, no other
+  field). The route declares no `db` dependency, so RWS persists nothing from this
+  call. Unknown candidate → `404`; Resume Intelligence unavailable → `502` with a
+  generic detail (no upstream exception text or PII in the response or in RWS's logs).
+
+Both verified with real requests against the live Docker Compose stack (`csb-
+recruitment-workflow` rebuilt and recreated for this pass): `GET /v1/jobs` returned the
+one real seeded job (`"Backend Engineer"`, `match_count: 5`); `GET /v1/candidates/
+7e664e04-4230-47d1-918d-461b97e0d11d/identity` returned Jean Dupont's real name/email
+from the live Resume Intelligence container with no `phone` field; an unknown
+candidate ID returned a real `404`; both endpoints returned `401` without a JWT and
+`401` with a service API key instead of one. RWS's own request logs during these calls
+contain only status lines and opaque UUIDs — no candidate name/email. 27/27 RWS tests
+pass (`tests/test_jobs_list.py`, new — 8 tests; `tests/test_candidate_identity.py`, new
+— 6 tests; plus the 13 pre-existing resume-upload tests, unaffected).
 
 Confirmed via a direct route-decorator grep of `services/recruitment-workflow/main.py`
-at the time of writing: `/health`, `/v1/auth/login`, `/v1/resumes`, `/v1/jobs` (POST
-only), `/v1/jobs/{job_id}/matches`, `/v1/scoring-configs`, `/v1/matches/{match_id}/
-select`, `/v1/applications/{application_id}/accept`, `/v1/applications/{application_id}/
-reject`, `/v1/jobs/{job_id}/applications`, `/v1/applications/{application_id}/invite`,
-`/v1/webhooks/voicehr` — no others exist.
+at the time of writing: `/health`, `/v1/auth/login`, `/v1/resumes`, `/v1/jobs` (GET +
+POST), `/v1/jobs/{job_id}/matches`, `/v1/candidates/{candidate_id}/identity`, `/v1/
+scoring-configs`, `/v1/matches/{match_id}/select`, `/v1/applications/{application_id}/
+accept`, `/v1/applications/{application_id}/reject`, `/v1/jobs/{job_id}/applications`,
+`/v1/applications/{application_id}/invite`, `/v1/webhooks/voicehr` — no others exist.
 
 ---
 
@@ -806,18 +870,35 @@ Before starting frontend work:
 
 ## 24. [NEXT]
 
-**React/Vite frontend foundation + recruiter authentication.**
+**Phase 2 — Resume upload** is done and verified (§19, §20). This pass (backend-only,
+no frontend code touched) implemented and live-verified RWS's two remaining frontend
+blockers: `GET /v1/jobs` and `GET /v1/candidates/{candidate_id}/identity` (§7, §9,
+§20). Every endpoint every planned page needs now exists on RWS.
 
-Verified against the repository at the time of writing: this is **already
-implemented** (§19 Phase 1, §20) — login, JWT storage/handling, protected routing, and
-the app shell all exist and were live-tested against the real RWS login endpoint.
+**React Jobs experience: Jobs list + create job + ranked candidate display + transient
+candidate identity resolution.**
 
-The next bounded task, not yet started, is **Phase 2 — Resume upload**: build
-`src/api/resumes.js` (`uploadResume(file)`, `POST /v1/resumes`, `multipart/form-data`)
-and wire it into `ResumeUploadPage` (file picker, upload action, result panel showing
-`candidate_id`/`is_new`, error banner on `422`/`502`). This has no backend prerequisite
-— `POST /v1/resumes` already exists and is JWT-protected today.
+- Build `src/api/jobs.js` with `getJobs()` (`GET /v1/jobs`), `createJob({ title,
+  raw_description, threshold?, top_k? })` (`POST /v1/jobs`), and `getJobMatches(jobId)`
+  (`GET /v1/jobs/{job_id}/matches`).
+- Build `src/api/candidates.js` with `getCandidateIdentity(candidateId)` (`GET
+  /v1/candidates/{candidate_id}/identity`).
+- Turn `JobsListPage` into a real browsable list — fetch `GET /v1/jobs`, render each
+  job's `title`/`created_at`/`match_count`, plus the "New Job" creation form (title + JD
+  textarea, threshold/top_k behind a collapsed "Advanced" section with the backend's own
+  defaults). On successful creation, navigate to `/jobs/:jobId`.
+- Build the real `JobDetailPage`: header (title/requirements/threshold from the `POST
+  /v1/jobs` response, or re-fetched) + ranked candidates table using `GET
+  /v1/jobs/{job_id}/matches` for the score breakdown and lazily-populated `explanation`
+  (§11) — every field listed in §11, displayed as-is, never recalculated.
+- Build `hooks/useCandidateIdentity.js` (§8, §9): resolves and caches `name`/`email` per
+  `candidate_id` in an in-memory `Map` scoped to the current session only (not
+  `sessionStorage`/`localStorage`); each `CandidateRow` uses it to show a resolved name
+  instead of a bare UUID. Do not render `email` by default in the row — keep the visible
+  surface to `name` per §9.
+- Selecting a candidate (`POST /v1/matches/{match_id}/select`) may be included if it
+  fits in the same bounded pass, but `ApplicationsPage` itself stays a placeholder —
+  that's Phase 5.
 
-Do not start Phase 3 (jobs list) in the same pass as Phase 2 — Phase 3 additionally
-requires the `GET /v1/jobs` backend endpoint, which is a separate, explicit backend
-task outside this frontend-only document's authority to schedule.
+Follow §11's hard rule: the frontend renders `MatchResult` fields as-is and never
+recomputes `qualified`/`final_score`/any component score.

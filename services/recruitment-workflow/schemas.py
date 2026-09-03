@@ -74,6 +74,19 @@ class JobResponse(BaseModel):
     matches: list[MatchResultResponse]
 
 
+class JobSummaryResponse(BaseModel):
+    """Lightweight row for the recruiter-facing GET /v1/jobs list -- deliberately not
+    JobResponse: no requirements/threshold/matches, just enough to identify a job and
+    jump into it. match_count is the number of persisted MatchResults for the job."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    job_id: UUID4
+    title: str = Field(min_length=1, max_length=200)
+    created_at: datetime
+    match_count: int = Field(ge=0)
+
+
 # ---------------------------------------------------------------------------
 # Scoring config admin
 # ---------------------------------------------------------------------------
@@ -133,6 +146,24 @@ class LoginResponse(BaseModel):
     access_token: str
     token_type: Literal["bearer"] = "bearer"
     expires_at: datetime
+
+
+# ---------------------------------------------------------------------------
+# Candidate identity (recruiter-facing, transient proxy to Resume Intelligence)
+#
+# RWS's own data (MatchResult, Application) is deliberately PII-free -- every
+# candidate reference is an opaque candidate_id. This is the one place RWS hands the
+# recruiter UI a display name, fetched fresh per request from Resume Intelligence and
+# never persisted here. Deliberately minimal: no phone, no raw resume text, no
+# candidate_json -- see main.py's get_candidate_identity.
+# ---------------------------------------------------------------------------
+
+class CandidateIdentityResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    candidate_id: UUID4
+    name: str = Field(min_length=1, max_length=200)
+    email: Optional[EmailStr] = None
 
 
 # ---------------------------------------------------------------------------

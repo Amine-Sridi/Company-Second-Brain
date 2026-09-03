@@ -1,7 +1,8 @@
 // Thin fetch wrapper -- the one place that knows how to attach the JWT, how to detect
 // session expiry, and how to normalize backend errors. Every other API module (auth.js,
-// and future ones for jobs/applications/etc.) calls through this instead of using fetch
-// directly.
+// resumes.js, and future ones for jobs/applications/etc.) calls through this instead of
+// using fetch directly. Handles both plain JSON bodies and multipart FormData bodies
+// (resume upload).
 //
 // All paths passed in must be relative ("/v1/...") -- never an absolute URL to another
 // service. The browser talks only to RWS; Resume Intelligence, Second Brain, and
@@ -21,13 +22,18 @@ export class ApiError extends Error {
  * @param {string} path - relative API path, e.g. "/v1/auth/login"
  * @param {object} [options]
  * @param {"GET"|"POST"|"PUT"|"DELETE"} [options.method]
- * @param {object} [options.body] - JSON-serializable request body
+ * @param {object|FormData} [options.body] - a JSON-serializable object, or a FormData
+ *   instance for multipart uploads (e.g. resume upload). FormData bodies are passed
+ *   through untouched and get no Content-Type header from this wrapper -- the browser
+ *   sets it itself, including the multipart boundary; setting it manually would break
+ *   the upload.
  * @param {boolean} [options.skipAuth] - don't attach the Authorization header, and
  *   don't treat a 401 as "session expired" (used only by the login call itself, which
  *   has no token yet and whose own 401 means "wrong credentials", not "expired session")
  */
 export async function request(path, { method = "GET", body, skipAuth = false } = {}) {
-  const headers = { "Content-Type": "application/json" };
+  const isFormData = body instanceof FormData;
+  const headers = isFormData ? {} : { "Content-Type": "application/json" };
 
   if (!skipAuth) {
     const token = getToken();
@@ -39,7 +45,7 @@ export async function request(path, { method = "GET", body, skipAuth = false } =
     response = await fetch(path, {
       method,
       headers,
-      body: body === undefined ? undefined : JSON.stringify(body),
+      body: body === undefined ? undefined : isFormData ? body : JSON.stringify(body),
     });
   } catch {
     throw new ApiError(0, "Unable to reach the server. Check your connection and try again.");

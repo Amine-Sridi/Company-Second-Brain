@@ -1795,12 +1795,86 @@ implementation — see the bootstrap instructions.
     exposed client-side; no email-ingestion/inbox workflow was implemented (only kept
     compatible); no change to parsing, dedup, scoring, or Second Brain behavior.
 
+- **RWS API surface: two new recruiter-facing GET endpoints, built to unblock the React
+  frontend** (`GET /v1/jobs`, `GET /v1/candidates/{candidate_id}/identity`) — DONE, verified live.
+  - **Context**: `FRONTEND_HANDOFF.md` had re-scoped its `[NEXT]` around exactly these two missing
+    endpoints after Phase 2 (resume upload) landed. This task built both, and only both — no
+    frontend code was touched.
+  - **`GET /v1/jobs`**: recruiter-JWT-protected (`require_recruiter`; a service API key does not
+    substitute), newest-first, returns a new `JobSummaryResponse` (`extra="forbid"`): `job_id`,
+    `title`, `created_at`, `match_count`. `match_count` comes from a new `db.py` query,
+    `list_jobs_with_match_counts` — a single `LEFT JOIN MatchResult ON job_id GROUP BY Job.id`
+    query, not an N+1 per-job loop (Postgres allows `ORDER BY created_at DESC` here without adding
+    it to `GROUP BY`, since every column is functionally dependent once grouped by the primary
+    key). Deliberately no pagination/filtering/search/edit/delete/rescore, matching the existing
+    project-wide "no infrastructure ahead of a demonstrated need" rule.
+  - **`GET /v1/candidates/{candidate_id}/identity`**: recruiter-JWT-protected, transiently proxies
+    the existing `resume_intelligence_client.get_contact()` (previously internal-only, used by
+    `invite_application`) and returns a new `CandidateIdentityResponse` (`extra="forbid"`):
+    `candidate_id`, `name`, `email: Optional[EmailStr]` — no `phone`, no `candidate_json`, no other
+    field. The route (`get_candidate_identity` in `main.py`) deliberately declares no `db`
+    parameter at all — literal, verifiable proof RWS persists nothing from this call, satisfying
+    "RWS must NOT persist candidate identity/PII" by construction rather than by convention.
+    Unknown candidate → `404`; Resume Intelligence unreachable/failed → `502` with a generic
+    `detail` — this route uses a stricter PII-safe logging pattern than the pre-existing
+    `invite_application` code (only `type(exc).__name__` and the candidate_id are logged, never the
+    exception message, which can in principle wrap upstream response text), since this endpoint's
+    entire purpose is displaying PII and the bar for leak-safety is correspondingly higher.
+    Correlation-ID propagation is automatic via `shared.http_client.call_service()`'s existing
+    contextvar wiring — no endpoint-level code was needed for it.
+  - **Tests**: two new focused files, following the existing `tests/test_resume_upload.py`
+    fixture pattern (`monkeypatch` on `get_recruiter_by_id`, `dependency_overrides[get_db]`, a real
+    `TestClient(main.app)`, no live Postgres needed for these). `tests/test_jobs_list.py` (8
+    tests): JWT required, service key rejected, empty list, multiple jobs newest-first,
+    `match_count` correctness, and that the response never carries `JobResponse`-only fields
+    (`threshold`/`matches`/`required_skills`). `tests/test_candidate_identity.py` (6 tests): JWT
+    required, service key rejected, successful lookup with correct `candidate_id`/`name`/`email`,
+    `phone` and all other fields absent from the response, unknown candidate → `404`, Resume
+    Intelligence failure → `502` without leaking exception text into the response or logs, and a
+    direct `inspect.signature` assertion that `get_candidate_identity` has no `db` parameter.
+  - **Full regression, host-side**: **27/27 passed** (13 pre-existing resume-upload tests + 8 new
+    jobs-list + 6 new candidate-identity). One environmental fragility was found and worked around
+    in the invocation, not the code: running pytest with `SERVICE_API_KEY=test` false-failed two
+    *pre-existing* log-leak assertions, because Starlette's `TestClient` logs requests against
+    `http://testserver`, and the literal substring `test` (the deliberately weak key value) is
+    trivially contained in `testserver` — a coincidence of the chosen test env value, not a real
+    leak or a code defect. Re-run with realistic, non-substring env values (e.g.
+    `SERVICE_API_KEY=serviceapikeyvalue`) passed cleanly; no application or test code was changed
+    to produce this result.
+  - **Live end-to-end smoke test, real running stack** (`csb-recruitment-workflow` rebuilt via
+    `docker compose -f infra/docker-compose.yml build recruitment-workflow` and recreated via
+    `up -d --no-deps --force-recreate recruitment-workflow`, confirmed healthy): logged in as the
+    real seeded recruiter to get a genuine JWT, then — `GET /v1/jobs` returned the one real job
+    already in the database (`"Backend Engineer"`, `match_count: 5`, matching a direct `psql`
+    count of its `match_results` rows); `GET /v1/candidates/{id}/identity` for the known real
+    candidate `7e664e04-4230-47d1-918d-461b97e0d11d` returned `{"candidate_id": "...", "name":
+    "Jean Dupont", "email": "jean.dupont@example.com"}` with no `phone` field, sourced live from
+    the real running Resume Intelligence container; an unknown candidate UUID returned a real
+    `404`; both endpoints returned `401` with no `Authorization` header and `401` when a service
+    API key was sent instead of a JWT. `docker logs csb-recruitment-workflow` for these requests
+    was inspected directly and contains only access-log lines with opaque UUIDs — no candidate name
+    or email anywhere in the container's logs. `recruitment.*` was also confirmed to have no
+    PII-shaped table at all (`\dt recruitment.*`: `applications`, `interview_webhook_events`,
+    `job_descriptions`, `jobs`, `match_explanations`, `match_results`, `recruiter_decisions`,
+    `recruiters`, `scoring_configs` — nothing resembling a candidate-identity cache), independently
+    confirming the "no persistence" design claim at the schema level, not just the code level.
+  - **Not done this pass, deliberately**: no pagination/filtering/search/edit/delete/rescore on
+    `/v1/jobs`; no `phone` or other PII field added to the identity response; no RBAC; no scoring,
+    `MatchResult`, or workflow-state changes; no frontend UI code written (per the task's own
+    explicit scope).
+  - **Documentation**: `FRONTEND_HANDOFF.md` §7 (API contract map), §9 (candidate identity/PII
+    section), §10 (`JobsListPage` spec), §19 (phase checklist), and §20 (verified current state)
+    all updated to reflect both endpoints as IMPLEMENTED; §24 `[NEXT]` rewritten to: "React Jobs
+    experience: Jobs list + create job + ranked candidate display + transient candidate identity
+    resolution." No frontend UI work was started in this task, per its own explicit scope.
+
 ## Exact Next Steps
 
-Nothing is currently marked `[NEXT]`. The upload-authentication boundary is now fully decided
-and implemented: admin/recruiter uploads go through RWS's JWT-protected endpoint, which forwards
-to Resume Intelligence's own now-service-key-protected endpoint. The items below predate this
-work and remain genuine open design questions, not gaps surfaced by this session.
+Nothing is currently marked `[NEXT]` on this file. `FRONTEND_HANDOFF.md` §24 now names the next
+frontend task ("React Jobs experience..."), now fully unblocked on the backend side — see that
+file for the bounded task description; it is out of this file's scope to schedule frontend-only
+work. The items below predate this session's work and remain genuine open design questions, not
+gaps surfaced by this session.
 
 1. Nothing currently reads `second_brain.candidate_feedback` — it's a write-back sink only.
    Whether/how it should ever influence retrieval or scoring (e.g. down-weighting a candidate

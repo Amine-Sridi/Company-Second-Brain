@@ -364,6 +364,27 @@ def get_job(db: Session, job_id: uuid.UUID) -> Optional[Job]:
     return db.query(Job).filter(Job.id == job_id).first()
 
 
+def list_jobs_with_match_counts(db: Session) -> list[tuple[Job, int]]:
+    """
+    Every job, newest first, paired with how many MatchResults exist for it -- one
+    query (LEFT JOIN + GROUP BY), not N+1 and not a per-job subquery loop. No
+    pagination/filtering/search: recruiter-facing GET /v1/jobs is intentionally a
+    lightweight full list, not a browsing API (see FRONTEND_HANDOFF.md).
+
+    Grouping by Job.id (the primary key) and ordering by Job.created_at is valid
+    Postgres SQL without adding created_at to GROUP BY -- every other column of a
+    table is functionally dependent once grouped by its primary key.
+    """
+    rows = (
+        db.query(Job, func.count(MatchResult.id).label("match_count"))
+        .outerjoin(MatchResult, MatchResult.job_id == Job.id)
+        .group_by(Job.id)
+        .order_by(Job.created_at.desc())
+        .all()
+    )
+    return [(job, match_count) for job, match_count in rows]
+
+
 def get_latest_scoring_config(db: Session) -> Optional[ScoringConfig]:
     return db.query(ScoringConfig).order_by(ScoringConfig.version.desc()).first()
 
