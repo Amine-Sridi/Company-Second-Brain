@@ -242,6 +242,16 @@ function ApplicationRow({ application, onUpdated }) {
       <tr
         className={hasAssessment ? styles.row : undefined}
         onClick={hasAssessment ? () => setExpanded((value) => !value) : undefined}
+        onKeyDown={
+          hasAssessment
+            ? (event) => {
+                if (event.key === "Enter" || event.key === " ") {
+                  if (event.key === " ") event.preventDefault();
+                  setExpanded((value) => !value);
+                }
+              }
+            : undefined
+        }
         role={hasAssessment ? "button" : undefined}
         tabIndex={hasAssessment ? 0 : undefined}
       >

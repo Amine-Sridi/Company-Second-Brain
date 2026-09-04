@@ -152,6 +152,12 @@ function CandidateRow({ match }) {
       <tr
         className={styles.row}
         onClick={() => setExpanded((value) => !value)}
+        onKeyDown={(event) => {
+          if (event.key === "Enter" || event.key === " ") {
+            if (event.key === " ") event.preventDefault();
+            setExpanded((value) => !value);
+          }
+        }}
         role="button"
         tabIndex={0}
       >

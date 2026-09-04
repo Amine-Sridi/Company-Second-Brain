@@ -913,7 +913,11 @@ future phase.
 - [x] **Phase 7 — Accept/reject**
 - [x] **Phase 8 — Visual polish / responsive states**
 - [x] **Phase 9 — Docker production build + FastAPI serving**
-- [ ] **Phase 10 — Final frontend E2E/demo audit** *(next — see §24)*
+- [x] **Phase 10 — Final frontend E2E/demo audit** *(one finding, M1, fixed post-audit
+  — see §20/§24)*
+
+**The frontend is feature-complete and demo-ready.** All ten phases are done. §24 now
+points to whole-system demo preparation, not further frontend feature work.
 
 Future sessions: update the checkboxes and the relevant page/section status above as
 each phase lands. Do not duplicate this checklist elsewhere or restate history that's
@@ -951,16 +955,20 @@ already captured here — extend it.
 - `src/pages/JobDetailPage.jsx` + `.module.css` — fully functional: fetches and renders
   real ranked matches, with per-row candidate-identity resolution, expandable
   score/requirements/explanation detail, candidate selection, and a "View
-  Applications" header link to `/jobs/:jobId/applications`; `.module.css` restyled
-  this pass, `.jsx` untouched.
+  Applications" header link to `/jobs/:jobId/applications`. `.module.css` restyled in
+  the Phase 8 pass; `.jsx` gained a real `onKeyDown` handler on `CandidateRow`'s
+  expandable row this pass (Phase 10 finding M1 — Enter/Space now toggle expansion,
+  matching the existing `onClick`) — no other line changed.
 - `src/pages/ApplicationsPage.jsx` + `.module.css` — fully functional: fetches and
   renders the real applications list for a job, per-row candidate-identity resolution,
   status + interview-status display, Invite/Resend Invite, background polling while
   any application is `"invited"`, a real `AssessmentPanel` rendering
   `interview_assessment` once an interview completes, and Accept/Reject decision
   buttons, disabled while a decision is pending, terminal "Accepted ✓"/"Rejected"
-  labels once decided, and a native `window.confirm()` guard on Reject only;
-  `.module.css` restyled this pass, `.jsx` untouched.
+  labels once decided, and a native `window.confirm()` guard on Reject only.
+  `.module.css` restyled in the Phase 8 pass; `.jsx` gained the same `onKeyDown` fix on
+  `ApplicationRow`'s expandable row this pass, kept conditional on `hasAssessment`
+  exactly like the existing `onClick`/`role`/`tabIndex` — no other line changed.
 - `src/api/jobs.js` (`getJobs()`, `createJob()`, `getJobMatches()`).
 - `src/api/candidates.js` (`getCandidateIdentity()`).
 - `src/api/applications.js` — `selectMatch()`, `getApplications(jobId)`,
@@ -1001,9 +1009,10 @@ already captured here — extend it.
   `**/frontend/node_modules/`/`**/frontend/dist/` plus standard Python/VCS hygiene from
   the Docker build context shared by `recruitment-workflow`/`resume-intelligence`/
   `second-brain` (§17).
-- **Not yet built**: nothing remaining in the Applications flow itself, and the app is
-  now packaged for production same-origin serving. Remaining work is Phase 10 (final
-  E2E/demo audit) — see §24.
+- **Not yet built**: nothing. The frontend is feature-complete: every planned page,
+  API integration, and workflow transition exists and is live-verified; the app is
+  packaged for production same-origin serving; the one code finding (M1) from the
+  Phase 10 audit is fixed. §24 no longer names frontend feature work.
 
 **Build verified**: `npm install` (66 packages, 0 errors) and `npm run build` both
 succeeded after the visual-polish pass — still 63 modules, JS bundle size unchanged
@@ -1059,7 +1068,7 @@ network call was added, changed, or removed this pass):
   DOM structure each page's `.jsx` already produces (unchanged this pass), not by
   loading the app in a browser and resizing it.
 
-**Live-tested — Production Docker build + FastAPI serving (this pass)**, against the
+**Live-tested — Production Docker build + FastAPI serving (prior pass)**, against the
 real Docker Compose stack — a rebuilt image, a real container recreate, and real HTTP
 requests against the production port (`8003`), not the Vite dev proxy:
 - **Backend regression, both with and without `frontend/dist/` present**: host-side
@@ -1109,6 +1118,73 @@ requests against the production port (`8003`), not the Vite dev proxy:
   `curl` instead and its response verified, which covers the network-contract level
   this project has consistently used as its verification bar when no browser is
   available — see §18.
+
+**Final frontend E2E + demo-readiness audit (Phase 10, prior pass)** — a full live
+walk of the real recruiter flow against the production-served app (login → upload →
+jobs → create job → ranked candidates → identity → explanation → select →
+applications → invite/resend → poll → VoiceHR assessment → accept/reject → refresh at
+every page), through the real production port, no dev proxy, no code changed during
+the audit itself:
+- **Every documented error status triggered for real this pass**: `401` (no/bad auth,
+  multiple endpoints), `404` (unknown job, unknown candidate), `409` (duplicate
+  select, duplicate accept, invite/accept on a terminal application), `422`
+  (unsupported upload type, inviting a candidate with no Resume Intelligence contact),
+  `502` (both resume upload and job creation, under a real, currently-exhausted Gemini
+  free-tier **daily** quota — `generativelanguage.googleapis.com/
+  generate_content_free_tier_requests`, limit 20/day, confirmed via RWS's and Resume
+  Intelligence's own logs, not assumed) — every one rendered the backend's real
+  `detail` verbatim, exactly as §14 documents.
+- **A real cascading external failure, handled cleanly end to end**: with Gemini's
+  quota exhausted, a real VoiceHR interview-completion call also failed its own Gemini
+  evaluation and gracefully degraded to a real `evaluation_status: "failed"` fixture —
+  `AssessmentPanel`'s dedicated `"failed"` branch is now confirmed against genuinely
+  real data, not just code review. Zero unhandled exceptions or `500`s reached the
+  client anywhere in the audit, despite this real failure cascade.
+- **Security invariants confirmed at the shipped-artifact level, not just source**:
+  grepped the actual built JS bundle inside the running container directly — zero
+  references to Resume Intelligence/Second Brain/VoiceHR hostnames or ports, and the
+  only "SECRET"-like string found is React's own internal
+  `__SECRET_INTERNALS_DO_NOT_USE_OR_YOU_WILL_BE_FIRED` marker, not a real key. Grepped
+  RWS's own logs across the whole audit session for candidate names/emails/phone
+  numbers — zero matches.
+- **Terminal-state and polling-gate logic reconfirmed against fresh, real data**:
+  a brand-new application was selected, invited, resent, driven to `"interviewed"` via
+  a real webhook, and accepted, live during the audit — `hasInvitedApplication`
+  verified `true` while it was `"invited"` and `false` immediately after, and no
+  action button reappeared once it reached `"accepted"`.
+- **One real, live-discovered data-integrity edge case** (not a frontend defect): a
+  candidate present in Second Brain's scoring index with no matching Resume
+  Intelligence contact record — `GET /v1/candidates/{id}/identity` correctly `404`s,
+  and inviting that candidate correctly `422`s ("Candidate contact information not
+  found") — both already-correct, already-existing frontend behaviors, just now
+  confirmed against a real instance of the condition rather than a hypothetical one.
+  This is a test-data hygiene note, not something fixed in code.
+- **One real code finding (M1), fixed this pass** (see immediately below):
+  `CandidateRow` (`JobDetailPage.jsx`) and `ApplicationRow` (`ApplicationsPage.jsx`)
+  had `role="button" tabIndex={0}` expandable rows with no `onKeyDown` handler —
+  focusable via keyboard but Enter/Space did nothing, since a `<tr>` doesn't natively
+  map those keys to a click the way a real `<button>` does.
+- No other code finding rose above LOW severity, and every LOW item (no favicon, one
+  un-tokenized hover-shade literal, no explicit text-truncation on table-cell names)
+  was judged cosmetic-only and left as-is, not fixed.
+
+**M1 fix — keyboard support for expandable rows (this pass)**: both `CandidateRow` and
+`ApplicationRow` now handle `onKeyDown` alongside the existing `onClick` — Enter or
+Space toggles `expanded`, with `event.preventDefault()` called only for Space (to stop
+the page from scrolling on that key); Enter needs no `preventDefault` since these rows
+are never inside a `<form>`. `ApplicationsPage.jsx`'s version stays conditional on
+`hasAssessment`, exactly like its existing `onClick`/`role`/`tabIndex` — a row with no
+assessment gets `onKeyDown={undefined}` and stays inert, unchanged from before this
+fix. **Zero other lines changed** in either file — no API call, state shape, styling,
+polling, auth, or workflow logic was touched; `git diff` on both files shows only the
+`onKeyDown` prop addition. Build verified: `npm run build` — 63 modules, 0
+errors/warnings, JS bundle 193.45 kB → 193.64 kB (the two small added handlers), CSS
+bundle unchanged (0 bytes different, confirming no styling was touched). Mouse-click
+behavior verified unchanged by inspection (`onClick` handlers themselves are untouched
+character-for-character); Enter/Space behavior and non-expandable-row inertness
+verified by direct code review of the final logic, no browser being available in this
+environment — the same standard applied throughout this project when a browser isn't
+available.
 
 **Live-tested — login (prior pass)**: `POST /v1/auth/login` through the Vite dev proxy
 against the real running RWS container — valid credentials returned a real JWT (`200`);
@@ -1384,6 +1460,21 @@ accept`, `/v1/applications/{application_id}/reject`, `/v1/jobs/{job_id}/applicat
   out-of-scope flow).
 - No frontend scoring/business logic of any kind — every number and decision the UI
   shows comes from RWS as-is.
+- **Discovered during the Phase 10 audit, deliberately left as-is**: no explicit
+  text-truncation (`text-overflow: ellipsis`) on candidate-name/job-title table cells
+  — the existing `.tableWrapper` horizontal scroll already prevents real layout
+  breakage, and real name/title data is short in practice; no favicon set; one
+  hover-shade color literal (`ApplicationsPage.module.css`'s `.acceptButton:hover`)
+  isn't pulled from a `--color-success`-derived token. All three are cosmetic-only,
+  zero functional impact, not worth the churn of fixing speculatively.
+- **Test-data hygiene note, not a frontend limitation**: the Phase 10 audit found a
+  real candidate present in Second Brain's scoring index with no matching Resume
+  Intelligence contact record (an artifact of independent test-data seeding across
+  sessions, not a code defect) — `GET /v1/candidates/{id}/identity` correctly `404`s
+  and inviting that candidate correctly `422`s; both are the frontend's existing,
+  correct handling of that condition, not something new to build. Worth knowing
+  before a live demo: prefer candidates already confirmed to have a real contact
+  record when demonstrating Select/Invite live.
 
 ---
 
@@ -1433,60 +1524,32 @@ Before starting frontend work:
 
 ## 24. [NEXT]
 
-**Production Docker build + FastAPI serving** is now **done and verified** (§17, §19,
-§20): `services/recruitment-workflow/main.py` gained a guarded, final SPA-serving
-block (mounts `/assets`, serves `index.html` for everything else) registered after
-every `/v1/*`/`/health` route, so it can never shadow them; the `Dockerfile` is now a
-two-stage build (Node builds `frontend/dist/`, the runtime image copies in only that
-output and never contains Node, `node_modules`, or frontend source); a new root
-`.dockerignore` keeps `node_modules`/`dist` out of the shared Docker build context.
-Live-verified against a real rebuilt image and a real recreated container: `GET /`
-serves the real built app, nested client routes (`/jobs`, `/upload`,
-`/jobs/:id/applications`) all resolve correctly on a direct/hard-refresh request
-instead of 404ing, `/v1/*`/`/health` remain completely real and unshadowed (including
-a full real login → `GET /v1/jobs` round trip through the production port), static
-assets serve with correct content types, and `which node`/`which npm` both fail inside
-the running container. The host-side test suite was also confirmed to pass identically
-whether `frontend/dist/` is present or absent, which is what makes the guard in §17
-more than an assumption. See §20 for the complete results.
+**The frontend is feature-complete and demo-ready.** All ten phases are done (§19):
+foundation/auth, resume upload, jobs + creation, candidate ranking/identity/selection,
+applications + invitation, polling + assessment display, accept/reject, visual
+polish + responsive states, production Docker build + FastAPI serving, and the final
+E2E/demo-readiness audit. Every page, every API integration, and every workflow
+transition in §12's diagram has been exercised live against the real stack at least
+once, most of them repeatedly across passes — see §20 for the complete, itemized
+verification history.
 
-Every phase of frontend work through packaging is now done: the app is feature-complete
-(Phases 1–7), visually consistent (Phase 8), and ships as a single deployable artifact
-with RWS (Phase 9). What remains is a dedicated audit pass, not new building.
+**The Phase 10 audit's one code finding (M1) is fixed this pass**: `CandidateRow`
+(`JobDetailPage.jsx`) and `ApplicationRow` (`ApplicationsPage.jsx`) — the two
+`role="button" tabIndex={0}` expandable table rows — now handle `onKeyDown` alongside
+their existing `onClick`: Enter or Space toggles expansion, with `preventDefault()`
+called only for Space. `ApplicationsPage.jsx`'s version stays conditional on
+`hasAssessment`, matching its pre-existing `onClick`/`role`/`tabIndex` exactly — no
+other line in either file changed, and no CSS, API, auth, polling, or workflow-state
+logic was touched. `npm run build`: 63 modules, 0 errors. See §20 for the full
+before/after verification. The audit's remaining findings were all LOW-severity
+cosmetic notes or test-data hygiene observations, not code defects — recorded in §21,
+deliberately left as-is.
 
-**Final frontend E2E + demo-readiness audit** (Phase 10 — the last frontend phase):
-
-- This is a **verification and hardening pass**, not a feature pass — go in expecting
-  to find and fix small gaps, not to build anything new. If a gap turns out to need
-  real feature work, stop and report it rather than silently scope-creeping into a
-  Phase 11.
-- Walk the **entire real flow end to end, live, in one continuous pass**, through the
-  production-served app if practical (§17 — same-origin, closest to how the actual
-  demo will run) or the dev-proxy path otherwise: log in → upload a resume → create a
-  job → view ranked candidates → select a qualified candidate → view applications →
-  invite → (if a real interview completion can be triggered, as prior passes have done
-  via VoiceHR's `process_interview` directly) watch polling pick up the
-  `interviewed` transition and the assessment render → accept or reject. This project's
-  own §18 testing strategy has always treated this kind of live run as the primary
-  verification method — this phase is where it's done once, deliberately, front to
-  back, rather than piecemeal per feature as in every phase before it.
-- Re-check §14's error-handling table against live behavior for at least one real
-  error case per status code that's practical to trigger honestly (e.g. a real `401`
-  via an expired/cleared token, a real `409` via a duplicate action, a real `422` via
-  an actual bad upload) — not by inventing a fake response, by triggering the real
-  condition, consistent with every prior pass's discipline in this project.
-- Confirm the recruiter-facing copy is consistent and jury-presentable: no leftover
-  placeholder text, no developer-facing wording (`"undefined"`, raw error codes, stack
-  traces) reaching the screen anywhere in the flow above.
-- Confirm §21's "known limitations" list is still accurate and complete — add anything
-  discovered this pass, remove anything that turned out to already be handled.
-- If a real browser becomes available for this pass, this is the point to finally
-  close the "verified by code review, not by clicking through it" caveat that has
-  applied to every interaction detail (button disabling, drag-and-drop styling,
-  expand/collapse, hover states, responsive breakpoints) across every prior phase —
-  note explicitly in §20 which specific things were newly confirmed by actually
-  clicking through them, versus still only code-reviewed, so the next reader knows the
-  true state rather than assuming this pass closed every such gap.
-- Do not add new pages, new API calls, or new visual design work — that's Phases 1–8's
-  territory, already closed. This phase only confirms what's already built actually
-  works end to end and looks demo-ready.
+**No frontend feature work remains.** `[NEXT]` for this file is: **whole-system final
+demo preparation only** — rehearsing the live demo sequence, confirming Gemini quota
+headroom (or the fallback plan) ahead of time, and any last data-hygiene cleanup in
+the shared Postgres instance (e.g. the Second-Brain/Resume-Intelligence identity
+mismatch noted in §21) — none of which is frontend code work, and none of which
+belongs in this file. If a genuinely new frontend need surfaces during demo prep, it
+gets its own bounded task at that point, following §23's process like everything
+before it; nothing is anticipated here speculatively.
