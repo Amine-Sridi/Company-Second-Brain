@@ -27,6 +27,18 @@ export function getApplications(jobId) {
 }
 
 /**
+ * Every application across every job, newest-selection-first -- the global
+ * counterpart to getApplications(jobId), for the Dashboard's pipeline/status counts.
+ * Each row carries the same fields as ApplicationResponse plus job_title
+ * (GlobalApplicationResponse). Sorted by RWS itself; the frontend never re-sorts.
+ *
+ * @returns {Promise<Array<object>>} GlobalApplicationResponse[]
+ */
+export function getAllApplications() {
+  return request("/v1/applications");
+}
+
+/**
  * Invites (or re-invites) an application's candidate to a VoiceHR interview. RWS
  * itself enforces when this is allowed -- only "selected" (first invite) or "invited"
  * (resend) are accepted; anything else is a 409. The frontend's Invite/Resend-Invite

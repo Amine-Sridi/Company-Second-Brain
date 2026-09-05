@@ -8,25 +8,10 @@ import { usePolling } from "../hooks/usePolling.js";
 import PageHeader from "../components/PageHeader.jsx";
 import StatusBadge from "../components/StatusBadge.jsx";
 import EmptyState from "../components/EmptyState.jsx";
+import { STATUS_LABELS, STATUS_TONE } from "../constants/applicationStatus.js";
 import styles from "./ApplicationsPage.module.css";
 
 const POLL_INTERVAL_MS = 7000;
-
-const STATUS_LABELS = {
-  selected: "Selected",
-  invited: "Invited",
-  interviewed: "Interviewed",
-  accepted: "Accepted",
-  rejected: "Rejected",
-};
-
-const STATUS_TONE = {
-  selected: "neutral",
-  invited: "primary",
-  interviewed: "accent",
-  accepted: "success",
-  rejected: "danger",
-};
 
 const INTERVIEW_STATUS_LABELS = {
   completed: "Completed",

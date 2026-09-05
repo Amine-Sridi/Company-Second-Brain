@@ -3,6 +3,7 @@ import ProtectedRoute from "./ProtectedRoute.jsx";
 import Layout from "../pages/Layout.jsx";
 import LoginPage from "../pages/LoginPage.jsx";
 import DashboardPage from "../pages/DashboardPage.jsx";
+import CandidatesPage from "../pages/CandidatesPage.jsx";
 import JobsListPage from "../pages/JobsListPage.jsx";
 import ResumeUploadPage from "../pages/ResumeUploadPage.jsx";
 import JobDetailPage from "../pages/JobDetailPage.jsx";
@@ -21,6 +22,7 @@ export default function AppRouter() {
         }
       >
         <Route index element={<DashboardPage />} />
+        <Route path="/candidates" element={<CandidatesPage />} />
         <Route path="/jobs" element={<JobsListPage />} />
         <Route path="/upload" element={<ResumeUploadPage />} />
         <Route path="/jobs/:jobId" element={<JobDetailPage />} />

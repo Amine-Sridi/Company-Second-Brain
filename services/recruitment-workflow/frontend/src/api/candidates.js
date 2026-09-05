@@ -14,3 +14,14 @@ import { request } from "./client.js";
 export function getCandidateIdentity(candidateId) {
   return request(`/v1/candidates/${candidateId}/identity`);
 }
+
+/**
+ * Every candidate ever ingested, newest first -- RWS's transient proxy to Resume
+ * Intelligence's own GET /v1/candidates. Sorted newest-first by the backend itself;
+ * the frontend never re-sorts. No pagination/search yet (FRONTEND_HANDOFF.md §21).
+ *
+ * @returns {Promise<Array<{ candidate_id: string, name: string, email: string|null, created_at: string }>>}
+ */
+export function getCandidates() {
+  return request("/v1/candidates");
+}
