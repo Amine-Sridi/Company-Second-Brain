@@ -1,17 +1,16 @@
 import { NavLink } from "react-router-dom";
 import styles from "./Sidebar.module.css";
 
-// Only routes that actually exist get a nav entry -- Reports is designed (see the
-// admin-dashboard redesign proposal) but not built yet, so it is deliberately
-// absent here rather than linking to a page that doesn't exist. Candidates and
-// VoiceHR were each added only once their own page actually worked (see
-// FRONTEND_HANDOFF.md).
+// Only routes that actually exist get a nav entry -- every item here was added
+// only once its own page actually worked (see FRONTEND_HANDOFF.md). This is now
+// every screen named in the original admin-dashboard redesign proposal.
 const NAV_ITEMS = [
   { to: "/", label: "Dashboard", icon: IconDashboard, end: true },
   { to: "/candidates", label: "Candidates", icon: IconCandidates },
   { to: "/upload", label: "Upload Resume", icon: IconUpload },
   { to: "/jobs", label: "Jobs", icon: IconJobs },
   { to: "/interviews", label: "VoiceHR", icon: IconVoiceHR },
+  { to: "/reports", label: "Reports", icon: IconReports },
 ];
 
 export default function Sidebar() {
@@ -68,6 +67,17 @@ function IconVoiceHR(props) {
       <path d="M4 10a6 6 0 0 1 12 0v3a2 2 0 0 1-2 2h-1v-5h3" />
       <path d="M4 10v3a2 2 0 0 0 2 2h1v-5H4" />
       <path d="M8.5 17.5h3" />
+    </svg>
+  );
+}
+
+function IconReports(props) {
+  return (
+    <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.6" {...props}>
+      <path d="M5 3h7l3 3v11a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1Z" />
+      <path d="M7 9h6" />
+      <path d="M7 12h6" />
+      <path d="M7 15h3" />
     </svg>
   );
 }

@@ -1,0 +1,75 @@
+.page {
+  max-width: 900px;
+}
+
+.status {
+  color: var(--color-text-muted);
+  font-size: var(--font-size-base);
+}
+
+.error {
+  background: var(--color-danger-bg);
+  color: var(--color-danger);
+  padding: var(--spacing-2) var(--spacing-3);
+  border-radius: var(--radius);
+  font-size: var(--font-size-base);
+}
+
+.tableWrapper {
+  overflow-x: auto;
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow-sm);
+}
+
+.table {
+  width: 100%;
+  min-width: 620px;
+  border-collapse: collapse;
+  font-size: var(--font-size-base);
+}
+
+.table th {
+  text-align: left;
+  padding: var(--spacing-2) var(--spacing-3);
+  color: var(--color-text-muted);
+  font-weight: 600;
+  font-size: var(--font-size-xs);
+  text-transform: uppercase;
+  letter-spacing: 0.02em;
+  border-bottom: 1px solid var(--color-border);
+}
+
+.table td {
+  padding: var(--spacing-2) var(--spacing-3);
+  border-bottom: 1px solid var(--color-border);
+  vertical-align: middle;
+}
+
+.table tr:last-child td {
+  border-bottom: none;
+}
+
+.row {
+  cursor: pointer;
+  transition: background-color var(--transition-fast);
+}
+
+.row:hover {
+  background: var(--color-hover-bg);
+}
+
+.candidateName {
+  font-weight: 500;
+}
+
+.identityWarning {
+  color: var(--color-text-muted);
+  font-size: var(--font-size-xs);
+}
+
+.dateCell {
+  color: var(--color-text-muted);
+  white-space: nowrap;
+}

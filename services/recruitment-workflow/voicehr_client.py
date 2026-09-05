@@ -1,11 +1,16 @@
 """
 Thin HTTP client for RWS -> VoiceHR calls.
 
-Only the invitation call exists here. VoiceHR notifies RWS of interview completion via
-its own outbound signed webhook (received at POST /v1/webhooks/voicehr in main.py) --
-RWS never polls VoiceHR for interview status.
+VoiceHR notifies RWS of interview completion via its own outbound signed webhook
+(received at POST /v1/webhooks/voicehr in main.py) -- RWS never polls VoiceHR for
+interview status. get_interview_report/get_interview_recording are pull calls the
+recruiter UI triggers on demand (Reports pages), not part of that push flow.
 """
 from __future__ import annotations
+
+from typing import Optional
+
+import httpx
 
 from shared.http_client import ServiceCallError, call_service
 
@@ -51,3 +56,55 @@ async def invite_candidate(
     if resp.status_code != 200:
         raise VoiceHRClientError(f"VoiceHR invite returned {resp.status_code}: {resp.text}")
     return resp.json()
+
+
+async def get_interview_report(
+    base_url: str, api_key: str, external_reference_id: str
+) -> Optional[dict]:
+    """
+    Returns the full report for one interview, or None if no report exists yet
+    (404) -- callers must not persist this; every field (including candidate_name/
+    candidate_email, which are legitimately VoiceHR's own PII, not Resume
+    Intelligence's) is relayed transiently to the recruiter UI and never written to
+    an RWS table. Calls VoiceHR's own service-key-gated RWS-facing report endpoint,
+    never the Basic-auth admin surface.
+    """
+    try:
+        resp = await call_service(
+            "GET",
+            f"{base_url}/api/rws/interviews/{external_reference_id}/report",
+            api_key=api_key,
+        )
+    except ServiceCallError as exc:
+        raise VoiceHRClientError(str(exc)) from exc
+
+    if resp.status_code == 404:
+        return None
+    if resp.status_code != 200:
+        raise VoiceHRClientError(f"VoiceHR report lookup returned {resp.status_code}: {resp.text}")
+    return resp.json()
+
+
+async def get_interview_recording(
+    base_url: str, api_key: str, external_reference_id: str
+) -> Optional[httpx.Response]:
+    """
+    Returns the raw recording response (bytes + content-type), or None if no
+    recording exists (404). The caller (main.py) streams this straight back to the
+    browser without ever persisting it or revealing VoiceHR's own URL/filename
+    structure -- see get_interview_recording's route docstring in main.py.
+    """
+    try:
+        resp = await call_service(
+            "GET",
+            f"{base_url}/api/rws/interviews/{external_reference_id}/recording",
+            api_key=api_key,
+        )
+    except ServiceCallError as exc:
+        raise VoiceHRClientError(str(exc)) from exc
+
+    if resp.status_code == 404:
+        return None
+    if resp.status_code != 200:
+        raise VoiceHRClientError(f"VoiceHR recording lookup returned {resp.status_code}: {resp.text}")
+    return resp

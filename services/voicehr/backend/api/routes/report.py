@@ -9,6 +9,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import FileResponse, HTMLResponse
 
 from backend.api.deps import get_db, require_admin_auth
+from backend.api.routes.invite import require_rws_service_key
 import backend.database as database
 from backend.services.processing import retry_report
 
@@ -121,6 +122,78 @@ def get_report(report_token: str, db=Depends(get_db)):
         "interview_id": row["interview_id"],
         "report_token": row["report_token"],
     }
+
+
+@router.get("/api/rws/interviews/{external_reference_id}/report")
+def get_rws_report(
+    external_reference_id: str,
+    db=Depends(get_db),
+    _auth: None = Depends(require_rws_service_key),
+):
+    """
+    RWS-facing report lookup, keyed by external_reference_id (RWS's own
+    application_id) rather than VoiceHR's internal report_token, which RWS never
+    sees. Gated by the same X-Api-Key service-key mechanism POST /api/invite
+    already uses -- a completely separate auth path from the Basic-auth admin
+    surface (require_admin_auth), which this route never touches or delegates to.
+
+    Returns exactly the fields get_report() already returns for the admin surface,
+    minus the raw recording path/URL: recording.available (bool) is kept, but the
+    admin-only /recordings/{filename} path is stripped here so a raw VoiceHR-
+    relative path can never reach RWS (and, from there, the browser) -- a caller
+    that wants the actual recording bytes uses the separate endpoint below, which
+    RWS proxies through its own URL instead of ever handing out this one.
+    """
+    interview = db.execute(
+        "SELECT id FROM interviews WHERE external_reference_id = ?",
+        (external_reference_id,),
+    ).fetchone()
+    if not interview:
+        raise HTTPException(status_code=404, detail="Interview not found")
+
+    report_row = db.execute(
+        "SELECT report_token FROM reports WHERE interview_id = ?", (interview["id"],)
+    ).fetchone()
+    if not report_row:
+        raise HTTPException(status_code=404, detail="Report not available")
+
+    report = get_report(report_row["report_token"], db)
+    recording_available = bool(report.get("recording", {}).get("available"))
+    report["recording"] = {"available": recording_available}
+    report.pop("recording_url", None)
+    return report
+
+
+@router.get("/api/rws/interviews/{external_reference_id}/recording")
+def get_rws_recording(
+    external_reference_id: str,
+    db=Depends(get_db),
+    _auth: None = Depends(require_rws_service_key),
+):
+    """
+    RWS-facing recording lookup, keyed by external_reference_id -- the service-key
+    counterpart to /recordings/{filename} (which stays Basic-auth-only and keyed by
+    filename, untouched by this change). The filename never crosses this boundary:
+    resolved server-side from the interview's own recording row, then re-rooted
+    through Path(...).name exactly like serve_recording() does, so this can never
+    be tricked into serving a path outside storage/recordings/.
+    """
+    row = db.execute(
+        """SELECT rec.recording_path
+           FROM interviews i
+           JOIN recordings rec ON rec.interview_id = i.id
+           WHERE i.external_reference_id = ?""",
+        (external_reference_id,),
+    ).fetchone()
+    if not row or not row["recording_path"]:
+        raise HTTPException(status_code=404, detail="Recording not available")
+
+    recording_name = Path(row["recording_path"]).name
+    path = Path("storage/recordings") / recording_name
+    if not path.exists():
+        raise HTTPException(status_code=404, detail="Recording not available")
+    media_type = "audio/webm" if path.suffix.lower() == ".webm" else (mimetypes.guess_type(str(path))[0] or "audio/wav")
+    return FileResponse(path, media_type=media_type)
 
 
 @router.get("/recordings/{filename}")

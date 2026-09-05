@@ -1271,10 +1271,130 @@ implementation — see the bootstrap instructions.
     rows, no `job_title` field. Schema check via `psql \dt recruitment.*` / `\dt
     resume_intel.*` confirmed no new table in either schema — both endpoints are
     pure reads over tables that already existed.
+- **VoiceHR Reports backend proxy** (`FRONTEND_HANDOFF.md`'s `[NEXT]` after its Phase 13
+  global-interviews pass): **DONE**. Two new VoiceHR endpoints, two new RWS endpoints,
+  all additive, no DB schema change, no new auth mechanism (both new VoiceHR routes
+  reuse `require_rws_service_key` from `invite.py`; both new RWS routes reuse
+  `require_recruiter`).
+  - **VoiceHR** (`services/voicehr/backend/api/routes/report.py`): new
+    `GET /api/rws/interviews/{external_reference_id}/report` — resolves the interview
+    by `external_reference_id` (RWS's own `application_id`, already stored at invite
+    time), then its `reports` row, then reuses the existing `get_report()` function
+    verbatim for the actual field set — same data the Basic-auth admin surface sees,
+    minus the raw recording path: `recording` is rewritten to `{"available": bool}`
+    only, and `recording_url` is dropped, so a VoiceHR-relative filesystem path can
+    never reach RWS. New `GET /api/rws/interviews/{external_reference_id}/recording` —
+    resolves the interview's `recordings.recording_path` server-side (never exposed to
+    the caller), re-roots it to `storage/recordings/<name>` via `Path(...).name`
+    exactly like the existing Basic-auth `serve_recording()` does, and serves the file.
+    Neither new route touches `require_admin_auth` or the Basic-auth surface's own
+    logic at all — confirmed by the diff being purely additive, and by a dedicated
+    test (`test_rws_report_admin_credentials_do_not_satisfy_service_key_auth`) proving
+    the two auth mechanisms stay independent in both directions.
+  - **RWS** (`services/recruitment-workflow/`): new `voicehr_client.get_interview_report()`
+    / `get_interview_recording()` (same `call_service` pattern every other cross-service
+    client function in this codebase already uses). New `GET /v1/interviews/
+    {application_id}/report` (recruiter-JWT): resolves the application (404 if
+    missing), calls VoiceHR, and rewrites the `recording` field to a same-origin RWS
+    URL (`/v1/interviews/{application_id}/recording`) or `{"available": false, "url":
+    null}` — the browser never sees VoiceHR's host, port, or the service key. New
+    `GET /v1/interviews/{application_id}/recording`: fetches the raw bytes from
+    VoiceHR and relays them via a plain `fastapi.Response(content=..., media_type=...)`
+    — no disk write, no DB write on RWS's side for either route (verified structurally,
+    same "no `db.add()`/`db.commit()` anywhere in the route body" proof already used
+    elsewhere, plus a dedicated test asserting exactly that against the actual function
+    source). Neither route declares a `response_model`: the report body is VoiceHR's
+    own rich, evolving shape, and reshaping it into a narrower RWS-owned contract would
+    contradict this task's own "show the actual available report fields from VoiceHR"
+    instruction — matches the existing precedent of `POST /v1/resumes` passing Resume
+    Intelligence's response through untyped.
+  - **Tests**: VoiceHR — 11 new tests in `tests/test_report.py` (auth boundary in both
+    directions including the admin-Basic-auth-doesn't-substitute case, unknown
+    `external_reference_id` → 404, interview-exists-but-no-report → 404, full report
+    shape with the raw recording path/URL confirmed absent, `recording.available:
+    false` case, recording success streams real bytes with the right content-type,
+    and a path-traversal-safety case for the new recording route). RWS — 12 new tests
+    in `tests/test_interview_report.py` (auth boundary for both new routes, the
+    recording-URL rewrite verified exactly, the `recording.available: false` → `null`
+    URL case, 404s for both an unresolvable application and a genuinely-missing
+    report/recording, a 502-without-leaking-exception-text case, and the same
+    no-persistence structural proof used elsewhere in this codebase).
+  - **Full regression**: VoiceHR 140/140 passed on host (up from 129 — the production
+    image has no test dependencies installed, so this suite doesn't run inside the
+    container, same as every prior VoiceHR session). RWS 53/53 passed both on host and
+    inside the rebuilt `csb-recruitment-workflow` container (up from 41 — 12 new tests).
+  - **Live end-to-end smoke test verified against the real running stack** (both
+    images rebuilt via `docker compose build`, both containers recreated and
+    healthy) — and a genuine, non-hand-crafted finding surfaced by it, not just a
+    green checkmark: every *existing* completed-interview application in this
+    project's live dataset turned out to have no matching VoiceHR row anymore, because
+    VoiceHR's `DB_PATH` (`voicehr.db`, a bare relative path) lives **outside** the
+    `voicehr_data` Docker volume (which only covers `/app/storage`) — every VoiceHR
+    container recreate across this project's many sessions has silently reset its
+    SQLite database to empty, while RWS's own Postgres-persisted `interview_assessment`
+    (written once, at webhook-delivery time) survived untouched. This is a real,
+    pre-existing environment characteristic, not something this session introduced or
+    a regression to fix under this task's scope — documented in Known Limitations
+    below. Worked around, honestly, by driving a **real** fresh interview through this
+    session's own live smoke test rather than reusing (nonexistent) old data: created a
+    new job (`POST /v1/jobs`, real Gemini JD structuring), selected a real qualified
+    match for a candidate with a real Resume Intelligence contact record, invited it
+    (`POST /v1/applications/{id}/invite`, real `POST /api/invite` call to the live
+    VoiceHR container), then called `backend.services.processing.process_interview`
+    **directly inside the rebuilt `csb-voicehr` container** (the same function
+    `session.py`'s WebSocket handler calls, with a hand-written transcript standing in
+    only for real browser audio/ASR — the exact discipline every prior live smoke test
+    in this project has used) with a real multi-turn transcript. This produced a real
+    Gemini evaluation (`overall_score: 83, cefr_level: "C1"`) and a real webhook
+    delivery to RWS (`outcome: "processed"`, confirmed via `docker logs
+    csb-recruitment-workflow`). Then, against this genuinely fresh, real data: `GET
+    /v1/interviews/{application_id}/report` returned the full real report (scores,
+    dimensions, strengths, concerns, transcript) with `recording: {"available": false,
+    "url": null}` (no recording file existed yet) and no VoiceHR hostname/port anywhere
+    in the response (grepped directly). A fake recording file was then added directly
+    to `storage/recordings/` inside the VoiceHR container and linked to the same
+    interview to exercise the *other* branch of the same code path: the report's
+    `recording.available` flipped to `true` with a real same-origin RWS URL, and
+    fetching that URL through RWS returned the exact real bytes with the correct
+    `audio/webm` content-type — confirming the full proxy chain end to end, not just
+    the "no recording" path. **One real, live-discovered frontend bug, fixed before
+    this session's own build/deploy verification, not glossed over**: VoiceHR's real
+    evaluator output shapes `strengths`/`concerns` as timestamp-linked objects
+    (`{"text": ..., "timestamp": ...}`), not plain strings as the frontend's first draft
+    assumed — confirmed against this real Gemini-generated report, not a synthetic
+    fixture, and fixed in `ReportDetailPage.jsx` before the final rebuild (see
+    `FRONTEND_HANDOFF.md` for detail). The synthetic job/application/interview created
+    for this smoke test (`"Report Smoke Test Engineer"`) was left in place, not cleaned
+    up, matching this project's own established convention — it's now a real,
+    demo-usable completed-interview report.
 - Nothing is BLOCKED.
 
 ## Known Limitations (discovered this session)
 
+- **VoiceHR's SQLite database does not survive a container recreate.** `backend/
+  database.py: DB_PATH = "voicehr.db"` is a bare relative path in the container's
+  working directory (`/app/`), which is outside the `voicehr_data` named volume
+  (`infra/docker-compose.yml` only mounts that volume at `/app/storage`, covering
+  recordings/transcripts, not the database file). Every `docker compose up
+  --force-recreate voicehr` (or a rebuild) across this project's entire history has
+  therefore silently reset every interview/report row to empty, even though RWS's own
+  `interview_assessment` (Postgres-persisted, written once at webhook-delivery time)
+  correctly survives. Discovered concretely this session: every previously-real
+  completed-interview application in the live dataset returned 404 from the new
+  `GET /v1/interviews/{id}/report` proxy, because VoiceHR no longer had any matching
+  interview row at all — not a bug in the new endpoint, confirmed by directly querying
+  `voicehr.db` inside the container (`SELECT count(*) FROM interviews` returned `0`
+  right after the routine rebuild this session's own work required). Not fixed here —
+  out of this task's scope, and CLAUDE.md's own "VoiceHR keeps its own SQLite
+  persistence, unmigrated" rule plus "no infra ahead of demonstrated need" both caution
+  against unprompted infrastructure changes. The smallest future fix, if this is ever
+  revisited, is moving `DB_PATH` under `/app/storage/voicehr.db` (already inside the
+  persisted volume) — a one-line change plus a migration note for any environment with
+  pre-existing data at the old path. Worth knowing before any future demo/session that
+  rebuilds the VoiceHR container: all interview history is lost, and demo-usable
+  completed-interview data must be regenerated (a real invite + a real
+  `backend.services.processing.process_interview` call, as this session did) rather
+  than assumed to already exist.
 - No existing Resume Intelligence or VoiceHR source code is available in this environment —
   only README-level documentation (`ResumeParser.md`, `VoiceHR.md`). User has confirmed both
   will be placed into `services/resume-intelligence/` and `services/voicehr/` respectively.
@@ -2026,11 +2146,11 @@ implementation — see the bootstrap instructions.
 ## Exact Next Steps
 
 Nothing is currently marked `[NEXT]` on this file. `FRONTEND_HANDOFF.md` §24 now names the next
-frontend task ("Candidates page + real Dashboard data") — the backend prerequisites it depended on
-(`GET /v1/candidates` on both Resume Intelligence and RWS, `GET /v1/applications` on RWS) landed
-this session, see the entry above. It remains out of this file's scope to schedule frontend-only
-work. The items below predate this session's work and remain genuine open design questions, not
-gaps surfaced by this session.
+frontend task ("Candidate detail + cross-linking") — purely frontend, no new backend endpoint
+anticipated (it links together data already available from `GET /v1/candidates`, `GET
+/v1/candidates/{id}/identity`, and `GET /v1/applications`, all of which already exist). It remains
+out of this file's scope to schedule frontend-only work. The items below predate this session's
+work and remain genuine open design questions, not gaps surfaced by this session.
 
 1. Nothing currently reads `second_brain.candidate_feedback` — it's a write-back sink only.
    Whether/how it should ever influence retrieval or scoring (e.g. down-weighting a candidate
@@ -2048,3 +2168,8 @@ gaps surfaced by this session.
    this project's existing "no infra ahead of demonstrated need" rule — revisit only if a real
    dataset size makes either full list impractical, the same standing note already applied to
    `GET /v1/jobs`.
+4. The two new interview report/recording proxy endpoints (`GET /v1/interviews/{id}/report`,
+   `GET /v1/interviews/{id}/recording`) have no `response_model` — they pass VoiceHR's own report
+   shape through as-is (see the entry above for why). If VoiceHR's report shape ever needs to be
+   versioned or narrowed for the frontend's benefit, that would be the point to introduce one, not
+   before — a deliberate choice, not an oversight.

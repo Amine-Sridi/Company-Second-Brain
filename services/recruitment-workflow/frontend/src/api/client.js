@@ -77,3 +77,41 @@ export async function request(path, { method = "GET", body, skipAuth = false } =
     return null;
   }
 }
+
+/**
+ * Like request(), but for a binary response (currently only the interview
+ * recording proxy) -- returns a Blob instead of parsing JSON. A plain <audio src>
+ * can't attach the Authorization header itself, so a caller that wants to play a
+ * recording fetches it as a blob here and feeds `URL.createObjectURL(blob)` into
+ * the <audio> element instead (see ReportDetailPage) -- the object URL must be
+ * revoked by the caller when no longer needed.
+ *
+ * @param {string} path - relative API path, e.g. "/v1/interviews/{id}/recording"
+ * @returns {Promise<Blob>}
+ */
+export async function requestBlob(path) {
+  const headers = {};
+  const token = getToken();
+  if (token) headers.Authorization = `Bearer ${token}`;
+
+  let response;
+  try {
+    response = await fetch(path, { headers });
+  } catch {
+    throw new ApiError(0, "Unable to reach the server. Check your connection and try again.");
+  }
+
+  if (response.status === 401) {
+    clearToken();
+    if (window.location.pathname !== "/login") {
+      window.location.assign("/login");
+    }
+    throw new ApiError(401, "Session expired. Please log in again.");
+  }
+
+  if (!response.ok) {
+    throw new ApiError(response.status, "Request failed.");
+  }
+
+  return response.blob();
+}

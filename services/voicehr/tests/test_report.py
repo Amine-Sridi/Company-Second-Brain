@@ -8,11 +8,13 @@ import pytest
 from tests.conftest import (
     TEST_ADMIN_PASSWORD,
     TEST_ADMIN_USERNAME,
+    TEST_RWS_SERVICE_KEY,
     create_interview,
     create_report,
 )
 
 _ADMIN_AUTH = (TEST_ADMIN_USERNAME, TEST_ADMIN_PASSWORD)
+_RWS_AUTH = {"x-api-key": TEST_RWS_SERVICE_KEY}
 
 
 def test_get_report_success(client, db):
@@ -263,3 +265,126 @@ def test_serve_recording(client, db):
 def test_serve_recording_does_not_escape_storage(client, db):
     response = client.get("/recordings/../voicehr.db", auth=_ADMIN_AUTH)
     assert response.status_code in (404, 416)
+
+
+# ---------------------------------------------------------------------------
+# RWS-facing report/recording endpoints (service-key auth, distinct from the
+# Basic-auth admin surface above).
+# ---------------------------------------------------------------------------
+
+def test_rws_report_without_api_key_returns_401(client, db):
+    response = client.get("/api/rws/interviews/app-123/report")
+    assert response.status_code == 401
+
+
+def test_rws_report_with_wrong_api_key_returns_401(client, db):
+    response = client.get("/api/rws/interviews/app-123/report", headers={"x-api-key": "wrong-key"})
+    assert response.status_code == 401
+
+
+def test_rws_report_admin_credentials_do_not_satisfy_service_key_auth(client, db):
+    # The two auth mechanisms are deliberately independent -- Basic-auth admin
+    # credentials must not substitute for the RWS service key here, any more than
+    # the service key substitutes for admin Basic auth on /admin/reports.
+    response = client.get("/api/rws/interviews/app-123/report", auth=_ADMIN_AUTH)
+    assert response.status_code == 401
+
+
+def test_rws_report_unknown_external_reference_id_returns_404(client, db):
+    response = client.get("/api/rws/interviews/unknown-app-id/report", headers=_RWS_AUTH)
+    assert response.status_code == 404
+
+
+def test_rws_report_interview_exists_but_no_report_yet_returns_404(client, db):
+    create_interview(db, token="pending-token", external_reference_id="app-pending", status="active")
+    response = client.get("/api/rws/interviews/app-pending/report", headers=_RWS_AUTH)
+    assert response.status_code == 404
+
+
+def test_rws_report_success_returns_full_report_without_raw_recording_path(client, db):
+    token = create_interview(
+        db, token="rws-report-token", name="RWS Candidate", email="rws.candidate@example.com",
+        external_reference_id="app-rws-1", status="completed",
+    )
+    row = db.execute("SELECT id FROM interviews WHERE token = ?", (token,)).fetchone()
+    db.execute(
+        "INSERT INTO recordings (interview_id, recording_path) VALUES (?, ?)",
+        (row["id"], "storage/recordings/rws-report-token.webm"),
+    )
+    db.commit()
+    create_report(db, row["id"], report_token="rws-report", overall_score=88, cefr_level="C1")
+
+    response = client.get("/api/rws/interviews/app-rws-1/report", headers=_RWS_AUTH)
+    assert response.status_code == 200
+    data = response.json()
+    assert data["candidate_name"] == "RWS Candidate"
+    assert data["candidate_email"] == "rws.candidate@example.com"
+    assert data["overall_score"] == 88
+    assert data["cefr_level"] == "C1"
+    assert "dimensions" in data
+    # The admin surface's raw recording path/URL must never appear here -- only a
+    # bare availability flag. This is the exact boundary the RWS-facing endpoint
+    # exists to enforce, so pin it precisely rather than just checking status 200.
+    assert data["recording"] == {"available": True}
+    assert "url" not in data["recording"]
+    assert "filename" not in data["recording"]
+    assert "recording_url" not in data
+
+
+def test_rws_report_recording_unavailable_reports_false(client, db):
+    token = create_interview(
+        db, token="rws-report-no-rec", external_reference_id="app-rws-2", status="completed",
+    )
+    row = db.execute("SELECT id FROM interviews WHERE token = ?", (token,)).fetchone()
+    create_report(db, row["id"], report_token="rws-report-no-rec-token")
+
+    response = client.get("/api/rws/interviews/app-rws-2/report", headers=_RWS_AUTH)
+    assert response.status_code == 200
+    assert response.json()["recording"] == {"available": False}
+
+
+def test_rws_recording_without_api_key_returns_401(client, db):
+    response = client.get("/api/rws/interviews/app-123/recording")
+    assert response.status_code == 401
+
+
+def test_rws_recording_unknown_external_reference_id_returns_404(client, db):
+    response = client.get("/api/rws/interviews/unknown-app-id/recording", headers=_RWS_AUTH)
+    assert response.status_code == 404
+
+
+def test_rws_recording_success_serves_bytes(client, db, tmp_path):
+    token = create_interview(db, token="rws-recording-token", external_reference_id="app-rws-rec")
+    row = db.execute("SELECT id FROM interviews WHERE token = ?", (token,)).fetchone()
+
+    os.makedirs("storage/recordings", exist_ok=True)
+    dest = os.path.join("storage/recordings", "rws-recording-token.webm")
+    with open(dest, "wb") as f:
+        f.write(b"fake rws audio data")
+    db.execute(
+        "INSERT INTO recordings (interview_id, recording_path) VALUES (?, ?)",
+        (row["id"], dest),
+    )
+    db.commit()
+
+    try:
+        response = client.get("/api/rws/interviews/app-rws-rec/recording", headers=_RWS_AUTH)
+        assert response.status_code == 200
+        assert response.headers["content-type"] == "audio/webm"
+        assert response.content == b"fake rws audio data"
+    finally:
+        if os.path.exists(dest):
+            os.unlink(dest)
+
+
+def test_rws_recording_does_not_escape_storage(client, db):
+    token = create_interview(db, token="rws-recording-escape", external_reference_id="app-rws-escape")
+    row = db.execute("SELECT id FROM interviews WHERE token = ?", (token,)).fetchone()
+    db.execute(
+        "INSERT INTO recordings (interview_id, recording_path) VALUES (?, ?)",
+        (row["id"], "../../voicehr.db"),
+    )
+    db.commit()
+
+    response = client.get("/api/rws/interviews/app-rws-escape/recording", headers=_RWS_AUTH)
+    assert response.status_code == 404

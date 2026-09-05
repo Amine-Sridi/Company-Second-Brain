@@ -17,7 +17,7 @@ import uuid
 from pathlib import Path
 from typing import Annotated
 
-from fastapi import BackgroundTasks, Depends, FastAPI, File, Header, HTTPException, Request, UploadFile, status
+from fastapi import BackgroundTasks, Depends, FastAPI, File, Header, HTTPException, Request, Response, UploadFile, status
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import ValidationError
@@ -913,6 +913,97 @@ async def invite_application(
             detail="Application state changed during invitation and could not be updated",
         )
     return _application_response(updated)
+
+
+# ---------------------------------------------------------------------------
+# Interview report / recording -- recruiter-facing, transient proxy to VoiceHR
+#
+# Neither route declares a response_model: the report body is VoiceHR's own rich,
+# evolving shape (dimensions/strengths/concerns/evidence/stats/transcript), and
+# reshaping it into a narrower RWS-owned contract would contradict the task this
+# was built for ("show the actual available report fields from VoiceHR") -- the
+# same reasoning already applied to POST /v1/resumes' passthrough of Resume
+# Intelligence's response. Both routes call VoiceHR's new service-key-gated
+# RWS-facing endpoints (never the Basic-auth admin surface), and persist nothing:
+# neither declares any write to `db`, only the read needed to resolve
+# application_id -> the interview VoiceHR knows by that same id
+# (external_reference_id, set at invite time -- see invite_application above).
+# ---------------------------------------------------------------------------
+
+@app.get("/v1/interviews/{application_id}/report")
+async def get_interview_report(
+    application_id: uuid.UUID,
+    db: Session = Depends(get_db),
+    recruiter: Recruiter = Depends(require_recruiter),
+):
+    """
+    Full interview report for one application, fetched fresh from VoiceHR on every
+    call -- never cached or persisted here. The recording field (if any) is
+    rewritten to a same-origin RWS URL before returning; VoiceHR's own host, port,
+    or credentials never reach the browser (see get_interview_recording below).
+    """
+    application = get_application(db, application_id)
+    if application is None:
+        raise HTTPException(status_code=404, detail="Application not found")
+
+    try:
+        report = await voicehr_client.get_interview_report(
+            settings.voicehr_url, settings.voicehr_api_key, str(application_id)
+        )
+    except VoiceHRClientError as exc:
+        # Only the exception type and the (non-PII) application_id are logged --
+        # never the exception message, which can in principle wrap upstream
+        # response text (matches get_candidate_identity's own logging bar).
+        logger.error(
+            "interview_report_lookup_failed",
+            extra={"error_type": type(exc).__name__, "application_id": str(application_id)},
+        )
+        raise HTTPException(status_code=502, detail="VoiceHR unavailable")
+
+    if report is None:
+        raise HTTPException(status_code=404, detail="Report not available")
+
+    if report.get("recording", {}).get("available"):
+        report["recording"] = {"available": True, "url": f"/v1/interviews/{application_id}/recording"}
+    else:
+        report["recording"] = {"available": False, "url": None}
+    return report
+
+
+@app.get("/v1/interviews/{application_id}/recording")
+async def get_interview_recording(
+    application_id: uuid.UUID,
+    db: Session = Depends(get_db),
+    recruiter: Recruiter = Depends(require_recruiter),
+):
+    """
+    Streams one interview's recording audio through RWS, so the browser never
+    needs to know VoiceHR's own origin or send it any credential. Fetched fresh
+    from VoiceHR on every call and relayed directly -- never written to disk or a
+    database on RWS's side.
+    """
+    application = get_application(db, application_id)
+    if application is None:
+        raise HTTPException(status_code=404, detail="Application not found")
+
+    try:
+        recording = await voicehr_client.get_interview_recording(
+            settings.voicehr_url, settings.voicehr_api_key, str(application_id)
+        )
+    except VoiceHRClientError as exc:
+        logger.error(
+            "interview_recording_lookup_failed",
+            extra={"error_type": type(exc).__name__, "application_id": str(application_id)},
+        )
+        raise HTTPException(status_code=502, detail="VoiceHR unavailable")
+
+    if recording is None:
+        raise HTTPException(status_code=404, detail="Recording not available")
+
+    return Response(
+        content=recording.content,
+        media_type=recording.headers.get("content-type", "application/octet-stream"),
+    )
 
 
 # ---------------------------------------------------------------------------
