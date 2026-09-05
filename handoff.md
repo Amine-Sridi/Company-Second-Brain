@@ -1199,6 +1199,78 @@ implementation — see the bootstrap instructions.
     completed-reports view, HTTP Basic auth), one outbound integration (the signed RWS
     completion webhook), SQLite persistence unchanged/unmigrated. No Vapi, no local
     Whisper/Ollama/Kokoro/ElevenLabs, no Anthropic, no admin-initiated interview creation.
+- **Backend prerequisites for the Candidates page + global Applications/VoiceHR list**
+  (`FRONTEND_HANDOFF.md`'s `[NEXT]` after its Phase 11 admin-shell redesign): **DONE**. Two
+  new read-only endpoints, both additive, no DB schema change, no new auth mechanism, no
+  frontend code touched.
+  - **Resume Intelligence** (`services/resume-intelligence/`): new `GET /v1/candidates`
+    (service-key auth, same `require_service_key` dependency `/contact` already uses).
+    `db.py`: `list_candidates(db)` — every `Candidate` row, newest first
+    (`ORDER BY created_at DESC`), no pagination (matches RWS's own `GET /v1/jobs`
+    precedent). `api.py`: new local `CandidateListItem` model (`candidate_id`/`name`/
+    `email`/`created_at` only — an explicit allow-list, not `Candidate` minus a
+    blocklist, so `raw_text`/`candidate_json`/`phone` cannot leak even if a future field
+    is added to the ORM model). Kept local to this service rather than added to
+    `/shared/schemas`, matching the precedent already set by `CandidateIdentityResponse`
+    (RWS defines its own separate response shape for what it proxies, rather than the
+    two services sharing one schema for a value that crosses a trust boundary).
+  - **RWS** (`services/recruitment-workflow/`): new `GET /v1/candidates` (recruiter-JWT,
+    `require_recruiter`) — transiently proxies Resume Intelligence's new endpoint via a
+    new `resume_intelligence_client.list_candidates()`; the route declares no `db`
+    parameter at all, the same structural "persists nothing" proof
+    `get_candidate_identity` already established. New `CandidateSummaryResponse` in
+    `schemas.py` (`extra="forbid"`, same four fields).
+  - **RWS** (`services/recruitment-workflow/`): new `GET /v1/applications` — the global,
+    unscoped counterpart to the existing `GET /v1/jobs/{job_id}/applications`.
+    `db.py`: `list_all_applications(db)` — one `Application JOIN Job` query (not an N+1
+    per-application title lookup), newest-selected-first (`Application.selected_at
+    DESC`, the same ordering rule the job-scoped listing already uses). `schemas.py`:
+    new `GlobalApplicationResponse(ApplicationResponse)` — inherits every existing field
+    and adds only `job_title`; the job-scoped endpoint's own `ApplicationResponse`/
+    `_application_response()` helper is untouched and reused as-is (`main.py`'s new
+    route builds `GlobalApplicationResponse(**_application_response(application).model_dump(),
+    job_title=job_title)`).
+  - **Tests**: Resume Intelligence — `tests/test_db.py` gained
+    `TestListCandidates` (2 real-Postgres tests: newest-first ordering against freshly
+    inserted rows, returned-row field correctness); `tests/test_api.py` gained 5 tests
+    (401 no key, 401 wrong key, empty list → `[]`, non-empty list preserves
+    `list_candidates()`'s own order and excludes `phone`/`raw_text`/`candidate_json` even
+    when a mocked row carries them). RWS — new `tests/test_candidates_list.py` (7 tests,
+    mirroring `test_candidate_identity.py`'s exact fixture pattern: auth boundary, empty/
+    non-empty list, PII-field allow-list, 502 without leaking exception text, the
+    no-`db`-dependency proof) and new `tests/test_applications_global.py` (7 tests: auth
+    boundary, empty list, multi-job `job_title`/ordering passthrough via mocked
+    `list_all_applications`, `interview_assessment` passthrough, and two regression
+    tests pinning that `GET /v1/jobs/{job_id}/applications` is byte-for-byte unchanged —
+    still 404s on an unknown job, still has no `job_title` field).
+  - **Full regression**: Resume Intelligence 86/86 passed inside the rebuilt
+    `csb-resume-intelligence` container (real Postgres — the two new ordering tests ran
+    for real, not skipped) / 79 passed + 6 skipped on host (same pre-existing host-DB
+    limitation as every prior session). RWS 41/41 passed both on host and inside the
+    rebuilt `csb-recruitment-workflow` container (up from 27 — 14 new tests).
+  - **Live end-to-end smoke test verified against the real running stack** (both images
+    rebuilt via `docker compose build`, both containers recreated and healthy): logged in
+    as the real seeded recruiter — `GET /v1/candidates` with no auth → real `401`; with a
+    real JWT → real `200` with 6 real candidates, newest-first, only
+    `candidate_id`/`name`/`email`/`created_at` present, confirmed via `docker logs
+    csb-recruitment-workflow` that the correlation ID genuinely propagated to Resume
+    Intelligence's own `GET /v1/candidates` call (`external_call` log line, `outcome:
+    "success"`) and that no candidate name/email appeared in either service's logs.
+    `GET /v1/applications` with no auth → real `401`; with a JWT → real `200` with 5 real
+    applications for the one job that currently has any, correctly newest-selected-first,
+    each carrying `job_title: "Backend Engineer"` and its real `interview_status`/
+    `interview_assessment` (including a real `"failed"` evaluation and a real completed
+    one with `cefr_level: "C1"`). `GET /v1/jobs` confirmed a second real job exists
+    (`"Senior Backend Engineer (Smoke Test)"`, 7 matches, 0 qualified) with no
+    applications of its own yet — the live check could not exercise a *second* distinct
+    `job_title` in the global list for a genuinely different job (no qualified candidate
+    currently exists to select there), so that specific case is covered by
+    `test_applications_global.py`'s mocked two-job test instead, not by this live check;
+    noted honestly here rather than glossed over. `GET /v1/jobs/{job_id}/applications`
+    (existing, job-scoped) re-checked live and confirmed byte-for-byte unchanged: same 5
+    rows, no `job_title` field. Schema check via `psql \dt recruitment.*` / `\dt
+    resume_intel.*` confirmed no new table in either schema — both endpoints are
+    pure reads over tables that already existed.
 - Nothing is BLOCKED.
 
 ## Known Limitations (discovered this session)
@@ -1954,20 +2026,25 @@ implementation — see the bootstrap instructions.
 ## Exact Next Steps
 
 Nothing is currently marked `[NEXT]` on this file. `FRONTEND_HANDOFF.md` §24 now names the next
-frontend task ("Final frontend E2E + demo-readiness audit"), the last remaining frontend phase —
-see that file for the bounded task description; it is out of this file's scope to schedule
-frontend-only work. The items below predate this session's work and remain genuine open design
-questions, not gaps surfaced by this session.
+frontend task ("Candidates page + real Dashboard data") — the backend prerequisites it depended on
+(`GET /v1/candidates` on both Resume Intelligence and RWS, `GET /v1/applications` on RWS) landed
+this session, see the entry above. It remains out of this file's scope to schedule frontend-only
+work. The items below predate this session's work and remain genuine open design questions, not
+gaps surfaced by this session.
 
 1. Nothing currently reads `second_brain.candidate_feedback` — it's a write-back sink only.
    Whether/how it should ever influence retrieval or scoring (e.g. down-weighting a candidate
    repeatedly rejected for a given skill profile) is an open design question, deliberately not
    answered this session — flagged here rather than in Known Limitations because it's a genuine
    future design choice, not a defect.
-2. `GET /v1/jobs/{job_id}/applications` and `POST /v1/jobs` (JD submission response) don't
-   surface `explanation` for anything beyond what's already cached at the time of the call —
-   `explanation` is `null` in the JD-submission response and only gets populated the first time
-   `GET /v1/jobs/{job_id}/matches` is called for that job. This was a deliberate scope/latency
-   choice (see the Observability/hardening-adjacent entry above), not an oversight; if a future
-   session wants `/applications` to also carry the explanation, `get_or_create_explanation` is
-   already reusable there.
+2. `GET /v1/jobs/{job_id}/applications`, the new `GET /v1/applications`, and `POST /v1/jobs` (JD
+   submission response) don't surface `explanation` for anything beyond what's already cached at
+   the time of the call — `explanation` is `null` in the JD-submission response and only gets
+   populated the first time `GET /v1/jobs/{job_id}/matches` is called for that job. This was a
+   deliberate scope/latency choice (see the Observability/hardening-adjacent entry above), not an
+   oversight; if a future session wants either applications endpoint to also carry the
+   explanation, `get_or_create_explanation` is already reusable there.
+3. `GET /v1/candidates` (both services) and `GET /v1/applications` have no pagination, matching
+   this project's existing "no infra ahead of demonstrated need" rule — revisit only if a real
+   dataset size makes either full list impractical, the same standing note already applied to
+   `GET /v1/jobs`.

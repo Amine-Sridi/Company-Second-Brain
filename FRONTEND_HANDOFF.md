@@ -255,13 +255,19 @@ marked **PROPOSED** are not yet implemented on the backend — see §20.
 | Invite to VoiceHR | `api/applications.js: invite(applicationId, language?)` *(implemented)* | `POST /v1/applications/{application_id}/invite` | `ApplicationResponse` (now `status: "invited"`) | `404` not found · `409` not invitable in current status · `422` candidate contact not found · `502` contact lookup or VoiceHR call failed |
 | Accept | `api/applications.js: accept(applicationId)` *(implemented)* | `POST /v1/applications/{application_id}/accept` | `ApplicationResponse` (now `status: "accepted"`) | `404` not found · `409` not in a decidable state |
 | Reject | `api/applications.js: reject(applicationId)` *(implemented)* | `POST /v1/applications/{application_id}/reject` | `ApplicationResponse` (now `status: "rejected"`) | `404` not found · `409` not in a decidable state |
+| List all candidates | not yet built | `GET /v1/candidates` **IMPLEMENTED, backend-only** | `candidate_id`, `name`, `email` (optional), `created_at` (`CandidateSummaryResponse`, newest-first, transiently proxies Resume Intelligence — no RWS persistence, no `db` dependency on the route) | `401` no/invalid JWT · `502` Resume Intelligence unavailable |
+| List all applications (unscoped) | not yet built | `GET /v1/applications` **IMPLEMENTED, backend-only** | `GlobalApplicationResponse[]` — every `ApplicationResponse` field (below) plus `job_title`, newest-selected-first across every job | `401` no/invalid JWT |
 
 `ApplicationResponse` fields (from `schemas.py`, used by select/invite/accept/reject/list
 above): `application_id`, `job_id`, `match_result_id`, `candidate_id`, `status`
 (`"selected" | "invited" | "interviewed" | "accepted" | "rejected"`), `selected_at`,
 `invite_attempt_number`, `invited_at`, `interview_status`
 (`"completed" | "inconclusive" | "failed" | null`), `interview_assessment` (`dict | null`
-— see §13), `interview_completed_at`, `decided_at`.
+— see §13), `interview_completed_at`, `decided_at`. `GlobalApplicationResponse` (used
+only by `GET /v1/applications`) is `ApplicationResponse` plus one extra field,
+`job_title` — the job-scoped `GET /v1/jobs/{job_id}/applications` is unchanged and
+still returns plain `ApplicationResponse` (no `job_title`, since the job is already
+implied by the URL).
 
 **Not recruiter-facing, must never be called from this frontend**: `POST
 /v1/scoring-configs` (service-key protected, `require_service_key` not
@@ -1698,28 +1704,51 @@ navigation). This pass built the shell and shared components only, exactly as sc
   `services/recruitment-workflow/frontend/src/` — no backend, API, auth, or
   workflow-state code touched. Full detail in §20.
 
-**`[NEXT]` for this file is: backend prerequisites for the Candidates page and the
-global (unscoped) Applications/VoiceHR-interview-list view** — the next two items the
-admin-dashboard redesign proposal's own §13/§14 named as genuinely missing, and the
-smallest useful next step before any more frontend phases (Candidates page,
-Dashboard's real metrics, the global VoiceHR interview list) can be built on real
-data instead of placeholders:
+**Backend prerequisites for the Candidates page + global Applications are done** — the
+two items named above ("Backend addition #2 + #3" in the admin-dashboard redesign
+proposal), implemented on the backend only, no frontend code touched this pass:
 
-1. **A candidate-list endpoint.** Resume Intelligence has no `GET /v1/candidates`
-   today — only single-candidate contact lookup. Add one (service-key auth, no
-   pagination, matching this project's existing "no infra ahead of demonstrated
-   need" bar), then a thin RWS proxy (`GET /v1/candidates`, recruiter-JWT, no `db`
-   dependency — the same transient-proxy shape `GET /v1/candidates/{id}/identity`
-   already uses) that the browser actually calls.
-2. **An unscoped applications endpoint on RWS.** `GET /v1/jobs/{job_id}/applications`
-   requires a `job_id` today; there is no way to list applications across every job
-   at once. Relax the existing query (optional `job_id` filter, join `Job.title` in)
-   rather than building a second endpoint — RWS already has every column this needs
-   (`status`, `interview_status`, `interview_assessment`, `candidate_id`, `job_id`).
+1. **Candidate-list endpoint.** `GET /v1/candidates` on Resume Intelligence
+   (service-key auth, newest-first, `candidate_id`/`name`/`email`/`created_at` only —
+   no pagination, matching `GET /v1/jobs`'s own precedent), proxied by a new
+   `GET /v1/candidates` on RWS (recruiter-JWT, no `db` dependency on the route — the
+   same transient-proxy shape `GET /v1/candidates/{id}/identity` already uses). See
+   §7 for the exact response shape and §12/§20-equivalent detail in `handoff.md`
+   (this is cross-service API-surface work, tracked there per §23's own rule).
+2. **Unscoped applications endpoint on RWS.** `GET /v1/applications` — every
+   application across every job, newest-selection-first, each row carrying the
+   existing `ApplicationResponse` fields plus `job_title` (new
+   `GlobalApplicationResponse`, `db.py: list_all_applications` — one `JOIN`, not an
+   N+1 lookup). `GET /v1/jobs/{job_id}/applications` itself is untouched — confirmed
+   both by a dedicated regression test and by a live re-check against the real
+   running stack (same 5 rows, no `job_title` field, still `404`s on an unknown job).
 
-Both are backend-only, additive, and independently testable against the live stack
-the same way every prior backend step in this project was verified — no frontend
-code should change as part of this next task. This is exactly the scope the proposal
-called "Backend addition #2 + #3"; the VoiceHR-report-proxy addition (#4) and the
-Candidates/VoiceHR-list/Reports pages themselves stay explicitly out of scope until
-this step lands, per §23's one-bounded-task-per-pass rule.
+Both were live-verified against the real rebuilt/recreated `csb-resume-intelligence`
+and `csb-recruitment-workflow` containers (real Postgres, real JWT login, real
+correlation-ID propagation, zero candidate PII in either service's logs) — see
+`handoff.md`'s own entry for this session for the full verification record (RWS/
+Resume Intelligence test counts, the exact live requests issued, and one honestly-
+reported gap: the live check couldn't exercise a second, genuinely distinct
+`job_title` in the global list, since no qualified candidate currently exists for the
+one other real job in this demo dataset — that exact case is instead covered by
+`test_applications_global.py`'s mocked two-job test).
+
+**`[NEXT]` for this file is: Candidates page + real Dashboard data.** Both new
+endpoints from this pass are now available for the frontend to actually call:
+
+- Build the Candidates page (§3 of the admin-dashboard redesign proposal) against the
+  new `GET /v1/candidates`, following the exact reusable-hook pattern
+  `useCandidateIdentity` already established (a lazy, cached lookup — though this
+  endpoint returns the full list in one call, so no per-row fetch is needed here).
+- Wire `DashboardPage`'s four `StatTile`s to real numbers: candidate count (from
+  `GET /v1/candidates`'s response length, or a future `?count_only` variant if the
+  list itself proves too large — not needed yet), open-jobs count (`GET /v1/jobs`,
+  already available), and pipeline/interview counts (derivable from `GET
+  /v1/applications`, now available) — replacing the literal `"—"` placeholders,
+  per §21's now-resolved note that Dashboard was deliberately not data-backed yet.
+- Add `Candidates` to `Sidebar`'s `NAV_ITEMS` and a `/candidates` route in
+  `AppRouter.jsx` now that the page it points to will actually exist and work — per
+  Phase 11's own explicit rule, do this only once the page itself is built, not before.
+- The global VoiceHR interview-list page and Reports pages remain out of scope for
+  this next task specifically (they're named in the redesign proposal but were not
+  what this session's `[NEXT]` asked for) — one bounded task at a time, per §23.

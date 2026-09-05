@@ -531,3 +531,100 @@ def test_contact_lookup_with_malformed_candidate_id_returns_422_not_500():
     finally:
         api.app.dependency_overrides.clear()
     assert resp.status_code == 422
+
+
+class _FakeCandidateRow:
+    def __init__(self, id, name, email, phone, raw_text, candidate_json, created_at):
+        self.id = id
+        self.name = name
+        self.email = email
+        self.phone = phone
+        self.raw_text = raw_text
+        self.candidate_json = candidate_json
+        self.created_at = created_at
+
+
+def _candidates_client(rows, monkeypatch):
+    # get_candidates calls list_candidates(db) directly (imported by name into api's
+    # own namespace) -- overriding get_db alone wouldn't stand in for the real query,
+    # so list_candidates itself is monkeypatched, the same boundary
+    # test_contact_lookup_* mocks at (db.query(...).filter(...).first()) one level down.
+    monkeypatch.setattr(api, "list_candidates", lambda db: rows)
+    api.app.dependency_overrides[api.get_db] = lambda: _FakeSession(None)
+    return TestClient(api.app)
+
+
+def test_candidates_list_without_api_key_returns_401(monkeypatch):
+    client = _candidates_client([], monkeypatch)
+    try:
+        resp = client.get("/v1/candidates")
+    finally:
+        api.app.dependency_overrides.clear()
+    assert resp.status_code == 401
+
+
+def test_candidates_list_with_wrong_api_key_returns_401(monkeypatch):
+    client = _candidates_client([], monkeypatch)
+    try:
+        resp = client.get("/v1/candidates", headers={"x-api-key": "wrong-key"})
+    finally:
+        api.app.dependency_overrides.clear()
+    assert resp.status_code == 401
+
+
+def test_candidates_list_empty_returns_empty_array(monkeypatch):
+    client = _candidates_client([], monkeypatch)
+    try:
+        resp = client.get("/v1/candidates", headers={"x-api-key": api.settings.service_api_key})
+    finally:
+        api.app.dependency_overrides.clear()
+    assert resp.status_code == 200
+    assert resp.json() == []
+
+
+def test_candidates_list_returns_only_approved_fields_in_provided_order(monkeypatch):
+    rows = [
+        _FakeCandidateRow(
+            id=uuid.uuid4(),
+            name="Newer Candidate",
+            email="newer@example.com",
+            phone="+33600000001",
+            raw_text="this must never appear in the response",
+            candidate_json={"basics": {"email": "newer@example.com"}},
+            created_at="2026-01-02T00:00:00+00:00",
+        ),
+        _FakeCandidateRow(
+            id=uuid.uuid4(),
+            name="Older Candidate",
+            email=None,
+            phone=None,
+            raw_text="this must never appear either",
+            candidate_json={"basics": {}},
+            created_at="2026-01-01T00:00:00+00:00",
+        ),
+    ]
+    client = _candidates_client(rows, monkeypatch)
+    try:
+        resp = client.get("/v1/candidates", headers={"x-api-key": api.settings.service_api_key})
+    finally:
+        api.app.dependency_overrides.clear()
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert len(body) == 2
+    # The endpoint renders list_candidates()'s own order verbatim -- ordering itself
+    # (newest-first) is list_candidates()'s responsibility and is covered against a
+    # real Postgres in tests/test_db.py::TestListCandidates.
+    assert [c["candidate_id"] for c in body] == [str(rows[0].id), str(rows[1].id)]
+
+    first = body[0]
+    assert first["name"] == "Newer Candidate"
+    assert first["email"] == "newer@example.com"
+    assert set(first.keys()) == {"candidate_id", "name", "email", "created_at"}
+    assert "phone" not in first
+    assert "raw_text" not in first
+    assert "candidate_json" not in first
+
+    second = body[1]
+    assert second["email"] is None
+

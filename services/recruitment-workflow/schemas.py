@@ -187,6 +187,31 @@ class ApplicationResponse(BaseModel):
     decided_at: Optional[datetime]
 
 
+class GlobalApplicationResponse(ApplicationResponse):
+    """GET /v1/applications' row shape -- every ApplicationResponse field plus the
+    job's title, since a global (unscoped) list needs to identify which job each row
+    belongs to (the job-scoped GET /v1/jobs/{job_id}/applications doesn't need this,
+    the job is already implied by the URL)."""
+
+    job_title: str = Field(min_length=1, max_length=200)
+
+
+# ---------------------------------------------------------------------------
+# Candidate list (recruiter-facing, transient proxy to Resume Intelligence)
+#
+# Same transient-proxy rule as CandidateIdentityResponse above: RWS fetches this
+# fresh from Resume Intelligence per request and persists none of it.
+# ---------------------------------------------------------------------------
+
+class CandidateSummaryResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    candidate_id: UUID4
+    name: str = Field(min_length=1, max_length=200)
+    email: Optional[EmailStr] = None
+    created_at: datetime
+
+
 # ---------------------------------------------------------------------------
 # Interview invitation (RWS -> VoiceHR, gated on a Resume Intelligence contact lookup)
 # ---------------------------------------------------------------------------

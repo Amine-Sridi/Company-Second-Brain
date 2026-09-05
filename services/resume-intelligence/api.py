@@ -5,11 +5,12 @@ Endpoints:
   GET  /health
   POST /v1/resumes                          — service-key auth, ingest a resume file, returns candidate_id
   GET  /v1/candidates/{candidate_id}/contact — service-key auth, returns PII contact data
+  GET  /v1/candidates                        — service-key auth, newest-first candidate_id/name/email/created_at list
 
-Both non-health endpoints use the same X-Api-Key service-key mechanism -- there is no
+All non-health endpoints use the same X-Api-Key service-key mechanism -- there is no
 separate auth system here, and this service never validates a recruiter JWT (that
-happens once, upstream, in RWS). The current caller of POST /v1/resumes is RWS's own
-recruiter-facing upload endpoint (POST /v1/resumes on RWS, JWT-protected there); the
+happens once, upstream, in RWS). The current caller of POST /v1/resumes and GET
+/v1/candidates is RWS's own recruiter-facing endpoints (JWT-protected there); the
 same service-key mechanism is already what a future trusted caller (e.g. an
 email-ingestion workflow) would use too -- no new auth surface would be needed for that.
 """
@@ -22,11 +23,15 @@ import uuid
 from pathlib import Path
 from typing import Annotated
 
+from datetime import datetime
+from typing import Optional
+
 from fastapi import Depends, FastAPI, File, Header, HTTPException, UploadFile, status
+from pydantic import UUID4, BaseModel, ConfigDict, EmailStr, Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 from sqlalchemy.orm import Session
 
-from db import Candidate, get_db, store_candidate
+from db import Candidate, get_db, list_candidates, store_candidate
 
 # shared/ is available at /app/shared/ in Docker (build context = project root).
 # In local dev / tests, the project root must be on sys.path (see tests/conftest.py).
@@ -105,6 +110,32 @@ def require_service_key(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Invalid or missing service API key",
         )
+
+
+# ---------------------------------------------------------------------------
+# Response models local to this service's own API surface (not /shared/schemas --
+# see ContactLookupResponse's own module docstring: only schemas that cross a
+# service boundary as a shared contract live there; RWS defines its own separate
+# response shape for what it proxies, exactly like CandidateIdentityResponse
+# already does for /contact).
+# ---------------------------------------------------------------------------
+
+class CandidateListItem(BaseModel):
+    """
+    One row of GET /v1/candidates. Deliberately minimal -- an explicit allow-list,
+    not "the Candidate row minus a blocklist": no raw_text, no candidate_json, no
+    phone. email is Optional because a candidate can be stored with no email at all
+    (db.store_candidate always inserts rather than silently merging when email is
+    absent) -- unlike ContactLookupResponse's required EmailStr, which predates that
+    case being exercised by this endpoint.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    candidate_id: UUID4
+    name: str = Field(min_length=1, max_length=200)
+    email: Optional[EmailStr] = None
+    created_at: datetime
 
 
 # ---------------------------------------------------------------------------
@@ -257,3 +288,30 @@ def get_contact(
         email=candidate.email,
         phone=candidate.phone,
     )
+
+
+@app.get("/v1/candidates", response_model=list[CandidateListItem])
+def get_candidates(
+    db: Session = Depends(get_db),
+    _auth: None = Depends(require_service_key),
+):
+    """
+    Every candidate, newest first. Requires X-Api-Key service key -- RWS is the
+    current (and only intended) caller, proxying this to its own recruiter-JWT-
+    protected GET /v1/candidates (see FRONTEND_HANDOFF.md's Candidates-page backend
+    prerequisites). No pagination/search yet, matching this project's existing
+    "no infra ahead of demonstrated need" rule (same as RWS's own GET /v1/jobs).
+
+    Returns only candidate_id/name/email/created_at -- CandidateListItem is an
+    explicit allow-list, so no raw_text, candidate_json, or phone can leak here even
+    if a future field is added to the Candidate model.
+    """
+    return [
+        CandidateListItem(
+            candidate_id=candidate.id,
+            name=candidate.name,
+            email=candidate.email,
+            created_at=candidate.created_at,
+        )
+        for candidate in list_candidates(db)
+    ]

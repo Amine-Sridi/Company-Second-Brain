@@ -58,6 +58,22 @@ async def get_contact(
     return resp.json()
 
 
+async def list_candidates(base_url: str, api_key: str) -> list[dict]:
+    """Returns Resume Intelligence's newest-first candidate list, each item shaped
+    {"candidate_id", "name", "email", "created_at"} -- callers must not persist
+    these dicts (see main.py's get_candidates, which has no db dependency at all)."""
+    try:
+        resp = await call_service("GET", f"{base_url}/v1/candidates", api_key=api_key)
+    except ServiceCallError as exc:
+        raise ResumeIntelligenceClientError(str(exc)) from exc
+
+    if resp.status_code != 200:
+        raise ResumeIntelligenceClientError(
+            f"Resume Intelligence candidate list returned {resp.status_code}: {resp.text}"
+        )
+    return resp.json()
+
+
 async def upload_resume(
     base_url: str, api_key: str, filename: str, content: bytes, content_type: str
 ) -> httpx.Response:

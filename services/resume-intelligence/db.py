@@ -147,3 +147,19 @@ def store_candidate(
     db.commit()
     db.refresh(candidate)
     return candidate.id, True
+
+
+def list_candidates(db: Session) -> list[Candidate]:
+    """
+    Every candidate, newest first. No pagination/search: this project's current scale
+    doesn't need it (see FRONTEND_HANDOFF.md's Candidates-page backend prerequisites) --
+    revisit only if a real dataset size makes the full list impractical, matching the
+    same rule already applied to RWS's GET /v1/jobs.
+
+    Callers must read only candidate_id/name/email/created_at off the returned rows --
+    this function itself returns full Candidate ORM objects (raw_text/candidate_json/
+    phone included) purely because that's the natural SQLAlchemy return shape; the
+    approved-field allow-list is enforced at the API response-model boundary
+    (api.py's CandidateListItem), not here.
+    """
+    return db.query(Candidate).order_by(Candidate.created_at.desc()).all()

@@ -45,6 +45,7 @@ from db import (
     get_recruiter_by_id,
     get_scoring_config_by_version,
     insert_webhook_event,
+    list_all_applications,
     list_applications_for_job,
     list_jobs_with_match_counts,
     list_match_results_for_job,
@@ -59,6 +60,8 @@ from resume_intelligence_client import ResumeIntelligenceClientError
 from schemas import (
     ApplicationResponse,
     CandidateIdentityResponse,
+    CandidateSummaryResponse,
+    GlobalApplicationResponse,
     InviteApplicationRequest,
     JobResponse,
     JobSubmissionRequest,
@@ -731,6 +734,28 @@ def get_job_applications(
     return [_application_response(a) for a in list_applications_for_job(db, job_id)]
 
 
+@app.get("/v1/applications", response_model=list[GlobalApplicationResponse])
+def get_all_applications(
+    db: Session = Depends(get_db),
+    recruiter: Recruiter = Depends(require_recruiter),
+):
+    """
+    Recruiter-facing: every application across every job, newest-selection-first --
+    the global counterpart to GET /v1/jobs/{job_id}/applications, for a VoiceHR/
+    interview-list view that isn't scoped to one job (see FRONTEND_HANDOFF.md's
+    Candidates-page backend prerequisites). Reuses _application_response for every
+    ApplicationResponse field and adds only job_title, via list_all_applications'
+    single JOIN query -- no N+1 per-application job lookup.
+    """
+    return [
+        GlobalApplicationResponse(
+            **_application_response(application).model_dump(),
+            job_title=job_title,
+        )
+        for application, job_title in list_all_applications(db)
+    ]
+
+
 # ---------------------------------------------------------------------------
 # Candidate identity -- recruiter-facing, transient proxy to Resume Intelligence
 #
@@ -778,6 +803,40 @@ async def get_candidate_identity(
         name=contact["name"],
         email=contact.get("email"),
     )
+
+
+@app.get("/v1/candidates", response_model=list[CandidateSummaryResponse])
+async def get_candidates(
+    recruiter: Recruiter = Depends(require_recruiter),
+):
+    """
+    Recruiter-facing: every candidate ever ingested, newest first -- the Candidates-
+    page backend prerequisite (see FRONTEND_HANDOFF.md). Transiently proxies Resume
+    Intelligence's own GET /v1/candidates (service-key auth, never exposed to the
+    browser) and returns it as-is, reshaped into this service's own response model.
+    Declares no db dependency at all, the same structural proof of "RWS persists
+    nothing from this call" already used by get_candidate_identity above.
+    """
+    try:
+        candidates = await resume_intelligence_client.list_candidates(
+            settings.resume_intelligence_url,
+            settings.resume_intelligence_api_key,
+        )
+    except ResumeIntelligenceClientError as exc:
+        # Only the exception type is logged, matching get_candidate_identity's own
+        # PII-safe logging bar -- no candidate data, no upstream exception message.
+        logger.error("candidates_list_lookup_failed", extra={"error_type": type(exc).__name__})
+        raise HTTPException(status_code=502, detail="Resume Intelligence unavailable")
+
+    return [
+        CandidateSummaryResponse(
+            candidate_id=c["candidate_id"],
+            name=c["name"],
+            email=c.get("email"),
+            created_at=c["created_at"],
+        )
+        for c in candidates
+    ]
 
 
 # ---------------------------------------------------------------------------

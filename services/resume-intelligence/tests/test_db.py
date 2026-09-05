@@ -132,3 +132,38 @@ class TestStoreCandidateDedup:
         assert stored.email_normalized == email.lower()
         assert stored.candidate_json["work"][0]["company"] == "Acme"
         assert stored.raw_text == "raw resume text"
+
+
+@_needs_db
+class TestListCandidates:
+    def test_newest_first_ordering(self, session):
+        s, created_ids = session
+        first = {"basics": {"first_name": "A", "last_name": "Older", "email": _unique_email(), "phone": None}}
+        second = {"basics": {"first_name": "B", "last_name": "Newer", "email": _unique_email(), "phone": None}}
+
+        id1, _ = db.store_candidate(s, first, "raw text 1")
+        created_ids.append(id1)
+        id2, _ = db.store_candidate(s, second, "raw text 2")
+        created_ids.append(id2)
+
+        results = db.list_candidates(s)
+        ids = [c.id for c in results]
+        # Both freshly-created rows must appear, with the more-recently-created one
+        # (id2) ordered before the older one (id1) -- not merely "present somewhere",
+        # since other tests/sessions may have left unrelated rows in the table too.
+        assert ids.index(id2) < ids.index(id1)
+
+    def test_returned_rows_carry_only_expected_fields(self, session):
+        s, created_ids = session
+        email = _unique_email()
+        candidate_json = {
+            "basics": {"first_name": "Jean", "last_name": "Dupont", "email": email, "phone": "+33612345678"},
+        }
+        candidate_id, _ = db.store_candidate(s, candidate_json, "raw resume text")
+        created_ids.append(candidate_id)
+
+        results = db.list_candidates(s)
+        match = next(c for c in results if c.id == candidate_id)
+        assert match.name == "Jean Dupont"
+        assert match.email == email
+        assert match.created_at is not None

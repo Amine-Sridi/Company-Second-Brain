@@ -575,6 +575,23 @@ def list_applications_for_job(db: Session, job_id: uuid.UUID) -> list[Applicatio
     )
 
 
+def list_all_applications(db: Session) -> list[tuple[Application, str]]:
+    """
+    Every application across every job, newest-selection-first, each paired with its
+    job's title -- the global counterpart to list_applications_for_job (same ordering
+    rule: Application.selected_at desc). One JOIN, not an N+1 per-application title
+    lookup. No pagination/filtering yet, matching this project's existing "no infra
+    ahead of demonstrated need" rule (same as list_jobs_with_match_counts).
+    """
+    rows = (
+        db.query(Application, Job.title)
+        .join(Job, Job.id == Application.job_id)
+        .order_by(Application.selected_at.desc())
+        .all()
+    )
+    return [(application, job_title) for application, job_title in rows]
+
+
 _DECIDABLE_STATUSES = ("selected", "invited", "interviewed")
 
 
