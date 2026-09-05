@@ -2,6 +2,8 @@ import { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { getJobs, createJob } from "../api/jobs.js";
 import { ApiError } from "../api/client.js";
+import PageHeader from "../components/PageHeader.jsx";
+import EmptyState from "../components/EmptyState.jsx";
 import styles from "./JobsListPage.module.css";
 
 // Matches the backend's own defaults (schemas.py: JobSubmissionRequest) -- pre-filled,
@@ -77,21 +79,19 @@ export default function JobsListPage() {
 
   return (
     <div className={styles.page}>
-      <div className={styles.header}>
-        <div>
-          <h1 className={styles.title}>Jobs</h1>
-          <p className={styles.subtitle}>
-            Post a job description and review the system's ranked candidates.
-          </p>
-        </div>
-        <button
-          type="button"
-          className={styles.newJobButton}
-          onClick={() => setShowForm((visible) => !visible)}
-        >
-          {showForm ? "Cancel" : "New Job"}
-        </button>
-      </div>
+      <PageHeader
+        title="Jobs"
+        subtitle="Post a job description and review the system's ranked candidates."
+        actions={
+          <button
+            type="button"
+            className={styles.newJobButton}
+            onClick={() => setShowForm((visible) => !visible)}
+          >
+            {showForm ? "Cancel" : "New Job"}
+          </button>
+        }
+      />
 
       {showForm && (
         <form className={styles.form} onSubmit={handleCreate}>
@@ -178,7 +178,7 @@ export default function JobsListPage() {
       )}
 
       {!loading && !error && jobs.length === 0 && (
-        <p className={styles.status}>No jobs yet — create one to get started.</p>
+        <EmptyState title="No jobs yet" description="Create one to get started." />
       )}
 
       {!loading && !error && jobs.length > 0 && (

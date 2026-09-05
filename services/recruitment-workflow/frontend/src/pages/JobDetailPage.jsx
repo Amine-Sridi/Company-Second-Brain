@@ -4,6 +4,9 @@ import { getJobs, getJobMatches } from "../api/jobs.js";
 import { selectMatch } from "../api/applications.js";
 import { ApiError } from "../api/client.js";
 import { useCandidateIdentity } from "../hooks/useCandidateIdentity.js";
+import PageHeader from "../components/PageHeader.jsx";
+import StatusBadge from "../components/StatusBadge.jsx";
+import EmptyState from "../components/EmptyState.jsx";
 import styles from "./JobDetailPage.module.css";
 
 /**
@@ -53,26 +56,20 @@ export default function JobDetailPage() {
 
   return (
     <div className={styles.page}>
-      <div className={styles.header}>
-        <div>
-          <h1 className={styles.title}>{job ? job.title : "Job Detail"}</h1>
-          {job && (
-            <p className={styles.subtitle}>
-              {job.match_count} candidate{job.match_count === 1 ? "" : "s"} matched
-              {" · "}
-              posted{" "}
-              {new Date(job.created_at).toLocaleDateString(undefined, {
-                year: "numeric",
-                month: "short",
-                day: "numeric",
-              })}
-            </p>
-          )}
-        </div>
-        <Link to={`/jobs/${jobId}/applications`} className={styles.applicationsLink}>
-          View Applications
-        </Link>
-      </div>
+      <PageHeader
+        title={job ? job.title : "Job Detail"}
+        subtitle={
+          job &&
+          `${job.match_count} candidate${job.match_count === 1 ? "" : "s"} matched · posted ${new Date(
+            job.created_at
+          ).toLocaleDateString(undefined, { year: "numeric", month: "short", day: "numeric" })}`
+        }
+        actions={
+          <Link to={`/jobs/${jobId}/applications`} className={styles.applicationsLink}>
+            View Applications
+          </Link>
+        }
+      />
 
       {loading && <p className={styles.status}>Loading candidates…</p>}
 
@@ -83,7 +80,10 @@ export default function JobDetailPage() {
       )}
 
       {!loading && !error && matches.length === 0 && (
-        <p className={styles.status}>No candidates matched this job.</p>
+        <EmptyState
+          title="No candidates matched"
+          description="This job has no matched candidates yet."
+        />
       )}
 
       {!loading && !error && matches.length > 0 && (
@@ -171,13 +171,9 @@ function CandidateRow({ match }) {
           <ScoreBar value={match.final_score} />
         </td>
         <td>
-          <span
-            className={
-              match.qualified ? styles.badgeQualified : styles.badgeNotQualified
-            }
-          >
+          <StatusBadge tone={match.qualified ? "success" : "neutral"}>
             {match.qualified ? "Qualified" : "Not qualified"}
-          </span>
+          </StatusBadge>
         </td>
         <td onClick={(event) => event.stopPropagation()}>
           {selectStatus === "selected" ? (

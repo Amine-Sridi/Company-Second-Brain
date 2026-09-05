@@ -5,6 +5,9 @@ import { getApplications, invite, accept, reject } from "../api/applications.js"
 import { ApiError } from "../api/client.js";
 import { useCandidateIdentity } from "../hooks/useCandidateIdentity.js";
 import { usePolling } from "../hooks/usePolling.js";
+import PageHeader from "../components/PageHeader.jsx";
+import StatusBadge from "../components/StatusBadge.jsx";
+import EmptyState from "../components/EmptyState.jsx";
 import styles from "./ApplicationsPage.module.css";
 
 const POLL_INTERVAL_MS = 7000;
@@ -17,12 +20,12 @@ const STATUS_LABELS = {
   rejected: "Rejected",
 };
 
-const STATUS_STYLES = {
-  selected: "statusSelected",
-  invited: "statusInvited",
-  interviewed: "statusInterviewed",
-  accepted: "statusAccepted",
-  rejected: "statusRejected",
+const STATUS_TONE = {
+  selected: "neutral",
+  invited: "primary",
+  interviewed: "accent",
+  accepted: "success",
+  rejected: "danger",
 };
 
 const INTERVIEW_STATUS_LABELS = {
@@ -37,10 +40,10 @@ const EVALUATION_STATUS_LABELS = {
   failed: "Failed",
 };
 
-const EVALUATION_STATUS_STYLES = {
-  completed: "evaluationCompleted",
-  inconclusive: "evaluationInconclusive",
-  failed: "evaluationFailed",
+const EVALUATION_STATUS_TONE = {
+  completed: "success",
+  inconclusive: "warning",
+  failed: "danger",
 };
 
 // Statuses RWS itself accepts an invite/resend-invite call for (main.py:
@@ -124,9 +127,7 @@ export default function ApplicationsPage() {
 
   return (
     <div className={styles.page}>
-      <div className={styles.header}>
-        <h1 className={styles.title}>{job ? `Applications — ${job.title}` : "Applications"}</h1>
-      </div>
+      <PageHeader title={job ? `Applications — ${job.title}` : "Applications"} />
 
       {loading && <p className={styles.status}>Loading applications…</p>}
 
@@ -137,9 +138,10 @@ export default function ApplicationsPage() {
       )}
 
       {!loading && !error && applications.length === 0 && (
-        <p className={styles.status}>
-          No applications yet — select a candidate from the ranking table.
-        </p>
+        <EmptyState
+          title="No applications yet"
+          description="Select a candidate from the ranking table to get started."
+        />
       )}
 
       {!loading && !error && applications.length > 0 && (
@@ -262,9 +264,9 @@ function ApplicationRow({ application, onUpdated }) {
           )}
         </td>
         <td>
-          <span className={`${styles.statusBadge} ${styles[STATUS_STYLES[application.status]]}`}>
+          <StatusBadge tone={STATUS_TONE[application.status] ?? "neutral"}>
             {STATUS_LABELS[application.status] ?? application.status}
-          </span>
+          </StatusBadge>
         </td>
         <td>
           {application.interview_status ? (
@@ -371,9 +373,9 @@ function AssessmentPanel({ assessment }) {
     <div className={styles.assessment}>
       <div className={styles.assessmentHeader}>
         <span className={styles.assessmentLabel}>Interview Assessment</span>
-        <span className={`${styles.evaluationBadge} ${styles[EVALUATION_STATUS_STYLES[evaluation_status]] ?? ""}`}>
+        <StatusBadge tone={EVALUATION_STATUS_TONE[evaluation_status] ?? "neutral"}>
           {EVALUATION_STATUS_LABELS[evaluation_status] ?? evaluation_status}
-        </span>
+        </StatusBadge>
         {inconclusive && (
           <span className={styles.inconclusiveNote}>Low-confidence evaluation</span>
         )}

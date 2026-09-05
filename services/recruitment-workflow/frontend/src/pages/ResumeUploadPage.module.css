@@ -2,18 +2,6 @@
   max-width: 560px;
 }
 
-.title {
-  margin: 0 0 var(--spacing-1);
-  font-size: var(--font-size-xl);
-  font-weight: 700;
-}
-
-.subtitle {
-  margin: 0 0 var(--spacing-4);
-  color: var(--color-text-muted);
-  font-size: var(--font-size-base);
-}
-
 .dropZone {
   border: 2px dashed var(--color-border);
   border-radius: var(--radius);

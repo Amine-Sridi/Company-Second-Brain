@@ -1,0 +1,20 @@
+.emptyState {
+  background: var(--color-surface);
+  border: 1px dashed var(--color-border);
+  border-radius: var(--radius);
+  padding: var(--spacing-5) var(--spacing-4);
+  text-align: center;
+}
+
+.title {
+  margin: 0;
+  font-weight: 600;
+  color: var(--color-text);
+  font-size: var(--font-size-base);
+}
+
+.description {
+  margin: var(--spacing-1) 0 0;
+  color: var(--color-text-muted);
+  font-size: var(--font-size-sm);
+}

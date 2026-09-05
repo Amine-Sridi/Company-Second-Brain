@@ -1,6 +1,7 @@
 import { useRef, useState } from "react";
 import { uploadResume } from "../api/resumes.js";
 import { ApiError } from "../api/client.js";
+import PageHeader from "../components/PageHeader.jsx";
 import styles from "./ResumeUploadPage.module.css";
 
 const ACCEPTED_EXTENSIONS = ".pdf,.docx,.jpg,.jpeg,.png";
@@ -83,8 +84,7 @@ export default function ResumeUploadPage() {
   if (status === "success" && result) {
     return (
       <div className={styles.page}>
-        <h1 className={styles.title}>Upload Resume</h1>
-        <p className={styles.subtitle}>Add a candidate's resume to the talent pool.</p>
+        <PageHeader title="Upload Resume" subtitle="Add a candidate's resume to the talent pool." />
 
         <div className={styles.success} role="status">
           <p className={styles.successTitle}>
@@ -113,8 +113,7 @@ export default function ResumeUploadPage() {
 
   return (
     <div className={styles.page}>
-      <h1 className={styles.title}>Upload Resume</h1>
-      <p className={styles.subtitle}>Add a candidate's resume to the talent pool.</p>
+      <PageHeader title="Upload Resume" subtitle="Add a candidate's resume to the talent pool." />
 
       <div
         className={[

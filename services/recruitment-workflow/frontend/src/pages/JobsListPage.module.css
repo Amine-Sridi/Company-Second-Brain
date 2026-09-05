@@ -2,27 +2,6 @@
   max-width: 760px;
 }
 
-.header {
-  display: flex;
-  align-items: flex-start;
-  justify-content: space-between;
-  gap: var(--spacing-3);
-  flex-wrap: wrap;
-  margin-bottom: var(--spacing-4);
-}
-
-.title {
-  margin: 0 0 var(--spacing-1);
-  font-size: var(--font-size-xl);
-  font-weight: 700;
-}
-
-.subtitle {
-  margin: 0;
-  color: var(--color-text-muted);
-  font-size: var(--font-size-base);
-}
-
 .newJobButton {
   flex-shrink: 0;
   background: var(--color-primary);

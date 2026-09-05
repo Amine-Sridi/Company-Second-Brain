@@ -14,7 +14,7 @@ export default function LoginPage() {
 
   // Already logged in (e.g. navigated back to /login manually) -- go straight to the app.
   if (isAuthenticated) {
-    return <Navigate to="/jobs" replace />;
+    return <Navigate to="/" replace />;
   }
 
   async function handleSubmit(event) {
@@ -23,7 +23,7 @@ export default function LoginPage() {
     setSubmitting(true);
     try {
       await login(email, password);
-      navigate("/jobs", { replace: true });
+      navigate("/", { replace: true });
     } catch (err) {
       // Shows the real backend detail (e.g. "Invalid email or password") verbatim --
       // the backend's own error messages are already specific and PII-safe.

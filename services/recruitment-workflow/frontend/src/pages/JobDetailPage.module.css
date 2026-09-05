@@ -2,27 +2,6 @@
   max-width: 960px;
 }
 
-.header {
-  display: flex;
-  align-items: flex-start;
-  justify-content: space-between;
-  gap: var(--spacing-3);
-  flex-wrap: wrap;
-  margin-bottom: var(--spacing-4);
-}
-
-.title {
-  margin: 0 0 var(--spacing-1);
-  font-size: var(--font-size-xl);
-  font-weight: 700;
-}
-
-.subtitle {
-  margin: 0;
-  color: var(--color-text-muted);
-  font-size: var(--font-size-base);
-}
-
 .applicationsLink {
   flex-shrink: 0;
   align-self: flex-start;
@@ -107,28 +86,6 @@
 .identityWarning {
   color: var(--color-text-muted);
   font-size: var(--font-size-xs);
-}
-
-.badgeQualified {
-  display: inline-block;
-  background: var(--color-success-bg);
-  color: var(--color-success);
-  border-radius: var(--radius-pill);
-  padding: 2px 10px;
-  font-size: var(--font-size-xs);
-  font-weight: 600;
-  white-space: nowrap;
-}
-
-.badgeNotQualified {
-  display: inline-block;
-  background: var(--color-neutral-bg);
-  color: var(--color-text-muted);
-  border-radius: var(--radius-pill);
-  padding: 2px 10px;
-  font-size: var(--font-size-xs);
-  font-weight: 600;
-  white-space: nowrap;
 }
 
 .selectButton {

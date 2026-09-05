@@ -2,6 +2,7 @@ import { Navigate, Route, Routes } from "react-router-dom";
 import ProtectedRoute from "./ProtectedRoute.jsx";
 import Layout from "../pages/Layout.jsx";
 import LoginPage from "../pages/LoginPage.jsx";
+import DashboardPage from "../pages/DashboardPage.jsx";
 import JobsListPage from "../pages/JobsListPage.jsx";
 import ResumeUploadPage from "../pages/ResumeUploadPage.jsx";
 import JobDetailPage from "../pages/JobDetailPage.jsx";
@@ -19,12 +20,12 @@ export default function AppRouter() {
           </ProtectedRoute>
         }
       >
-        <Route index element={<Navigate to="/jobs" replace />} />
+        <Route index element={<DashboardPage />} />
         <Route path="/jobs" element={<JobsListPage />} />
         <Route path="/upload" element={<ResumeUploadPage />} />
         <Route path="/jobs/:jobId" element={<JobDetailPage />} />
         <Route path="/jobs/:jobId/applications" element={<ApplicationsPage />} />
-        <Route path="*" element={<Navigate to="/jobs" replace />} />
+        <Route path="*" element={<Navigate to="/" replace />} />
       </Route>
     </Routes>
   );

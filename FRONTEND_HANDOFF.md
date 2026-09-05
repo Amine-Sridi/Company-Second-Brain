@@ -144,7 +144,9 @@ services/recruitment-workflow/frontend/
 │   ├── hooks/               # Reusable custom hooks -- useCandidateIdentity and
 │   │                          # usePolling both exist
 │   ├── components/           # Reusable, presentational pieces shared across pages
-│   │                           # (StatusBadge, ScoreBar, Sidebar, TopBar, ...)
+│   │                           # (Sidebar, TopBar, PageHeader, StatusBadge, EmptyState,
+│   │                           #  StatTile -- the last four added in the Phase 11
+│   │                           #  admin-shell pass, see §19/§20)
 │   ├── pages/                  # One component per route, owns its own local state
 │   ├── styles/                  # variables.css (shared tokens) + global.css (reset)
 │   ├── App.jsx                   # AuthProvider + BrowserRouter + AppRouter
@@ -183,12 +185,18 @@ Folder responsibilities, precisely:
 | Route | Access | Page |
 |---|---|---|
 | `/login` | Public | `LoginPage` |
-| `/` | Protected | redirects to `/jobs` |
+| `/` | Protected | `DashboardPage` (Phase 11 — visual-only, not data-backed, see §20) |
 | `/jobs` | Protected | `JobsListPage` |
 | `/upload` | Protected | `ResumeUploadPage` |
 | `/jobs/:jobId` | Protected | `JobDetailPage` |
 | `/jobs/:jobId/applications` | Protected | `ApplicationsPage` |
-| `*` | Protected fallback | redirects to `/jobs` (or `/login` if unauthenticated, since `ProtectedRoute` runs first) |
+| `*` | Protected fallback | redirects to `/` (or `/login` if unauthenticated, since `ProtectedRoute` runs first) |
+
+`LoginPage`'s post-login redirect (both the already-authenticated short-circuit and the
+successful-submit path) now targets `/` instead of `/jobs`, matching Dashboard's new
+role as the app's home screen. No route named here is broken or half-built — Candidates/
+VoiceHR/Reports routes proposed in the admin-dashboard redesign are deliberately not
+added to this table (or to `Sidebar`) until their pages and backend support exist.
 
 All protected routes are nested under one `ProtectedRoute` → `Layout` wrapper in
 `AppRouter.jsx` (implemented) — no page individually re-checks auth.
@@ -915,9 +923,13 @@ future phase.
 - [x] **Phase 9 — Docker production build + FastAPI serving**
 - [x] **Phase 10 — Final frontend E2E/demo audit** *(one finding, M1, fixed post-audit
   — see §20/§24)*
+- [x] **Phase 11 — Admin shell redesign** *(Phase 1 of the separate admin-dashboard
+  redesign proposal — modern Sidebar/TopBar/Layout, PageHeader/StatusBadge/EmptyState/
+  StatTile, a visual-only Dashboard page — see §20/§24)*
 
-**The frontend is feature-complete and demo-ready.** All ten phases are done. §24 now
-points to whole-system demo preparation, not further frontend feature work.
+**The frontend is visually modernized and demo-ready.** All eleven phases above are
+done. §24 names the next bounded phase: the backend prerequisites the redesign's later
+phases (Candidates page, global VoiceHR/interview list) will need.
 
 Future sessions: update the checkboxes and the relevant page/section status above as
 each phase lands. Do not duplicate this checklist elsewhere or restate history that's
@@ -935,40 +947,82 @@ already captured here — extend it.
   `src/api/auth.js` (`login()`).
 - `src/auth/token.js` (`getToken`/`setToken`/`clearToken`/`decodeJwt`).
 - `src/context/AuthContext.jsx` (`AuthProvider`, `useAuth`).
-- `src/router/AppRouter.jsx`, `src/router/ProtectedRoute.jsx`.
-- `src/pages/Layout.jsx` + `.module.css`, `src/components/Sidebar.jsx` + `.module.css`,
-  `src/components/TopBar.jsx` + `.module.css` — behavior unchanged; **this pass**
-  restyled `Layout.module.css`/`Sidebar.module.css`/`TopBar.module.css` (see below).
+- `src/router/AppRouter.jsx`, `src/router/ProtectedRoute.jsx` — `ProtectedRoute`
+  unchanged. **Phase 11**: `AppRouter`'s `index` route now renders `DashboardPage`
+  directly (was `<Navigate to="/jobs" replace />`); the `*` fallback now redirects
+  to `/` instead of `/jobs` (still falls through to `/login` first when
+  unauthenticated, since `ProtectedRoute` wraps the whole tree — unchanged). No
+  other route, and no auth-guard logic, changed.
+- `src/pages/Layout.jsx` (unchanged) + `.module.css` (now reads the new
+  `--sidebar-width` token instead of a hardcoded `220px`).
+- `src/components/Sidebar.jsx` + `.module.css` — **redesigned in Phase 11** (see
+  below): still the same three real routes (`/`, `/jobs`, `/upload`), now rendered
+  from one `NAV_ITEMS` array with a small hand-authored inline SVG icon per item
+  (no new dependency) and a softer tinted active-state instead of a solid-fill pill;
+  `linkClass`'s active/inactive logic itself is unchanged.
+- `src/components/TopBar.jsx` + `.module.css` — **redesigned in Phase 11**:
+  identical `recruiter.email` display and `handleLogout()` call, now with a small
+  inline logout icon next to the label; no auth/navigation logic changed.
 - `src/pages/LoginPage.jsx` + `.module.css` — fully functional, not a placeholder;
-  `.module.css` restyled this pass (see below), `.jsx` untouched.
+  visually untouched by Phase 11 (out of that pass's scope). One small navigation-
+  destination change in Phase 11: both post-login redirects (`isAuthenticated`
+  short-circuit and successful submit) now target `/` instead of `/jobs`, since
+  Dashboard is the new home route (§5) — no other line changed.
 - `src/pages/ResumeUploadPage.jsx` + `.module.css` — fully functional: click-or-drop
   file selection, upload via `api/resumes.js`, loading/success/error states, "Upload
-  another resume" reset; `.module.css` restyled this pass, `.jsx` untouched.
+  another resume" reset. **Phase 11**: both header blocks (default view and the
+  success view) now render `<PageHeader title="Upload Resume" subtitle="..." />`
+  instead of their own inline `<h1>`/`<p>`; every other line, including the drop
+  zone's own `role="button"`/`tabIndex` (a separate, pre-existing gap this pass did
+  not touch — see §21), is unchanged.
 - `src/api/resumes.js` (`uploadResume(file)`).
 - `src/api/client.js`'s `request()` — accepts a `FormData` body (used by
   `uploadResume`) alongside the existing JSON-body path; no `Content-Type` is set when
   the body is `FormData`, so the browser supplies the correct multipart boundary
   itself. The JSON path (used by `login()`) is unchanged.
 - `src/pages/JobsListPage.jsx` + `.module.css` — fully functional: fetches and renders
-  the real jobs list, and a "New Job" creation form; `.module.css` restyled this pass,
-  `.jsx` untouched.
+  the real jobs list, and a "New Job" creation form. **Phase 11**: the header block
+  now renders `<PageHeader title="Jobs" subtitle="..." actions={<button>New Job/
+  Cancel</button>} />` (the button's own `onClick`/`showForm` toggle logic is
+  unchanged, just relocated into `PageHeader`'s `actions` slot), and the empty-list
+  message now renders `<EmptyState title="No jobs yet" description="..." />` instead
+  of a bare `<p>`. The now-superseded `.header`/`.title`/`.subtitle` rules were
+  removed from `JobsListPage.module.css` (moved into `PageHeader.module.css`); the
+  form/list/button CSS is untouched.
 - `src/pages/JobDetailPage.jsx` + `.module.css` — fully functional: fetches and renders
   real ranked matches, with per-row candidate-identity resolution, expandable
   score/requirements/explanation detail, candidate selection, and a "View
-  Applications" header link to `/jobs/:jobId/applications`. `.module.css` restyled in
-  the Phase 8 pass; `.jsx` gained a real `onKeyDown` handler on `CandidateRow`'s
-  expandable row this pass (Phase 10 finding M1 — Enter/Space now toggle expansion,
-  matching the existing `onClick`) — no other line changed.
+  Applications" header link to `/jobs/:jobId/applications`. Phase 10's `onKeyDown`
+  fix (M1) on `CandidateRow`'s expandable row is unchanged. **Phase 11**: the header
+  now renders `<PageHeader title=... subtitle=... actions={<Link>View
+  Applications</Link>} />` (the `Link`'s `to`/className and the subtitle's exact
+  computed text are unchanged, just re-homed); the empty-matches message now uses
+  `<EmptyState>`; the qualified/not-qualified badge now renders
+  `<StatusBadge tone={match.qualified ? "success" : "neutral"}>` instead of a
+  `styles.badgeQualified`/`badgeNotQualified` span (identical resulting colors —
+  `success`/`neutral` map to the exact same tokens those two classes used). No
+  score/select/expand logic, network call, or state variable changed.
 - `src/pages/ApplicationsPage.jsx` + `.module.css` — fully functional: fetches and
   renders the real applications list for a job, per-row candidate-identity resolution,
   status + interview-status display, Invite/Resend Invite, background polling while
   any application is `"invited"`, a real `AssessmentPanel` rendering
   `interview_assessment` once an interview completes, and Accept/Reject decision
   buttons, disabled while a decision is pending, terminal "Accepted ✓"/"Rejected"
-  labels once decided, and a native `window.confirm()` guard on Reject only.
-  `.module.css` restyled in the Phase 8 pass; `.jsx` gained the same `onKeyDown` fix on
-  `ApplicationRow`'s expandable row this pass, kept conditional on `hasAssessment`
-  exactly like the existing `onClick`/`role`/`tabIndex` — no other line changed.
+  labels once decided, and a native `window.confirm()` guard on Reject only. Phase
+  10's `onKeyDown` fix (M1) on `ApplicationRow`'s expandable row is unchanged.
+  **Phase 11**: the header now renders `<PageHeader title=... />` (no subtitle/
+  actions, matching the original markup exactly); the empty-list message now uses
+  `<EmptyState>`; both badges (`application.status` and
+  `interview_assessment.evaluation_status`) now render through `<StatusBadge>` —
+  `STATUS_STYLES`/`EVALUATION_STATUS_STYLES` (CSS-class-name maps) were renamed to
+  `STATUS_TONE`/`EVALUATION_STATUS_TONE` (tone-name maps) with the identical
+  status→color pairing preserved (`selected`→neutral, `invited`→primary,
+  `interviewed`→accent, `accepted`→success, `rejected`→danger;
+  `completed`→success, `inconclusive`→warning, `failed`→danger). The
+  `.acceptButton:hover` rule's bare `#185f36` literal was also replaced with the new
+  `--color-success-hover` token (same color, now tokenized — see §21's now-resolved
+  LOW finding from the Phase 10 audit). No invite/accept/reject/poll logic, network
+  call, or state variable changed.
 - `src/api/jobs.js` (`getJobs()`, `createJob()`, `getJobMatches()`).
 - `src/api/candidates.js` (`getCandidateIdentity()`).
 - `src/api/applications.js` — `selectMatch()`, `getApplications(jobId)`,
@@ -982,14 +1036,48 @@ already captured here — extend it.
   `visibilitychange`; cleans up on unmount and whenever `enabled`/`intervalMs`
   changes; swallows any error thrown by `callback` so a transient poll failure can
   never crash the page or blank out already-rendered data.
-- `src/styles/variables.css` — **substantially expanded this pass** (§15): semantic
-  color tokens (`--color-success`/`-bg`, `--color-warning`/`-bg`, `--color-accent`/
-  `-bg`, `--color-primary-bg`, `--color-hover-bg`, `--color-neutral-bg`), `--radius-pill`,
-  `--shadow-sm`/`--shadow-md`, a `--spacing-5` step, a `--font-size-*` type scale
-  (`xs`/`sm`/`base`/`md`/`lg`/`xl`), and `--transition-fast`. CSS custom properties
-  can't be read inside a `@media` condition, so the two shared breakpoints (768px,
-  480px) are documented as a plain comment convention there instead, reused literally
-  by every page's own `@media` rules.
+- **New in Phase 11** — `src/components/PageHeader.jsx` + `.module.css`: shared
+  title/subtitle/actions header layout, generalized from the near-identical markup
+  `JobsListPage`/`JobDetailPage`/`ApplicationsPage`/`ResumeUploadPage` each used to
+  hand-roll. Purely presentational — takes `title`/`subtitle`/`actions` props, owns
+  no state, makes no network call.
+- **New in Phase 11** — `src/components/StatusBadge.jsx` + `.module.css`: shared
+  status/qualification/evaluation pill (`tone` prop: `neutral`/`primary`/`accent`/
+  `success`/`warning`/`danger`), consolidating what were three separate badge class
+  sets (`JobDetailPage`'s qualified badge, `ApplicationsPage`'s status badge, its
+  evaluation badge) into one component with identical resulting colors for every
+  existing case (verified by cross-checking each tone against the token pair the
+  class it replaced used — see below).
+- **New in Phase 11** — `src/components/EmptyState.jsx` + `.module.css`: shared
+  "nothing here yet" card (`title`/`description` props), replacing the bare
+  `<p className={styles.status}>No X yet...</p>` pattern in `JobsListPage`,
+  `JobDetailPage`, and `ApplicationsPage`'s empty-list branches. Loading/error text
+  in all three pages is untouched (still each page's own `.status`/`.error` line) —
+  `EmptyState` is only for a genuinely empty result, not a transient state.
+- **New in Phase 11** — `src/components/StatTile.jsx` + `.module.css`: a labeled
+  number in a card (`label`/`value`/`hint` props). Its only current caller is the
+  new `DashboardPage` (below); not yet used anywhere with real data.
+- **New in Phase 11** — `src/pages/DashboardPage.jsx` + `.module.css`: the new `/`
+  route (§5). Visual-only, deliberately not data-backed — renders `PageHeader`, four
+  `StatTile`s with a literal `"—"` placeholder value (not a fetch that silently
+  failed), a static "Live metrics land in a later phase" note, two `Link`s to
+  `/upload` and `/jobs` (the only two routes this task allows linking to — see
+  §21), and one `EmptyState` under a "Recent activity" heading. Makes zero network
+  calls; reads only `useAuth()`'s already-in-memory `recruiter.email` for the
+  greeting.
+- `src/styles/variables.css` — **substantially expanded in the Phase 8 visual-polish
+  pass** (§15): semantic color tokens (`--color-success`/`-bg`, `--color-warning`/
+  `-bg`, `--color-accent`/`-bg`, `--color-primary-bg`, `--color-hover-bg`,
+  `--color-neutral-bg`), `--radius-pill`, `--shadow-sm`/`--shadow-md`, a
+  `--spacing-5` step, a `--font-size-*` type scale (`xs`/`sm`/`base`/`md`/`lg`/`xl`),
+  and `--transition-fast`. CSS custom properties can't be read inside a `@media`
+  condition, so the two shared breakpoints (768px, 480px) are documented as a plain
+  comment convention there instead, reused literally by every page's own `@media`
+  rules. **Phase 11 adds two more, extending rather than replacing this system**:
+  `--sidebar-width` (`220px` — the value `Layout.module.css`'s grid and
+  `Sidebar.module.css` now both read, instead of `Layout.module.css` hardcoding it)
+  and `--color-success-hover` (`#185f36` — the exact value `ApplicationsPage.module.css`'s
+  `.acceptButton:hover` used to hardcode as a bare literal, now tokenized).
 - `src/styles/global.css` — **extended this pass**: base typography (font smoothing,
   `line-height: 1.5`, a heading/paragraph margin reset that every page's own more
   specific `.title`/`.subtitle` class still overrides via normal CSS specificity), a
@@ -1009,10 +1097,13 @@ already captured here — extend it.
   `**/frontend/node_modules/`/`**/frontend/dist/` plus standard Python/VCS hygiene from
   the Docker build context shared by `recruitment-workflow`/`resume-intelligence`/
   `second-brain` (§17).
-- **Not yet built**: nothing. The frontend is feature-complete: every planned page,
-  API integration, and workflow transition exists and is live-verified; the app is
-  packaged for production same-origin serving; the one code finding (M1) from the
-  Phase 10 audit is fixed. §24 no longer names frontend feature work.
+- **Not yet built**: the Candidates, VoiceHR (interview list), and Reports pages
+  named in the admin-dashboard redesign proposal — deliberately, since none of the
+  three has the backend support it needs yet (no candidate-list endpoint, no
+  unscoped/global applications endpoint, no VoiceHR report proxy). Phase 11
+  intentionally did not add sidebar links or routes for any of them, so there is no
+  broken navigation anywhere in the app right now. §24 names the backend
+  prerequisites as the next bounded task, not more frontend work.
 
 **Build verified**: `npm install` (66 packages, 0 errors) and `npm run build` both
 succeeded after the visual-polish pass — still 63 modules, JS bundle size unchanged
@@ -1025,7 +1116,56 @@ confirming zero `.jsx` files were touched this pass — every edit was to a
 16.55 kB → 21.80 kB, from the added rules. Built cleanly in ~0.8s, `dist/` produced,
 0 errors/warnings.
 
-**Verified — visual polish + responsive states (this pass)**, no backend involved so
+**Verified — Admin shell redesign (Phase 11, this pass)**: new modern-SaaS shell
+(Sidebar/TopBar/Layout redesign), four new reusable presentational components
+(`PageHeader`/`StatusBadge`/`EmptyState`/`StatTile`), a visual-only `DashboardPage`,
+and the existing Jobs/Upload/Job-Detail/Applications pages restyled to use the four
+new components where their markup already matched. No backend, API, auth, or
+workflow-state code touched — confirmed by `git status --porcelain` at the repo root
+showing changes confined to `services/recruitment-workflow/frontend/src/**`, entirely
+`.jsx`/`.module.css` files, nothing elsewhere:
+- `npm run build`: clean both before and after every edit in this pass — final run:
+  **73 modules transformed** (up from 63 — the 10 new component/page files), 0
+  errors/warnings, JS bundle 193.64 kB → 196.46 kB (the new components + Dashboard +
+  hand-authored inline SVG icons), CSS bundle 21.80 kB → 23.24 kB (new component
+  styles). Both bundle-size increases are additive, not a sign of removed code
+  regressing — confirmed by the class-usage cross-checks below.
+- **No orphaned or missing CSS classes**: every page's and every new component's
+  `.jsx` was cross-checked against its own `.module.css` in both directions (every
+  `styles.X` reference resolves to a real class; every class defined is actually
+  referenced) — zero mismatches. `StatusBadge`'s six tone classes are read via
+  dynamic `styles[resolvedTone]` rather than dot-notation, so a naive grep for
+  `styles.success`/etc. undercounts its real usage — checked by hand against
+  `StatusBadge.jsx`'s actual `TONES` set instead of trusting the grep alone.
+- **StatusBadge color-parity check**: each new `tone` was verified to resolve to the
+  exact same `background`/`color` token pair the CSS class it replaced used —
+  `badgeQualified`→`success`, `badgeNotQualified`→`neutral`, `statusSelected`→
+  `neutral`, `statusInvited`→`primary`, `statusInterviewed`→`accent`,
+  `statusAccepted`→`success`, `statusRejected`→`danger`, `evaluationCompleted`→
+  `success`, `evaluationInconclusive`→`warning`, `evaluationFailed`→`danger`. Zero
+  visual regression by construction, not just by eyeballing.
+- **Behavior-preservation guarantee**: every `onClick`/`onKeyDown`/`useState`/
+  `useEffect`/API call in `JobsListPage`/`JobDetailPage`/`ApplicationsPage`/
+  `ResumeUploadPage` is byte-for-byte unchanged — the diff in each file is
+  import-list additions plus markup swaps (raw `<h1>`/`<p>`/`<span>` → the new
+  components), never a changed condition, handler, or state shape. The one
+  genuinely new piece of interactive markup is `DashboardPage`'s two `Link`s, both
+  to already-existing, already-working routes.
+- **Not yet tested, no browser available in this environment** (same limitation as
+  every prior pass — see §18): the actual rendered shell (sidebar active-state
+  styling, icon rendering, `DashboardPage`'s layout at various widths). Verified
+  instead by the class-usage cross-checks above plus direct code review of the
+  final CSS against each component's DOM structure.
+- **One pre-existing, unrelated accessibility gap noticed while reading
+  `ResumeUploadPage.jsx` for this pass, not fixed** (out of scope — Phase 1 of the
+  redesign is shell/components only): the drop-zone `<div role="button"
+  tabIndex={0}>` has an `onClick` but no `onKeyDown`, so Enter/Space don't open the
+  file picker via keyboard — the same category of gap Phase 10's M1 finding fixed
+  in `JobDetailPage`/`ApplicationsPage`, just not in this file. Recorded in §21
+  rather than fixed, since this task's scope was explicitly visual shell/components,
+  not a second accessibility pass.
+
+**Verified — visual polish + responsive states (Phase 8 pass)**, no backend involved so
 verification is build- and code-level rather than a live network smoke test (no
 network call was added, changed, or removed this pass):
 - **Zero behavior change, structurally guaranteed**: `git status` after the pass shows
@@ -1463,10 +1603,19 @@ accept`, `/v1/applications/{application_id}/reject`, `/v1/jobs/{job_id}/applicat
 - **Discovered during the Phase 10 audit, deliberately left as-is**: no explicit
   text-truncation (`text-overflow: ellipsis`) on candidate-name/job-title table cells
   — the existing `.tableWrapper` horizontal scroll already prevents real layout
-  breakage, and real name/title data is short in practice; no favicon set; one
-  hover-shade color literal (`ApplicationsPage.module.css`'s `.acceptButton:hover`)
-  isn't pulled from a `--color-success`-derived token. All three are cosmetic-only,
-  zero functional impact, not worth the churn of fixing speculatively.
+  breakage, and real name/title data is short in practice; no favicon set. Both
+  remain cosmetic-only, zero functional impact, not worth the churn of fixing
+  speculatively. (A third Phase-10 item, `ApplicationsPage.module.css`'s
+  un-tokenized `.acceptButton:hover` hex literal, was resolved in Phase 11 as a
+  side effect of the CSS cleanup — see §20 — not called out separately here anymore.)
+- **Discovered during the Phase 11 admin-shell pass, deliberately left as-is**:
+  `ResumeUploadPage.jsx`'s drop-zone `<div role="button" tabIndex={0}>` has an
+  `onClick` but no `onKeyDown`, so Enter/Space don't open the file picker via
+  keyboard — the same category of gap Phase 10's finding M1 fixed in
+  `JobDetailPage`/`ApplicationsPage`, just not in this file. Not fixed here because
+  this task's scope was explicitly the visual shell/components, not a second
+  accessibility pass; worth a small follow-up fix (mirroring M1's pattern exactly)
+  whenever this file is next touched for another reason.
 - **Test-data hygiene note, not a frontend limitation**: the Phase 10 audit found a
   real candidate present in Second Brain's scoring index with no matching Resume
   Intelligence contact record (an artifact of independent test-data seeding across
@@ -1524,32 +1673,53 @@ Before starting frontend work:
 
 ## 24. [NEXT]
 
-**The frontend is feature-complete and demo-ready.** All ten phases are done (§19):
-foundation/auth, resume upload, jobs + creation, candidate ranking/identity/selection,
-applications + invitation, polling + assessment display, accept/reject, visual
-polish + responsive states, production Docker build + FastAPI serving, and the final
-E2E/demo-readiness audit. Every page, every API integration, and every workflow
-transition in §12's diagram has been exercised live against the real stack at least
-once, most of them repeatedly across passes — see §20 for the complete, itemized
-verification history.
+**Phase 11 (admin shell redesign) is done** — the first phase of the separate
+admin-dashboard redesign proposal (Dashboard/Candidates/Upload/Jobs/VoiceHR/Reports
+navigation). This pass built the shell and shared components only, exactly as scoped:
 
-**The Phase 10 audit's one code finding (M1) is fixed this pass**: `CandidateRow`
-(`JobDetailPage.jsx`) and `ApplicationRow` (`ApplicationsPage.jsx`) — the two
-`role="button" tabIndex={0}` expandable table rows — now handle `onKeyDown` alongside
-their existing `onClick`: Enter or Space toggles expansion, with `preventDefault()`
-called only for Space. `ApplicationsPage.jsx`'s version stays conditional on
-`hasAssessment`, matching its pre-existing `onClick`/`role`/`tabIndex` exactly — no
-other line in either file changed, and no CSS, API, auth, polling, or workflow-state
-logic was touched. `npm run build`: 63 modules, 0 errors. See §20 for the full
-before/after verification. The audit's remaining findings were all LOW-severity
-cosmetic notes or test-data hygiene observations, not code defects — recorded in §21,
-deliberately left as-is.
+- Modernized `Sidebar`/`TopBar`/`Layout` (soft tinted active-nav state, small
+  hand-authored inline SVG icons — no new dependency, `--sidebar-width` token).
+- Four new reusable presentational components: `PageHeader`, `StatusBadge`,
+  `EmptyState`, `StatTile` — each documented in §20 with exactly which existing
+  per-page markup/CSS they replaced and the color-parity/behavior-preservation
+  checks performed.
+- A new, deliberately visual-only `DashboardPage` at `/` (the new home route) —
+  `StatTile`s show a literal `"—"` placeholder, no metrics fetch exists yet.
+- `JobsListPage`/`JobDetailPage`/`ApplicationsPage`/`ResumeUploadPage` restyled to
+  use the four new components where their existing markup already matched one-for-
+  one; zero change to any state variable, handler, or API call in any of the four.
+- `variables.css` extended (not replaced) with two tokens: `--sidebar-width`,
+  `--color-success-hover`.
+- **No Candidates/VoiceHR/Reports nav links or routes were added** — deliberately,
+  since none of those three pages has the backend support it needs yet (see below).
+  Nothing in the app links anywhere that doesn't exist.
+- `npm run build`: 73 modules, 0 errors, both before and after every edit in this
+  pass. `git status` confirms every changed/new file is under
+  `services/recruitment-workflow/frontend/src/` — no backend, API, auth, or
+  workflow-state code touched. Full detail in §20.
 
-**No frontend feature work remains.** `[NEXT]` for this file is: **whole-system final
-demo preparation only** — rehearsing the live demo sequence, confirming Gemini quota
-headroom (or the fallback plan) ahead of time, and any last data-hygiene cleanup in
-the shared Postgres instance (e.g. the Second-Brain/Resume-Intelligence identity
-mismatch noted in §21) — none of which is frontend code work, and none of which
-belongs in this file. If a genuinely new frontend need surfaces during demo prep, it
-gets its own bounded task at that point, following §23's process like everything
-before it; nothing is anticipated here speculatively.
+**`[NEXT]` for this file is: backend prerequisites for the Candidates page and the
+global (unscoped) Applications/VoiceHR-interview-list view** — the next two items the
+admin-dashboard redesign proposal's own §13/§14 named as genuinely missing, and the
+smallest useful next step before any more frontend phases (Candidates page,
+Dashboard's real metrics, the global VoiceHR interview list) can be built on real
+data instead of placeholders:
+
+1. **A candidate-list endpoint.** Resume Intelligence has no `GET /v1/candidates`
+   today — only single-candidate contact lookup. Add one (service-key auth, no
+   pagination, matching this project's existing "no infra ahead of demonstrated
+   need" bar), then a thin RWS proxy (`GET /v1/candidates`, recruiter-JWT, no `db`
+   dependency — the same transient-proxy shape `GET /v1/candidates/{id}/identity`
+   already uses) that the browser actually calls.
+2. **An unscoped applications endpoint on RWS.** `GET /v1/jobs/{job_id}/applications`
+   requires a `job_id` today; there is no way to list applications across every job
+   at once. Relax the existing query (optional `job_id` filter, join `Job.title` in)
+   rather than building a second endpoint — RWS already has every column this needs
+   (`status`, `interview_status`, `interview_assessment`, `candidate_id`, `job_id`).
+
+Both are backend-only, additive, and independently testable against the live stack
+the same way every prior backend step in this project was verified — no frontend
+code should change as part of this next task. This is exactly the scope the proposal
+called "Backend addition #2 + #3"; the VoiceHR-report-proxy addition (#4) and the
+Candidates/VoiceHR-list/Reports pages themselves stay explicitly out of scope until
+this step lands, per §23's one-bounded-task-per-pass rule.

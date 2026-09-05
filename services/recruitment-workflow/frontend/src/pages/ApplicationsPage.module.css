@@ -2,16 +2,6 @@
   max-width: 960px;
 }
 
-.header {
-  margin-bottom: var(--spacing-4);
-}
-
-.title {
-  margin: 0;
-  font-size: var(--font-size-xl);
-  font-weight: 700;
-}
-
 .status {
   color: var(--color-text-muted);
   font-size: var(--font-size-base);
@@ -79,40 +69,6 @@
   font-size: var(--font-size-xs);
 }
 
-.statusBadge {
-  display: inline-block;
-  border-radius: var(--radius-pill);
-  padding: 2px 10px;
-  font-size: var(--font-size-xs);
-  font-weight: 600;
-  white-space: nowrap;
-}
-
-.statusSelected {
-  background: var(--color-neutral-bg);
-  color: var(--color-text-muted);
-}
-
-.statusInvited {
-  background: var(--color-primary-bg);
-  color: var(--color-primary);
-}
-
-.statusInterviewed {
-  background: var(--color-accent-bg);
-  color: var(--color-accent);
-}
-
-.statusAccepted {
-  background: var(--color-success-bg);
-  color: var(--color-success);
-}
-
-.statusRejected {
-  background: var(--color-danger-bg);
-  color: var(--color-danger);
-}
-
 .interviewStatus {
   font-size: var(--font-size-sm);
 }
@@ -167,7 +123,7 @@
 }
 
 .acceptButton:hover:not(:disabled) {
-  background: #185f36;
+  background: var(--color-success-hover);
 }
 
 .acceptButton:disabled {
@@ -233,29 +189,6 @@
   letter-spacing: 0.02em;
   color: var(--color-text-muted);
   font-weight: 600;
-}
-
-.evaluationBadge {
-  display: inline-block;
-  border-radius: var(--radius-pill);
-  padding: 2px 10px;
-  font-size: var(--font-size-xs);
-  font-weight: 600;
-}
-
-.evaluationCompleted {
-  background: var(--color-success-bg);
-  color: var(--color-success);
-}
-
-.evaluationInconclusive {
-  background: var(--color-warning-bg);
-  color: var(--color-warning);
-}
-
-.evaluationFailed {
-  background: var(--color-danger-bg);
-  color: var(--color-danger);
 }
 
 .inconclusiveNote {
