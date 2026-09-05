@@ -1,0 +1,52 @@
+.assessment {
+  background: var(--color-bg);
+  border-radius: var(--radius);
+  padding: var(--spacing-3);
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-2);
+  cursor: default;
+}
+
+.assessmentHeader {
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-2);
+  flex-wrap: wrap;
+}
+
+.assessmentLabel {
+  font-size: var(--font-size-xs);
+  text-transform: uppercase;
+  letter-spacing: 0.02em;
+  color: var(--color-text-muted);
+  font-weight: 600;
+}
+
+.inconclusiveNote {
+  color: var(--color-warning);
+  font-size: var(--font-size-sm);
+}
+
+.assessmentGrid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: var(--spacing-1) var(--spacing-3);
+}
+
+.assessmentRow {
+  display: flex;
+  justify-content: space-between;
+  font-size: var(--font-size-sm);
+  padding: 2px 0;
+}
+
+.assessmentRow span:first-child {
+  color: var(--color-text-muted);
+}
+
+.assessmentFailedText {
+  margin: 0;
+  font-size: var(--font-size-base);
+  color: var(--color-text-muted);
+}

@@ -151,7 +151,9 @@ services/recruitment-workflow/frontend/
 │   ├── components/           # Reusable, presentational pieces shared across pages
 │   │                           # (Sidebar, TopBar, PageHeader, StatusBadge, EmptyState,
 │   │                           #  StatTile -- the last four added in the Phase 11
-│   │                           #  admin-shell pass, see §19/§20)
+│   │                           #  admin-shell pass; AssessmentPanel added in Phase 13
+│   │                           #  once InterviewsPage needed the same render logic
+│   │                           #  ApplicationsPage already had -- see §19/§20)
 │   ├── pages/                  # One component per route, owns its own local state
 │   ├── styles/                  # variables.css (shared tokens) + global.css (reset)
 │   ├── App.jsx                   # AuthProvider + BrowserRouter + AppRouter
@@ -200,16 +202,19 @@ Folder responsibilities, precisely:
 | `/upload` | Protected | `ResumeUploadPage` |
 | `/jobs/:jobId` | Protected | `JobDetailPage` |
 | `/jobs/:jobId/applications` | Protected | `ApplicationsPage` |
+| `/interviews` | Protected | `InterviewsPage` (Phase 13 — new, global/unscoped) |
 | `*` | Protected fallback | redirects to `/` (or `/login` if unauthenticated, since `ProtectedRoute` runs first) |
 
 `LoginPage`'s post-login redirect (both the already-authenticated short-circuit and the
 successful-submit path) now targets `/` instead of `/jobs`, matching Dashboard's new
 role as the app's home screen. No route named here is broken or half-built —
-`/candidates` was only added once `CandidatesPage` actually worked (Phase 12); VoiceHR/
-Reports routes proposed in the admin-dashboard redesign are still deliberately not
-added to this table (or to `Sidebar`) until their pages and backend support exist.
-`CandidatesPage`'s own rows are not clickable yet — no `/candidates/:candidateId`
-route exists (see §20/§21): the same "don't link to a page that doesn't exist" rule.
+`/candidates` was only added once `CandidatesPage` actually worked (Phase 12),
+`/interviews` only once `InterviewsPage` actually worked (Phase 13). Reports (the one
+remaining item from the admin-dashboard redesign proposal's nav) is still
+deliberately not added to this table (or to `Sidebar`) until its backend support
+(a VoiceHR report proxy) and page exist. `CandidatesPage`'s own rows are not
+clickable yet — no `/candidates/:candidateId` route exists (see §20/§21): the same
+"don't link to a page that doesn't exist" rule.
 
 All protected routes are nested under one `ProtectedRoute` → `Layout` wrapper in
 `AppRouter.jsx` (implemented) — no page individually re-checks auth.
@@ -949,11 +954,16 @@ future phase.
   /v1/candidates`/`GET /v1/applications` backend prerequisites from the prior
   session — new `CandidatesPage`, `DashboardPage` now shows real counts instead of
   `"—"` placeholders — see §20/§24)*
+- [x] **Phase 13 — Global VoiceHR interviews page** *(new `InterviewsPage` at
+  `/interviews`, read-only, built on the same `GET /v1/applications` Phase 12
+  unblocked; `AssessmentPanel` promoted out of `ApplicationsPage` into a shared
+  component — see §20/§24)*
 
-**The frontend is visually modernized, has a working Candidates page, and a
-real-data Dashboard.** All twelve phases above are done. §24 names the next bounded
-phase: the global VoiceHR interviews page (the redesign proposal's `/interviews`
-route), now unblocked by `GET /v1/applications`.
+**The frontend is visually modernized, has a working Candidates page, a real-data
+Dashboard, and a global VoiceHR interviews view.** All thirteen phases above are
+done. §24 names the next bounded phase: the VoiceHR reports backend proxy and the
+Reports pages it unblocks — the one remaining item from the admin-dashboard
+redesign proposal's nav.
 
 Future sessions: update the checkboxes and the relevant page/section status above as
 each phase lands. Do not duplicate this checklist elsewhere or restate history that's
@@ -1049,20 +1059,24 @@ already captured here — extend it.
   `.acceptButton:hover` rule's bare `#185f36` literal was also replaced with the new
   `--color-success-hover` token (same color, now tokenized — see §21's now-resolved
   LOW finding from the Phase 10 audit). No invite/accept/reject/poll logic, network
-  call, or state variable changed. **Phase 12**: `STATUS_LABELS`/`STATUS_TONE` (not
-  `EVALUATION_STATUS_LABELS`/`EVALUATION_STATUS_TONE`, which stay local — nothing
-  else needs the evaluation-status mapping yet) were moved out to
-  `src/constants/applicationStatus.js` once `DashboardPage`'s status-breakdown
-  section needed the exact same `status` → label/tone mapping; `ApplicationsPage.jsx`
-  now imports them instead of defining them, with identical values.
+  call, or state variable changed. **Phase 12**: `STATUS_LABELS`/`STATUS_TONE` were
+  moved out to `src/constants/applicationStatus.js` once `DashboardPage`'s
+  status-breakdown section needed the exact same `status` → label/tone mapping;
+  `ApplicationsPage.jsx` now imports them instead of defining them, with identical
+  values. **Phase 13**: `AssessmentPanel` (and its two row helpers,
+  `AssessmentScoreRow`/`AssessmentTextRow`, and `EVALUATION_STATUS_LABELS`/
+  `EVALUATION_STATUS_TONE`) were removed from this file entirely and now live in
+  `src/components/AssessmentPanel.jsx` (see below) — `ApplicationsPage.jsx` imports
+  the shared component instead; nothing about how or when it's rendered
+  (`{expanded && hasAssessment && <AssessmentPanel .../>}`) changed.
 - `src/api/jobs.js` (`getJobs()`, `createJob()`, `getJobMatches()`).
 - `src/api/candidates.js` (`getCandidateIdentity()`). **Phase 12** adds
   `getCandidates()` (`GET /v1/candidates`, used by `CandidatesPage` and
   `DashboardPage`).
 - `src/api/applications.js` — `selectMatch()`, `getApplications(jobId)`,
   `invite(applicationId, language?)`, `accept(applicationId)`, `reject(applicationId)`.
-  **Phase 12** adds `getAllApplications()` (`GET /v1/applications`, used only by
-  `DashboardPage` this pass).
+  **Phase 12** adds `getAllApplications()` (`GET /v1/applications`); **Phase 13**
+  adds its second real caller, `InterviewsPage`.
 - `src/hooks/useCandidateIdentity.js` — module-level in-memory cache (§8, §9) plus the
   resolving hook itself; a lookup failure resolves to a distinct `"error"` status
   rather than throwing, so it can never break the page it's used on.
@@ -1131,6 +1145,41 @@ already captured here — extend it.
   `STATUS_TONE`, `STATUS_ORDER` for an `Application`'s `status` field, promoted out
   of `ApplicationsPage.jsx` once `DashboardPage` needed the identical mapping — see
   the `ApplicationsPage.jsx` entry above for the before/after.
+- **New in Phase 13** — `src/components/AssessmentPanel.jsx` + `.module.css`:
+  `ApplicationsPage`'s former private `AssessmentPanel`/`AssessmentScoreRow`/
+  `AssessmentTextRow` functions and `EVALUATION_STATUS_LABELS`/
+  `EVALUATION_STATUS_TONE` maps, moved here verbatim (byte-identical render output,
+  confirmed by copying the CSS rules across unchanged into the new
+  `.module.css` rather than rewriting them) once `InterviewsPage` needed the exact
+  same interview-assessment render logic — a real second call site, not a
+  speculative extraction. Takes one prop (`assessment`), renders nothing else, makes
+  no network call.
+- **New in Phase 13** — `src/pages/InterviewsPage.jsx` + `.module.css`: the new
+  `/interviews` route. Fetches `getAllApplications()` on mount and on each
+  `usePolling` tick (same always-refetch-on-mount, silent-background-poll pattern
+  `ApplicationsPage` already uses), with the same loading/error/`EmptyState`/
+  populated states every list page in this app has. Table columns: Candidate (via
+  `useCandidateIdentity`, with the same "Loading…"/`(name unavailable)` fallbacks
+  `ApplicationsPage` uses — a lookup failure resolves to a distinct `"error"` status
+  and never throws, so it can never break this page either), Job (`application.job_title`
+  directly — no extra fetch needed, `GlobalApplicationResponse` already carries it),
+  Status (`StatusBadge` via the shared `constants/applicationStatus.js`), Interview
+  (status label + an expand hint when an assessment exists, identical to
+  `ApplicationsPage`'s own Interview column), Score (a compact "CEFR · overall/100"
+  summary, or "Failed"/"—"; correctly treats `overall_score: 0` as a real score, not
+  as absent, via a `!= null` check — verified against a real `overall_score: 0` row
+  in the live data, see below), and Updated (`interview_completed_at ??
+  invited_at ?? selected_at`, formatted the same way every other date in this app
+  is). Row click toggles the shared `AssessmentPanel`, same `onClick`/`onKeyDown`/
+  `role`/`tabIndex` pattern as `ApplicationsPage`'s own expandable row (including
+  the M1 keyboard fix). Polling (`usePolling`, same `POLL_INTERVAL_MS = 7000`) is
+  enabled only while `applications.some(a => a.status === "invited")`, evaluated
+  across every job, not one. **Deliberately read-only**: no invite/accept/reject
+  actions on this page — `ApplicationsPage` remains the one place a recruiter acts
+  on an application; duplicating that mutation surface (and its `onUpdated`
+  plumbing) here was judged not "clean and genuinely useful" per this task's own
+  scope, since the whole point of this page is a cross-job glance, not a second
+  place to do the same actions.
 - `src/styles/variables.css` — **substantially expanded in the Phase 8 visual-polish
   pass** (§15): semantic color tokens (`--color-success`/`-bg`, `--color-warning`/
   `-bg`, `--color-accent`/`-bg`, `--color-primary-bg`, `--color-hover-bg`,
@@ -1163,13 +1212,13 @@ already captured here — extend it.
   `**/frontend/node_modules/`/`**/frontend/dist/` plus standard Python/VCS hygiene from
   the Docker build context shared by `recruitment-workflow`/`resume-intelligence`/
   `second-brain` (§17).
-- **Not yet built**: the global VoiceHR interview-list and Reports pages named in the
-  admin-dashboard redesign proposal — the Candidates page (this section's other
-  missing item as of Phase 11) is now built (Phase 12). VoiceHR/Reports still lack
-  routes/sidebar links, deliberately: VoiceHR's list view is unblocked now that
-  `GET /v1/applications` exists (that's §24's next bounded task), but Reports still
-  needs the VoiceHR-report-proxy backend addition (#4 in the redesign proposal) that
-  no session has built yet. No broken navigation exists anywhere in the app.
+- **Not yet built**: the Reports pages named in the admin-dashboard redesign
+  proposal — the only remaining nav item from that proposal. It still needs the
+  VoiceHR-report-proxy backend addition (#4 in the redesign proposal, a new
+  service-key-gated VoiceHR endpoint plus an RWS proxy) that no session has built
+  yet, so no Reports route or sidebar link exists — no broken navigation anywhere
+  in the app. Candidates (Phase 12) and the global VoiceHR interviews view
+  (Phase 13) are both now built.
 
 **Build verified**: `npm install` (66 packages, 0 errors) and `npm run build` both
 succeeded after the visual-polish pass — still 63 modules, JS bundle size unchanged
@@ -1181,6 +1230,59 @@ confirming zero `.jsx` files were touched this pass — every edit was to a
 `.module.css` file or to `variables.css`/`global.css`. Only the CSS bundle grew,
 16.55 kB → 21.80 kB, from the added rules. Built cleanly in ~0.8s, `dist/` produced,
 0 errors/warnings.
+
+**Verified — Global VoiceHR interviews page (Phase 13, this pass)**, against the
+real running stack (Docker rebuilt/recreated for `recruitment-workflow` twice — once
+before adding the `Sidebar` link, per this task's own "add VoiceHR to sidebar only
+after the page works" instruction, and once after — real Postgres, real seeded
+recruiter login), no code changed during verification itself:
+
+- **Real interview data, network-contract level**: logged in as the real seeded
+  recruiter through production port `8003` and called `GET /v1/applications` — the
+  same 5 real applications Phase 12 already exercised. Manually recomputed every
+  derived value `InterviewsPage`/`InterviewRow` would produce from this exact
+  response and confirmed by hand: `hasInvitedApplication` is `false` (no
+  `"invited"` row currently exists in this dataset, so polling would correctly stay
+  off), the two `interview_status: "completed"` rows produce score summaries
+  `"A2 · 0/100"` and `"C1 · 93/100"`, and the one `interview_status: "failed"` row
+  produces `"Failed"`. The `"A2 · 0/100"` row is the load-bearing edge case: its
+  real `overall_score` is the integer `0`, independently re-confirmed via a direct
+  UTF-8-safe read of the raw JSON response (`repr()` on the parsed value, not a
+  terminal print, since a literal `—`/`·` character mis-renders in a Windows
+  console — a verification-tooling quirk, not a data or code issue) — proving
+  `formatScoreSummary`'s `!= null` check (not a truthiness check, which would have
+  wrongly treated `0` as absent) is exercised by a real row, not just reasoned
+  about.
+- **Job titles resolved with zero extra fetches**: every row's `application.job_title`
+  came directly off the already-fetched `GlobalApplicationResponse` — confirmed no
+  new network call was added anywhere for this (the only fetch `InterviewsPage`
+  makes is `getAllApplications()` itself).
+- **Hard-refresh / SPA-routing verified against the production port, not the dev
+  proxy**: `GET /interviews` returned a real `200` serving the rebuilt `index.html`
+  with the new build's hashed asset filenames, both before and after the `Sidebar`
+  change — same guarantee every prior phase's production-serving check has
+  confirmed for its own new route.
+- **No direct calls to other services, confirmed at the shipped-artifact level**:
+  grepped the actual built JS bundle inside the rebuilt container for Resume
+  Intelligence/Second Brain/VoiceHR hostnames and every other service's mapped port
+  — zero matches, same result as Phase 10's audit and Phase 12's re-check.
+- **Zero orphaned or missing CSS classes**: `InterviewsPage.jsx`/`.module.css` and
+  `AssessmentPanel.jsx`/`.module.css` cross-checked in both directions — zero
+  mismatches; `ApplicationsPage.jsx`/`.module.css` re-checked after the extraction
+  and confirmed still zero mismatches (no orphaned assessment-related CSS left
+  behind, no missing class after the `AssessmentPanel` import replaced the local
+  functions).
+- **Not yet tested, no browser available in this environment** (same limitation as
+  every prior pass — see §18): the actual rendered table/row-expand/polling-restart
+  behavior in a live tab — verified instead by the CSS/JSX cross-check above plus
+  direct code review of the render paths against the real response data captured
+  above, the same standard this project has applied throughout.
+- **Build**: `npm run build` — **80 modules transformed** (up from 76 —
+  `InterviewsPage.jsx`/`.module.css` and `AssessmentPanel.jsx`/`.module.css`), 0
+  errors/warnings, JS bundle 200.62 kB → 204.47 kB (includes the `Sidebar` icon
+  addition), CSS bundle 26.29 kB → 27.90 kB. `git status` confirms every changed/
+  new file is under `services/recruitment-workflow/frontend/src/` — no backend
+  file touched (no new endpoint was needed; `GET /v1/applications` already existed).
 
 **Verified — Candidates page + real Dashboard data (Phase 12, this pass)**, against
 the real running stack (Docker rebuilt/recreated for `recruitment-workflow`, real
@@ -1742,6 +1844,17 @@ accept`, `/v1/applications/{application_id}/reject`, `/v1/jobs/{job_id}/applicat
   need an extra per-row identity lookup; judged not "cleanly derived from existing
   timestamps" as this task's own scope asked for, so left out rather than built
   with a raw UUID or an N+1 fetch.
+- **Discovered during the Phase 13 pass, deliberately left as-is**: `InterviewsPage`
+  has no invite/accept/reject actions — it is read-only by design, not an
+  oversight. Recruiter actions still happen exclusively on `ApplicationsPage`
+  (job-scoped); duplicating those mutation handlers (and the `onUpdated`
+  row-patching they need) into a second, global page was judged not "clean and
+  genuinely useful" per this task's own scope — the point of this page is a
+  cross-job glance at interview progress, not a second surface to act from. If a
+  future session wants that, it should reuse `ApplicationsPage`'s
+  `handleInvite`/`handleDecide` pattern rather than re-inventing it. Also: no
+  candidate-detail link on `InterviewsPage`'s candidate name (same reason as
+  `CandidatesPage`, above — no detail page exists yet).
 - **Test-data hygiene note, not a frontend limitation**: the Phase 10 audit found a
   real candidate present in Second Brain's scoring index with no matching Resume
   Intelligence contact record (an artifact of independent test-data seeding across
@@ -1886,26 +1999,60 @@ this pass:
   Resume Intelligence/Second Brain/VoiceHR hostname or port. `npm run build`: 76
   modules, 0 errors. Full detail in §20.
 
-**`[NEXT]` for this file is: Global VoiceHR interviews page.** `GET /v1/applications`
-(already implemented and now already consumed by `DashboardPage`) is exactly the data
-source a `/interviews` route needs — no further backend work should be required:
+**Phase 13 (global VoiceHR interviews page) is done** — built entirely on the
+already-existing `GET /v1/applications`, no backend work needed this pass:
 
-- Build a new `InterviewsPage` (or similarly named) at a new `/interviews` route,
-  listing every application from `GET /v1/applications` with its `job_title`,
-  candidate identity (reuse `useCandidateIdentity` per row, the same pattern
-  `ApplicationsPage` already uses), status, and interview status/assessment — a
-  global, unscoped view of exactly what `ApplicationsPage` already shows per job.
-- Reuse `AssessmentPanel` (currently a private function inside `ApplicationsPage.jsx`)
-  rather than duplicating its render logic — this may mean extracting it into its own
-  component file, which is a reasonable, justified promotion at that point (two real
-  call sites), not a speculative one.
-- Reuse `usePolling` if a live "interview in progress" refresh is wanted here too,
-  the same way `ApplicationsPage` already uses it — evaluate whether that's actually
-  needed for a global list before adding it, per §22's "avoid speculative
-  infrastructure" rule.
-- Add `VoiceHR` to `Sidebar`'s `NAV_ITEMS` and the route in `AppRouter.jsx` only once
-  this page itself works, per Phase 11/12's own established rule.
-- Reports (the VoiceHR-report-proxy page) remains explicitly out of scope for this
-  next task — it still needs its own backend addition (the VoiceHR-side proxy
-  endpoint named in the admin-dashboard redesign proposal's §14) that no session has
-  built yet. One bounded task at a time, per §23.
+- **`InterviewsPage`** (`/interviews`, new): every application across every job,
+  from `GET /v1/applications`, with candidate name (`useCandidateIdentity`, same
+  fallback behavior as `ApplicationsPage`), job title (`application.job_title`
+  directly, no extra fetch), status (`StatusBadge`), interview status, a compact
+  CEFR/overall-score summary, and a best-available "Updated" timestamp
+  (`interview_completed_at ?? invited_at ?? selected_at`). Row click expands the
+  shared `AssessmentPanel` (see below). Polling (`usePolling`, reused as-is) is
+  enabled only while any application anywhere is `"invited"`. Deliberately
+  **read-only** — no invite/accept/reject actions (see §21) — and no
+  candidate-detail link (no such page exists yet).
+- **`AssessmentPanel`** promoted from a private function inside
+  `ApplicationsPage.jsx` into `src/components/AssessmentPanel.jsx` +
+  `.module.css` — byte-identical render output, now with two real call sites
+  instead of a speculative one. `ApplicationsPage.jsx` itself only changed by
+  importing it; its own behavior is unchanged.
+- Added to `Sidebar`'s `NAV_ITEMS` (after Jobs) and the route in `AppRouter.jsx`
+  only once the page itself was confirmed working, per Phase 11/12's established
+  rule — verified with two separate Docker rebuild/recreate cycles, one before and
+  one after adding the sidebar link.
+- Live-verified against the real rebuilt/recreated `csb-recruitment-workflow`
+  container: every derived value (`hasInvitedApplication`, each row's score
+  summary, including a real `overall_score: 0` row correctly not treated as
+  absent) recomputed by hand against the live `GET /v1/applications` response and
+  confirmed to match; hard refresh on `/interviews` confirmed serving the SPA
+  correctly through the production port; the built JS bundle re-confirmed to
+  contain no Resume Intelligence/Second Brain/VoiceHR hostname or port.
+  `npm run build`: 80 modules, 0 errors. Full detail in §20.
+
+**`[NEXT]` for this file is: VoiceHR Reports backend proxy + Reports pages.** This
+is the one remaining item from the admin-dashboard redesign proposal's nav
+(Dashboard/Candidates/Upload/Jobs/VoiceHR/Reports) — and, unlike every prior phase
+in this arc, it genuinely needs new backend work first:
+
+- **Backend** (VoiceHR): the full interview report (transcript, recording URL) —
+  everything beyond the `InterviewAssessment` scores already available via `GET
+  /v1/applications` — lives only behind VoiceHR's own HTTP-Basic-authenticated
+  admin surface (`GET /api/admin/reports`, `/admin/reports`), which the browser
+  must never call directly (§22). Add a new, separate VoiceHR endpoint gated by
+  the same `require_rws_service_key` dependency `POST /api/invite` already uses
+  (not the Basic-auth admin surface — keep that surface untouched, per every
+  prior VoiceHR-integration session's own precedent of pure, additive change).
+- **Backend** (RWS): a thin proxy endpoint (recruiter-JWT, transient — no
+  persistence, the same `get_candidate_identity`/`get_candidates` shape) that
+  calls the new VoiceHR endpoint and returns the report to the browser. This is
+  cross-service, backend-only work — track its implementation in `handoff.md`,
+  not here, per §23's own rule, the same way the Candidates/Applications backend
+  prerequisites were tracked there before Phase 12.
+- **Frontend, once the backend exists**: a Reports list (can likely reuse
+  `GET /v1/applications`'s already-available scores for the list view itself,
+  needing the new proxy only for a report's full detail/transcript) and a report
+  detail view. Add `Reports` to `Sidebar`/`AppRouter` only once that page works,
+  per the same established rule.
+- Do not implement the frontend pieces before the backend proxy exists — this
+  task's own scope (like Candidates' before it) is backend-first.

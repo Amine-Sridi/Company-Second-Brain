@@ -8,6 +8,7 @@ import JobsListPage from "../pages/JobsListPage.jsx";
 import ResumeUploadPage from "../pages/ResumeUploadPage.jsx";
 import JobDetailPage from "../pages/JobDetailPage.jsx";
 import ApplicationsPage from "../pages/ApplicationsPage.jsx";
+import InterviewsPage from "../pages/InterviewsPage.jsx";
 
 export default function AppRouter() {
   return (
@@ -27,6 +28,7 @@ export default function AppRouter() {
         <Route path="/upload" element={<ResumeUploadPage />} />
         <Route path="/jobs/:jobId" element={<JobDetailPage />} />
         <Route path="/jobs/:jobId/applications" element={<ApplicationsPage />} />
+        <Route path="/interviews" element={<InterviewsPage />} />
         <Route path="*" element={<Navigate to="/" replace />} />
       </Route>
     </Routes>
