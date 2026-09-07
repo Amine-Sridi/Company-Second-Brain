@@ -135,7 +135,8 @@ services/recruitment-workflow/frontend/
 ├── src/
 │   ├── api/           # One module per resource; each wraps client.js for a specific
 │   │                   # RWS resource -- auth.js/resumes.js/jobs.js/candidates.js
-│   │                   # (getCandidateIdentity, getCandidates)/applications.js
+│   │                   # (getCandidateIdentity, getCandidates, getCandidateKnowledge
+│   │                   # -- the last new in Phase 15)/applications.js
 │   │                   # (selectMatch/getApplications/getAllApplications/invite/
 │   │                   # accept/reject)/interviews.js (getInterviewReport, new in
 │   │                   # Phase 14) all exist and are used
@@ -201,6 +202,7 @@ Folder responsibilities, precisely:
 | `/login` | Public | `LoginPage` |
 | `/` | Protected | `DashboardPage` (Phase 12 — now real data, see §20) |
 | `/candidates` | Protected | `CandidatesPage` (Phase 12 — new) |
+| `/candidates/:candidateId` | Protected | `CandidateDetailPage` (Phase 15 — new) |
 | `/jobs` | Protected | `JobsListPage` |
 | `/upload` | Protected | `ResumeUploadPage` |
 | `/jobs/:jobId` | Protected | `JobDetailPage` |
@@ -215,12 +217,14 @@ successful-submit path) now targets `/` instead of `/jobs`, matching Dashboard's
 role as the app's home screen. No route named here is broken or half-built —
 `/candidates` was only added once `CandidatesPage` actually worked (Phase 12),
 `/interviews` only once `InterviewsPage` actually worked (Phase 13), `/reports` and
-`/reports/:applicationId` only once both Reports pages actually worked (Phase 14) —
-this is now every screen named in the original admin-dashboard redesign proposal's
-nav. `CandidatesPage`'s own rows are still not clickable — no `/candidates/:candidateId`
-route exists yet (see §20/§21, and §24's `[NEXT]`): the same "don't link to a page
-that doesn't exist" rule. `ReportsPage`'s rows, unlike `CandidatesPage`'s, **are**
-clickable, since their destination (`/reports/:applicationId`) now exists.
+`/reports/:applicationId` only once both Reports pages actually worked (Phase 14),
+and `/candidates/:candidateId` only once `CandidateDetailPage` actually worked
+(Phase 15). Every candidate name shown anywhere in the app now links to it:
+`CandidatesPage`'s rows, `JobDetailPage`'s ranked-candidate names,
+`ApplicationsPage`'s and `InterviewsPage`'s candidate names, `ReportsPage`'s rows,
+and `ReportDetailPage`'s own header (via a best-effort `candidate_id` lookup
+against `GET /v1/applications`, since VoiceHR's report has no concept of it — see
+§20/§21).
 
 All protected routes are nested under one `ProtectedRoute` → `Layout` wrapper in
 `AppRouter.jsx` (implemented) — no page individually re-checks auth.
@@ -283,6 +287,7 @@ marked **PROPOSED** are not yet implemented on the backend — see §20.
 | List all applications (unscoped) | `api/applications.js: getAllApplications()` *(implemented)* | `GET /v1/applications` **IMPLEMENTED** | `GlobalApplicationResponse[]` — every `ApplicationResponse` field (below) plus `job_title`, newest-selected-first across every job | `401` no/invalid JWT |
 | View a full interview report | `api/interviews.js: getInterviewReport(applicationId)` *(implemented)* | `GET /v1/interviews/{application_id}/report` **IMPLEMENTED** | No `response_model` — VoiceHR's own report shape passed through as-is (candidate_name, candidate_email, overall_score, cefr_level, dimensions, strengths, concerns, evidence, stats, transcript, plus `recording: {available, url}` rewritten by RWS to a same-origin URL or `{available: false, url: null}`) | `401` no/invalid JWT · `404` unknown application or no report yet · `502` VoiceHR unavailable |
 | Play an interview recording | not a separate frontend API function — `requestBlob(report.recording.url)` from `api/client.js` *(implemented)* | `GET /v1/interviews/{application_id}/recording` **IMPLEMENTED** | Raw audio bytes with the real `Content-Type` (e.g. `audio/webm`) — no JSON envelope | `401` no/invalid JWT · `404` no recording for this application · `502` VoiceHR unavailable |
+| View a candidate's professional knowledge | `api/candidates.js: getCandidateKnowledge(candidateId)` *(implemented)* | `GET /v1/candidates/{candidate_id}/knowledge` **IMPLEMENTED** | `candidate_id`, `skills`, `job_titles`, `years_of_experience` (`CandidateKnowledgeResponse` — no `raw_text`, no `source_version`, no embedding; transiently proxies Second Brain via the already-existing `clients.get_candidate()` — no RWS persistence, no `db` dependency on the route) | `401` no/invalid JWT · `404` unknown candidate (no Second Brain knowledge row) · `502` Second Brain unavailable |
 
 `ApplicationResponse` fields (from `schemas.py`, used by select/invite/accept/reject/list
 above): `application_id`, `job_id`, `match_result_id`, `candidate_id`, `status`
@@ -970,13 +975,18 @@ future phase.
   service-key-gated report/recording endpoints, new RWS transient-proxy endpoints,
   new `ReportsPage`/`ReportDetailPage` — the last screen from the admin-dashboard
   redesign proposal's nav — see §20/§24; tracked cross-service in `handoff.md`)*
+- [x] **Phase 15 — Candidate detail + cross-linking** *(new `CandidateDetailPage` at
+  `/candidates/:candidateId`; every candidate name across the app now links to it;
+  new RWS `GET /v1/candidates/{id}/knowledge` proxy to Second Brain — see §20/§24;
+  tracked cross-service in `handoff.md`)*
 
 **The frontend now has every screen named in the original admin-dashboard redesign
-proposal**, all fourteen phases done: Dashboard, Candidates, Upload, Jobs, VoiceHR
-(interviews), and Reports. §24 names the next bounded phase: candidate detail +
-cross-linking — the one deliberately-deferred piece across every prior phase
-(`CandidatesPage`'s rows, `InterviewsPage`'s/`ReportsPage`'s candidate names all
-still don't link anywhere).
+proposal, plus the candidate-detail cross-linking hub tying them together.** All
+fifteen phases done: Dashboard, Candidates (+ detail), Upload, Jobs, VoiceHR
+(interviews), and Reports, with every candidate name anywhere in the app now a real
+link. §24 confirms no frontend feature work is currently queued — the next bounded
+task (VoiceHR SQLite persistence hardening) is backend/infra-only, tracked in
+`handoff.md`.
 
 Future sessions: update the checkboxes and the relevant page/section status above as
 each phase lands. Do not duplicate this checklist elsewhere or restate history that's
@@ -1257,13 +1267,48 @@ already captured here — extend it.
   `**/frontend/node_modules/`/`**/frontend/dist/` plus standard Python/VCS hygiene from
   the Docker build context shared by `recruitment-workflow`/`resume-intelligence`/
   `second-brain` (§17).
+- **New in Phase 15** — `src/api/candidates.js` gained `getCandidateKnowledge(candidateId)`
+  (`GET /v1/candidates/{candidate_id}/knowledge`), used only by `CandidateDetailPage`.
+- **New in Phase 15** — `src/pages/CandidateDetailPage.jsx` + `.module.css`: the new
+  `/candidates/:candidateId` route, the cross-linking hub every other list page's
+  candidate name now points to. Three independent reads: identity reuses the
+  existing `useCandidateIdentity` hook as-is (its own cache + failure handling, not
+  re-implemented — "avoid duplicate API logic"); professional knowledge
+  (skills/job titles/years of experience, rendered as chips) is its own fetch with
+  its own loading/error state; this candidate's applications are derived by
+  filtering the already-fetched `GET /v1/applications` client-side by
+  `candidate_id` (no new backend endpoint for this — the global list already
+  carries it). Each application row links its job title to `/jobs/:jobId` and, when
+  `interview_assessment != null`, a "View Report" link to `/reports/:applicationId`
+  — "Candidate applications → corresponding Job/Report where applicable," per this
+  task's own wording; a working global VoiceHR interview list already exists
+  (`/interviews`) so a third, redundant per-row deep link there was judged
+  unnecessary. A failure in any one of the three sections never blanks the other
+  two (each has independent loading/error state). Reuses `PageHeader`,
+  `StatusBadge`, `EmptyState`, and the shared `constants/applicationStatus.js` —
+  no new shared component was needed. A "Knowledge Graph" section is reserved as a
+  labeled `EmptyState` placeholder — deliberately not the graph itself, per this
+  task's own explicit instruction.
+- **Cross-linking wired everywhere a candidate name appears**: `CandidatesPage`'s
+  rows now navigate to `/candidates/:candidateId` (same click/keyboard pattern as
+  `ReportsPage`'s rows). `JobDetailPage`'s ranked-candidate name,
+  `ApplicationsPage`'s and `InterviewsPage`'s candidate names, and `ReportsPage`'s
+  candidate names are each now a `<Link>` with `onClick={(e) => e.stopPropagation()}`
+  so clicking the name navigates to the candidate without also triggering the
+  row's own click behavior (expand-toggle on the first three, navigate-to-report
+  on `ReportsPage`) — the exact same "stop the row's own handler from also firing"
+  pattern this app already used for the Select/Invite/Accept/Reject button cells.
+  `ReportDetailPage`'s header is the one special case: VoiceHR's report has no
+  concept of RWS's `candidate_id` at all, so the page does a small best-effort
+  lookup against the already-fetched-elsewhere `GET /v1/applications` to resolve
+  it — if that lookup fails or doesn't find a match, the candidate's name in the
+  header just stays plain text instead of a link; the report itself is never
+  blocked by this.
 - **Not yet built**: nothing from the admin-dashboard redesign proposal's original
-  nav remains — Dashboard, Candidates, Upload, Jobs, VoiceHR (interviews), and
-  Reports all exist and work. The one deliberately-deferred piece across every
-  phase is candidate-detail cross-linking: `CandidatesPage`'s rows,
-  `InterviewsPage`'s and `ReportsPage`'s candidate names, none of them link
-  anywhere, since no `/candidates/:candidateId` page exists yet — see §24's
-  `[NEXT]`.
+  nav, and no dangling candidate-name link remains anywhere in the app. The
+  reserved "Knowledge Graph" section on `CandidateDetailPage` is intentionally
+  just a placeholder — the graph itself is explicitly out of scope, per this
+  task's own instruction.
 
 **Build verified**: `npm install` (66 packages, 0 errors) and `npm run build` both
 succeeded after the visual-polish pass — still 63 modules, JS bundle size unchanged
@@ -1275,6 +1320,55 @@ confirming zero `.jsx` files were touched this pass — every edit was to a
 `.module.css` file or to `variables.css`/`global.css`. Only the CSS bundle grew,
 16.55 kB → 21.80 kB, from the added rules. Built cleanly in ~0.8s, `dist/` produced,
 0 errors/warnings.
+
+**Verified — Candidate detail + cross-linking (Phase 15, this pass)**, against the
+real running stack (`csb-recruitment-workflow` rebuilt with both the backend
+endpoint and the frontend changes together, recreated and healthy):
+
+- **Real candidate data, network-contract level**: logged in as the real seeded
+  recruiter and called `GET /v1/candidates/{id}/knowledge` for a real candidate
+  (`1cca02e3-...`, "Amine Sridi") — real `200` with real data (`skills: ["Python",
+  "FastAPI", "PostgreSQL", "Docker"]`, `job_titles: ["Backend Engineer"]`,
+  `years_of_experience: 3.9`) — the exact same skills that drove this candidate's
+  real deterministic score in an earlier session's job-matching smoke test, now
+  independently reachable through this new endpoint. An unknown candidate UUID
+  returned a real `404`; no auth returned a real `401`.
+- **Cross-linked data reconciled by hand against the real API responses**: for
+  that same candidate, `GET /v1/applications` filtered to their one real
+  application (`92a11e52-...`, job `"Report Smoke Test Engineer"`, status
+  `interviewed`, a real `interview_assessment`) — confirmed this matches exactly
+  what `CandidateDetailPage`'s own filter/render logic would produce: one
+  application row, linking to the real job (`/jobs/{job_id}`, confirmed `200` on
+  hard refresh) and a real "View Report" link (`/reports/{application_id}`,
+  confirmed `200` on hard refresh, and confirmed the report's own best-effort
+  candidate lookup resolves back to the same `candidate_id`).
+- **Hard-refresh / SPA-routing verified against the production port**:
+  `GET /candidates/{candidateId}` returned a real `200` serving the rebuilt
+  `index.html` with the new build's hashed asset filenames.
+- **No direct calls to other services, confirmed at the shipped-artifact level**:
+  grepped the built JS bundle inside the rebuilt container for Resume
+  Intelligence/Second Brain/VoiceHR hostnames and every other service's mapped
+  port — zero matches, same result as every prior phase's own check. Also
+  confirmed no candidate skill/experience data or exception text appeared in
+  `docker logs csb-recruitment-workflow` for any of these requests.
+- **Zero orphaned or missing CSS classes**: every touched or new page
+  (`CandidatesPage`, `JobDetailPage`, `ApplicationsPage`, `InterviewsPage`,
+  `ReportsPage`, `ReportDetailPage`, `CandidateDetailPage`) cross-checked in both
+  directions against its own `.module.css` — zero mismatches.
+- **Tests**: 8 new tests in `tests/test_candidate_knowledge.py` (auth boundary,
+  successful lookup, `raw_text`/`source_version`/embedding confirmed absent even
+  when the mocked payload carries them, `years_of_experience: null` handled
+  correctly, 404 for an unknown candidate, 502-without-leaking-exception-text, and
+  the no-`db`-dependency structural proof). RWS 61/61 passed both on host and
+  inside the rebuilt container (53 + 8 new). Full detail is in `handoff.md`'s own
+  entry for this session (the backend endpoint is cross-service work, tracked
+  there per §23).
+- **Build**: `npm run build` — **87 modules transformed** (up from 85 —
+  `CandidateDetailPage.jsx`/`.module.css`), 0 errors/warnings, JS bundle 211.78 kB
+  → 216.84 kB, CSS bundle 31.29 kB → 34.17 kB. `git status` confirms the frontend
+  changes are confined to `services/recruitment-workflow/frontend/src/`, alongside
+  the expected backend files (`main.py`, `schemas.py`) and their tests — no DB
+  migration, no new auth mechanism, no unrelated file touched.
 
 **Verified — VoiceHR Reports backend proxy + Reports pages (Phase 14, this pass)**,
 against the real running stack (both `csb-voicehr` and `csb-recruitment-workflow`
@@ -1951,12 +2045,13 @@ accept`, `/v1/applications/{application_id}/reject`, `/v1/jobs/{job_id}/applicat
   this task's scope was explicitly the visual shell/components, not a second
   accessibility pass; worth a small follow-up fix (mirroring M1's pattern exactly)
   whenever this file is next touched for another reason.
-- **Discovered during the Phase 12 pass, deliberately left as-is**:
-  `CandidatesPage`'s rows have no `onClick`/keyboard handling and don't navigate
-  anywhere — no `/candidates/:candidateId` detail page exists yet, and this
-  project's standing rule (established in Phase 11) is to never link to a page that
-  isn't built. Add both together once the detail page is actually built, not
-  before. Also: `DashboardPage`'s "Recent activity" section deliberately only
+- **Discovered during the Phase 12 pass**: `CandidatesPage`'s rows had no
+  `onClick`/keyboard handling and didn't navigate anywhere — no
+  `/candidates/:candidateId` detail page existed yet, and this project's standing
+  rule (established in Phase 11) is to never link to a page that isn't built.
+  **Resolved in Phase 15**: `CandidateDetailPage` now exists and every row links to
+  it — this bullet is kept for history, not as an open item. Also: `DashboardPage`'s
+  "Recent activity" section deliberately only
   surfaces candidate-upload and job-posting events (both already carry a
   human-readable name/title inline) — application-derived events (select/invite/
   decide) were left out, since `GlobalApplicationResponse` only carries an opaque
@@ -1972,18 +2067,20 @@ accept`, `/v1/applications/{application_id}/reject`, `/v1/jobs/{job_id}/applicat
   genuinely useful" per this task's own scope — the point of this page is a
   cross-job glance at interview progress, not a second surface to act from. If a
   future session wants that, it should reuse `ApplicationsPage`'s
-  `handleInvite`/`handleDecide` pattern rather than re-inventing it. Also: no
-  candidate-detail link on `InterviewsPage`'s candidate name (same reason as
-  `CandidatesPage`, above — no detail page exists yet).
+  `handleInvite`/`handleDecide` pattern rather than re-inventing it. Also:
+  `InterviewsPage`'s candidate name had no detail-page link at the time (same
+  reason as `CandidatesPage`, above) — **resolved in Phase 15**.
 - **Discovered during the Phase 14 pass, deliberately left as-is**:
   `ReportDetailPage` doesn't render VoiceHR's `evidence` field (quote-level detail
   tying specific transcript moments to specific dimensions) — its content overlaps
   with strengths/concerns, and adding a third notes section was judged to make the
   page needlessly dense rather than more useful; revisit if a future session finds
-  a real need for it. Also: no candidate-detail link on `ReportsPage`'s candidate
-  name (same reason as `CandidatesPage`/`InterviewsPage` — no detail page exists
-  yet), and no job-title context on `ReportDetailPage` itself (VoiceHR has no
-  concept of RWS jobs; that context lives on `ReportsPage`'s list). **A real
+  a real need for it. `ReportsPage`'s candidate name had no detail-page link at the
+  time (same reason as `CandidatesPage`/`InterviewsPage`) — **resolved in Phase
+  15**, including `ReportDetailPage`'s own header (via a best-effort lookup, since
+  VoiceHR's report carries no `candidate_id` — see below). No job-title context on
+  `ReportDetailPage` itself remains true (VoiceHR has no concept of RWS jobs; that
+  context lives on `ReportsPage`'s list). **A real
   environment characteristic, not a frontend limitation, discovered live this
   pass**: VoiceHR's SQLite database does not survive a container recreate (see
   `handoff.md`'s Known Limitations for the full detail) — every previously-real
@@ -1992,6 +2089,22 @@ accept`, `/v1/applications/{application_id}/reject`, `/v1/jobs/{job_id}/applicat
   smoke test created. Worth knowing before a live demo: confirm at least one real
   report still exists (or regenerate one, the same way this session did) before
   relying on `/reports` having data to show.
+- **Discovered during the Phase 15 pass, deliberately left as-is**:
+  `CandidateDetailPage`'s applications table links each row to its Job
+  (`/jobs/:jobId`) and, when a report exists, to its Report
+  (`/reports/:applicationId`) — but not to a third, per-application deep link into
+  the global `InterviewsPage`, since that page has no per-application URL/anchor to
+  target and the Report link already covers the interview outcome once one exists;
+  for an application still only invited/pending, there's nothing more specific to
+  show than the Job link. `ReportDetailPage`'s candidate-name link depends on a
+  best-effort lookup against `GET /v1/applications` (VoiceHR's report itself
+  carries no `candidate_id`) — if that lookup fails or the application isn't found
+  in the list for any reason, the name silently stays plain, unlinked text rather
+  than erroring; this is intentional graceful degradation, not a bug, and never
+  blocks the report's own content from rendering. The "Knowledge Graph" section on
+  `CandidateDetailPage` is a labeled, static `EmptyState` placeholder only — no
+  graph library was added, no data for it was fetched, per this task's own explicit
+  instruction not to build it yet.
 - **Test-data hygiene note, not a frontend limitation**: the Phase 10 audit found a
   real candidate present in Second Brain's scoring index with no matching Resume
   Intelligence contact record (an artifact of independent test-data seeding across
@@ -2049,63 +2162,43 @@ Before starting frontend work:
 
 ## 24. [NEXT]
 
-**Phases 11–13 are done** — admin shell redesign (`Sidebar`/`TopBar`/`Layout`,
-`PageHeader`/`StatusBadge`/`EmptyState`/`StatTile`), the Candidates page + real
-Dashboard data (`GET /v1/candidates`, `GET /v1/applications`), and the global
-VoiceHR interviews page (`InterviewsPage`, `AssessmentPanel` promoted to a shared
-component). Full detail for each is in §19/§20, not restated here — see those
-sections rather than this file's own prior revisions for the complete history.
+**Phases 11–14 are done** — admin shell redesign, the Candidates page + real
+Dashboard data, the global VoiceHR interviews page, and the VoiceHR Reports
+backend proxy + Reports pages. Full detail for each is in §19/§20, not restated
+here.
 
-**Phase 14 (VoiceHR Reports backend proxy + Reports pages) is done** — the last
-screen from the admin-dashboard redesign proposal's nav:
+**Phase 15 (Candidate detail + cross-linking) is done** — the piece every prior
+phase since Phase 12 deliberately deferred:
 
 - **Backend** (tracked in full in `handoff.md` per §23's own rule — cross-service
-  work): two new VoiceHR endpoints (`GET /api/rws/interviews/{external_reference_id}/
-  report` and `.../recording`, both gated by the existing `require_rws_service_key`
-  dependency, never the Basic-auth admin surface) and two new RWS endpoints
-  (`GET /v1/interviews/{application_id}/report` and `.../recording`, recruiter-JWT,
-  transient — no persistence). RWS rewrites the recording field to a same-origin
-  URL or `null`; VoiceHR's own host/port/credentials never reach the browser.
-- **Frontend**: `ReportsPage` (`/reports`, built entirely from the already-fetched
-  `GET /v1/applications`, filtered to `interview_assessment != null`) and
-  `ReportDetailPage` (`/reports/:applicationId`, one fetch to the new report proxy,
-  self-sufficient on a hard refresh) — reusing `AssessmentPanel` via a small
-  `toAssessmentShape()` adapter, plus VoiceHR-only fields (strengths/concerns,
-  transcript, recording playback via `requestBlob` + an object URL). Added to
-  `Sidebar`/`AppRouter` only once both pages were confirmed working.
-- **A real bug found and fixed by this pass's own live smoke test**: VoiceHR's real
-  evaluator output shapes `strengths`/`concerns` as `{text, timestamp}` objects, not
-  plain strings — the frontend's first draft would have crashed React; fixed with a
-  `noteText()` helper before the final rebuild.
-- **A real environment characteristic found by the same smoke test, not a code
-  defect**: VoiceHR's SQLite database doesn't survive a container recreate (see
-  `handoff.md`'s Known Limitations) — every previously-real completed interview was
-  gone, so this pass drove a **fresh, real** interview through the actual pipeline
-  (real Gemini evaluation, real webhook) to verify against, rather than assuming
-  old data still existed.
-- `npm run build`: 85 modules, 0 errors. Full verification detail (both real bugs,
-  the full proxy-chain live test including real recording bytes, and the exact
-  test names) is in §20.
+  work): one new RWS endpoint, `GET /v1/candidates/{candidate_id}/knowledge`
+  (recruiter-JWT, transient proxy to Second Brain via the *already-existing*
+  `clients.get_candidate()` — no new Second Brain client code needed). Returns
+  only `candidate_id`/`skills`/`job_titles`/`years_of_experience`; no `raw_text`,
+  no `source_version`, no embedding.
+- **Frontend**: new `CandidateDetailPage` at `/candidates/:candidateId` — identity
+  via the existing `useCandidateIdentity` hook, professional knowledge from the
+  new endpoint, and this candidate's applications (filtered client-side from the
+  already-fetched `GET /v1/applications`, no new endpoint needed for that part),
+  each linking to its Job and, when a report exists, its Report. A reserved,
+  static "Knowledge Graph" placeholder section — not the graph itself.
+- **Every candidate name in the app now links to it**: `CandidatesPage`'s rows,
+  `JobDetailPage`'s ranked-candidate name, `ApplicationsPage`'s and
+  `InterviewsPage`'s candidate names, `ReportsPage`'s rows, and
+  `ReportDetailPage`'s header (via a best-effort lookup, since VoiceHR's own
+  report has no concept of RWS's `candidate_id`).
+- Live-verified against the real rebuilt/recreated `csb-recruitment-workflow`
+  container: real skills/job-titles/experience for a real candidate, cross-linked
+  data reconciled by hand against real `GET /v1/applications` output, hard refresh
+  confirmed on `/candidates/{id}` and both cross-linked destinations. `npm run
+  build`: 87 modules, 0 errors. Full detail in §20.
 
-**`[NEXT]` for this file is: Candidate detail + cross-linking.** Every list page
-built across Phases 12–14 (`CandidatesPage`, `InterviewsPage`, `ReportsPage`) shows
-a candidate's name but links nowhere — this is the one deliberately-deferred piece
-named consistently in every prior phase's own §21 entry:
-
-- Build a `CandidateDetailPage` at a new `/candidates/:candidateId` route: identity
-  (`GET /v1/candidates/{id}/identity`, already implemented), and that candidate's
-  applications across every job (filter `GET /v1/applications` client-side by
-  `candidate_id` — no new backend endpoint should be needed, since the global list
-  already carries `candidate_id` on every row).
-- Once the page exists, wire up the links that were deliberately left inert:
-  `CandidatesPage`'s rows, `InterviewsPage`'s and `ReportsPage`'s candidate names —
-  each should navigate to `/candidates/:candidateId`.
-- This is also the natural point to reserve (not build) a visual slot for the
-  candidate ↔ job knowledge-graph visualization named in the original
-  admin-dashboard redesign proposal — an empty, clearly-labeled placeholder area is
-  in scope; the graph itself is explicitly not.
-- No new backend endpoint is anticipated for this task — if one turns out to be
-  genuinely needed (e.g. a dedicated `GET /v1/candidates/{id}/applications` if
-  client-side filtering of the full list proves impractical at real scale), name
-  the concrete problem first, per CLAUDE.md's "don't build ahead of demonstrated
-  need" rule, rather than adding it speculatively.
+**`[NEXT]` for this file: none — no frontend feature work is currently queued.**
+Every screen from the original admin-dashboard redesign proposal exists, works,
+and is fully cross-linked. The next bounded task across the whole project is
+**VoiceHR SQLite persistence hardening** — backend/infrastructure only (VoiceHR's
+`DB_PATH` doesn't survive a container recreate; see `handoff.md`'s Known
+Limitations and its own `[NEXT]` for the full problem statement and smallest fix).
+Nothing in that task should require a frontend change; if a future session's
+implementation of it somehow does, that's the point to give this file a real
+`[NEXT]` again, not before.

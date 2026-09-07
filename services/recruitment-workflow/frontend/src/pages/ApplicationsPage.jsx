@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { useParams } from "react-router-dom";
+import { Link, useParams } from "react-router-dom";
 import { getJobs } from "../api/jobs.js";
 import { getApplications, invite, accept, reject } from "../api/applications.js";
 import { ApiError } from "../api/client.js";
@@ -232,7 +232,13 @@ function ApplicationRow({ application, onUpdated }) {
         tabIndex={hasAssessment ? 0 : undefined}
       >
         <td>
-          <span className={styles.candidateName}>{displayName}</span>
+          <Link
+            to={`/candidates/${application.candidate_id}`}
+            className={styles.candidateName}
+            onClick={(event) => event.stopPropagation()}
+          >
+            {displayName}
+          </Link>
           {identity.status === "error" && (
             <span className={styles.identityWarning}> (name unavailable)</span>
           )}

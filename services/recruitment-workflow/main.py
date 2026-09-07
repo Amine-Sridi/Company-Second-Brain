@@ -60,6 +60,7 @@ from resume_intelligence_client import ResumeIntelligenceClientError
 from schemas import (
     ApplicationResponse,
     CandidateIdentityResponse,
+    CandidateKnowledgeResponse,
     CandidateSummaryResponse,
     GlobalApplicationResponse,
     InviteApplicationRequest,
@@ -837,6 +838,46 @@ async def get_candidates(
         )
         for c in candidates
     ]
+
+
+@app.get("/v1/candidates/{candidate_id}/knowledge", response_model=CandidateKnowledgeResponse)
+async def get_candidate_knowledge(
+    candidate_id: uuid.UUID,
+    recruiter: Recruiter = Depends(require_recruiter),
+):
+    """
+    Recruiter-facing: a candidate's professional knowledge (skills/job titles/years
+    of experience), for the Candidate Detail page. Transiently proxies Second
+    Brain's own GET /v1/knowledge/candidates/{candidate_id} -- the exact same call
+    POST /v1/jobs already makes per retrieved candidate during scoring, via
+    clients.get_candidate(). Declares no db dependency at all, the same structural
+    proof of "RWS persists nothing from this call" already used by
+    get_candidate_identity/get_candidates above. Deliberately narrow: no
+    `raw_text`, no `source_version`, no embedding -- see
+    schemas.CandidateKnowledgeResponse's own docstring for why.
+    """
+    try:
+        candidate = await clients.get_candidate(
+            settings.second_brain_url, settings.second_brain_api_key, candidate_id
+        )
+    except SecondBrainClientError as exc:
+        # Only the exception type and the (non-PII) candidate_id are logged --
+        # never the exception message, matching get_candidate_identity's own bar.
+        logger.error(
+            "candidate_knowledge_lookup_failed",
+            extra={"error_type": type(exc).__name__, "candidate_id": str(candidate_id)},
+        )
+        raise HTTPException(status_code=502, detail="Second Brain unavailable")
+
+    if candidate is None:
+        raise HTTPException(status_code=404, detail="Candidate not found")
+
+    return CandidateKnowledgeResponse(
+        candidate_id=candidate_id,
+        skills=candidate["skills"],
+        job_titles=candidate["job_titles"],
+        years_of_experience=candidate["years_of_experience"],
+    )
 
 
 # ---------------------------------------------------------------------------

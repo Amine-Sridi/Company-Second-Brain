@@ -162,7 +162,13 @@ function CandidateRow({ match }) {
         tabIndex={0}
       >
         <td>
-          <span className={styles.candidateName}>{displayName}</span>
+          <Link
+            to={`/candidates/${match.candidate_id}`}
+            className={styles.candidateName}
+            onClick={(event) => event.stopPropagation()}
+          >
+            {displayName}
+          </Link>
           {identity.status === "error" && (
             <span className={styles.identityWarning}> (name unavailable)</span>
           )}

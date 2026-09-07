@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { Link } from "react-router-dom";
 import { getAllApplications } from "../api/applications.js";
 import { ApiError } from "../api/client.js";
 import { useCandidateIdentity } from "../hooks/useCandidateIdentity.js";
@@ -151,7 +152,13 @@ function InterviewRow({ application }) {
         tabIndex={hasAssessment ? 0 : undefined}
       >
         <td>
-          <span className={styles.candidateName}>{displayName}</span>
+          <Link
+            to={`/candidates/${application.candidate_id}`}
+            className={styles.candidateName}
+            onClick={(event) => event.stopPropagation()}
+          >
+            {displayName}
+          </Link>
           {identity.status === "error" && (
             <span className={styles.identityWarning}> (name unavailable)</span>
           )}

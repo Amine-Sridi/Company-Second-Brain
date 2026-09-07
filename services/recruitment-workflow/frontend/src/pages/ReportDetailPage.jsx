@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { Link, useParams } from "react-router-dom";
 import { getInterviewReport } from "../api/interviews.js";
+import { getAllApplications } from "../api/applications.js";
 import { ApiError, requestBlob } from "../api/client.js";
 import PageHeader from "../components/PageHeader.jsx";
 import AssessmentPanel from "../components/AssessmentPanel.jsx";
@@ -54,8 +55,25 @@ export default function ReportDetailPage() {
   const [recordingUrl, setRecordingUrl] = useState(null);
   const [recordingError, setRecordingError] = useState(null);
 
+  // Best-effort only, for the "candidate name links to Candidate Detail"
+  // cross-link: VoiceHR's report has no concept of RWS's candidate_id, so this
+  // page independently looks it up via the already-existing global applications
+  // list rather than adding a new backend endpoint just for one UUID. A failure
+  // or a not-found row here never blocks the report itself from rendering --
+  // the candidate name just stays plain text instead of a link.
+  const [candidateId, setCandidateId] = useState(null);
+
   useEffect(() => {
     loadReport();
+    setCandidateId(null);
+    getAllApplications()
+      .then((applications) => {
+        const match = applications.find((application) => application.application_id === applicationId);
+        if (match) setCandidateId(match.candidate_id);
+      })
+      .catch(() => {
+        // Silently left unresolved -- see the comment above.
+      });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [applicationId]);
 
@@ -104,7 +122,19 @@ export default function ReportDetailPage() {
   return (
     <div className={styles.page}>
       <PageHeader
-        title={report ? report.candidate_name : "Report"}
+        title={
+          report ? (
+            candidateId ? (
+              <Link to={`/candidates/${candidateId}`} className={styles.candidateLink}>
+                {report.candidate_name}
+              </Link>
+            ) : (
+              report.candidate_name
+            )
+          ) : (
+            "Report"
+          )
+        }
         subtitle={report ? (report.language === "fr" ? "French interview" : "English interview") : undefined}
         actions={
           <Link to="/reports" className={styles.backLink}>

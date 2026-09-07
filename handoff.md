@@ -1367,6 +1367,46 @@ implementation — see the bootstrap instructions.
     for this smoke test (`"Report Smoke Test Engineer"`) was left in place, not cleaned
     up, matching this project's own established convention — it's now a real,
     demo-usable completed-interview report.
+- **Candidate professional-knowledge endpoint** (`FRONTEND_HANDOFF.md`'s `[NEXT]` after
+  its Phase 14 Reports pass — backend prerequisite for Candidate Detail): **DONE**. One
+  new RWS endpoint, additive, no DB schema change, no new auth mechanism, no new
+  Second Brain client function needed.
+  - **RWS** (`services/recruitment-workflow/`): new `GET /v1/candidates/{candidate_id}/
+    knowledge` (recruiter-JWT, `require_recruiter`) — transiently proxies Second
+    Brain's own `GET /v1/knowledge/candidates/{candidate_id}` via the *already-existing*
+    `clients.get_candidate()` (the exact same function `POST /v1/jobs` already calls
+    per retrieved candidate during scoring — no new Second Brain client code was
+    needed at all). New `CandidateKnowledgeResponse` in `schemas.py`
+    (`candidate_id`/`skills`/`job_titles`/`years_of_experience` only — an explicit
+    allow-list, not `CandidateSummary` minus a blocklist: `raw_text` and
+    `source_version` are both deliberately excluded, and Second Brain's own schema has
+    no embedding field to even accidentally expose). The route declares no `db`
+    parameter at all, the same structural "RWS persists nothing" proof
+    `get_candidate_identity`/`get_candidates` already established. 404 when Second
+    Brain has no knowledge row for the candidate; 502 on a Second Brain transport
+    failure, logged by exception type only (never the exception message or any
+    candidate data).
+  - **Tests**: 8 new tests in `tests/test_candidate_knowledge.py`, mirroring
+    `test_candidate_identity.py`'s exact fixture pattern — auth boundary (401 no JWT,
+    401 service-key-instead-of-JWT), successful lookup returns exactly
+    skills/job_titles/years_of_experience, `raw_text`/`source_version`/`embedding` all
+    confirmed absent from the response even when the mocked Second Brain payload
+    carries them, `years_of_experience: null` handled as a normal value not an error,
+    404 for an unknown candidate, 502-without-leaking-exception-text, and the
+    no-`db`-dependency structural proof.
+  - **Full regression**: RWS 61/61 passed both on host and inside the rebuilt
+    `csb-recruitment-workflow` container (up from 53 — 8 new tests).
+  - **Live end-to-end smoke test verified against the real running stack** (image
+    rebuilt via `docker compose build`, container recreated and healthy): logged in as
+    the real seeded recruiter — `GET /v1/candidates/{id}/knowledge` with no auth → real
+    `401`; with a real JWT, for a real candidate (`1cca02e3-...`, "Amine Sridi") → real
+    `200` with real data (`skills: ["Python", "FastAPI", "PostgreSQL", "Docker"]`,
+    `job_titles: ["Backend Engineer"]`, `years_of_experience: 3.9`) — the exact same
+    candidate whose skills already drove that candidate's real deterministic score in
+    an earlier session's live job-matching smoke test, now independently re-confirmed
+    reachable through this new endpoint. An unknown candidate UUID returned a real
+    `404`. `docker logs csb-recruitment-workflow` for these requests showed no skill/
+    experience data or exception text in any log line.
 - Nothing is BLOCKED.
 
 ## Known Limitations (discovered this session)
@@ -2145,12 +2185,27 @@ implementation — see the bootstrap instructions.
 
 ## Exact Next Steps
 
-Nothing is currently marked `[NEXT]` on this file. `FRONTEND_HANDOFF.md` §24 now names the next
-frontend task ("Candidate detail + cross-linking") — purely frontend, no new backend endpoint
-anticipated (it links together data already available from `GET /v1/candidates`, `GET
-/v1/candidates/{id}/identity`, and `GET /v1/applications`, all of which already exist). It remains
-out of this file's scope to schedule frontend-only work. The items below predate this session's
-work and remain genuine open design questions, not gaps surfaced by this session.
+**[NEXT] VoiceHR SQLite persistence hardening.** Concrete problem, already discovered and
+documented above (Known Limitations): `services/voicehr/backend/database.py: DB_PATH =
+"voicehr.db"` is a bare relative path in the container's working directory (`/app/`), which sits
+outside the `voicehr_data` named volume (`infra/docker-compose.yml` only mounts that volume at
+`/app/storage`, covering recordings/transcripts). Every VoiceHR container recreate or rebuild —
+which is routine, not rare; this project's own sessions trigger one on nearly every VoiceHR-
+touching pass — silently resets every interview/report row to empty, while RWS's own
+Postgres-persisted `interview_assessment` survives untouched. Smallest fix: move `DB_PATH` to
+`storage/voicehr.db` (already inside the persisted volume) — a one-line change in `database.py`
+(and anywhere else that opens a raw `sqlite3.connect(DB_PATH)`-equivalent path, if any exist
+outside that one constant), verified by a real rebuild + recreate + a real interview created
+before the rebuild still being queryable after it. This is infrastructure hardening, not a new
+feature — CLAUDE.md's "VoiceHR keeps its own SQLite persistence, unmigrated" rule is about not
+rewriting VoiceHR's *storage engine*, not about tolerating a path bug that silently discards its
+data on every deploy. Do not use this as an opportunity to also migrate VoiceHR off SQLite,
+consolidate its schema, or otherwise go beyond the concrete path-persistence problem named here.
+
+`FRONTEND_HANDOFF.md` §24 confirms no frontend feature work is queued (Candidate Detail + every
+cross-link named in this session's task are done) — this next step is backend/infra-only, tracked
+here rather than there per §23's own rule. The items below predate this session's work and remain
+genuine open design questions, not gaps surfaced by this session.
 
 1. Nothing currently reads `second_brain.candidate_feedback` — it's a write-back sink only.
    Whether/how it should ever influence retrieval or scoring (e.g. down-weighting a candidate

@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { Link } from "react-router-dom";
+import { Link, useNavigate } from "react-router-dom";
 import { getCandidates } from "../api/candidates.js";
 import { ApiError } from "../api/client.js";
 import PageHeader from "../components/PageHeader.jsx";
@@ -13,13 +13,11 @@ import styles from "./CandidatesPage.module.css";
  * same pattern as every other list page in this app, so a hard browser refresh on
  * this URL reflects real backend state, not a stale local copy.
  *
- * Rows are deliberately not clickable this pass: a candidate detail page
- * (/candidates/:candidateId) is out of this task's scope, and this project's own
- * rule is to never add a link to a page that doesn't exist yet (see Phase 11's
- * admin-shell pass). Add row navigation together with the detail page itself, in a
- * later pass.
+ * Rows navigate to /candidates/:candidateId (same click/keyboard pattern as
+ * ReportsPage's rows) -- added once that destination page actually existed.
  */
 export default function CandidatesPage() {
+  const navigate = useNavigate();
   const [candidates, setCandidates] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
@@ -80,7 +78,19 @@ export default function CandidatesPage() {
             </thead>
             <tbody>
               {candidates.map((candidate) => (
-                <tr key={candidate.candidate_id}>
+                <tr
+                  key={candidate.candidate_id}
+                  className={styles.row}
+                  onClick={() => navigate(`/candidates/${candidate.candidate_id}`)}
+                  onKeyDown={(event) => {
+                    if (event.key === "Enter" || event.key === " ") {
+                      if (event.key === " ") event.preventDefault();
+                      navigate(`/candidates/${candidate.candidate_id}`);
+                    }
+                  }}
+                  role="button"
+                  tabIndex={0}
+                >
                   <td className={styles.candidateName}>{candidate.name}</td>
                   <td>
                     {candidate.email ? (

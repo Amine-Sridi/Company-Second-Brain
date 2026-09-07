@@ -2,6 +2,15 @@
   max-width: 760px;
 }
 
+.candidateLink {
+  color: inherit;
+  text-decoration: none;
+}
+
+.candidateLink:hover {
+  text-decoration: underline;
+}
+
 .backLink {
   flex-shrink: 0;
   align-self: flex-start;

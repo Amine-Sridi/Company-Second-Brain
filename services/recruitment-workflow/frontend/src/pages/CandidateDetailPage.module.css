@@ -1,0 +1,124 @@
+.page {
+  max-width: 900px;
+}
+
+.status {
+  color: var(--color-text-muted);
+  font-size: var(--font-size-base);
+}
+
+.error {
+  background: var(--color-danger-bg);
+  color: var(--color-danger);
+  padding: var(--spacing-2) var(--spacing-3);
+  border-radius: var(--radius);
+  font-size: var(--font-size-base);
+}
+
+.content {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-4);
+}
+
+.section {
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow-sm);
+  padding: var(--spacing-3);
+}
+
+.sectionTitle {
+  margin: 0 0 var(--spacing-3);
+  font-size: var(--font-size-sm);
+  text-transform: uppercase;
+  letter-spacing: 0.02em;
+  color: var(--color-text-muted);
+  font-weight: 600;
+}
+
+.knowledgeGrid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+  gap: var(--spacing-3);
+}
+
+.skillsField {
+  grid-column: 1 / -1;
+}
+
+.fieldLabel {
+  display: block;
+  font-size: var(--font-size-xs);
+  text-transform: uppercase;
+  letter-spacing: 0.02em;
+  color: var(--color-text-muted);
+  font-weight: 600;
+  margin-bottom: var(--spacing-1);
+}
+
+.fieldValue {
+  margin: 0;
+  font-size: var(--font-size-base);
+}
+
+.chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--spacing-1);
+}
+
+.chip {
+  background: var(--color-neutral-bg);
+  color: var(--color-text);
+  border-radius: var(--radius-pill);
+  padding: 2px 10px;
+  font-size: var(--font-size-xs);
+}
+
+.tableWrapper {
+  overflow-x: auto;
+}
+
+.table {
+  width: 100%;
+  min-width: 480px;
+  border-collapse: collapse;
+  font-size: var(--font-size-base);
+}
+
+.table th {
+  text-align: left;
+  padding: var(--spacing-2) var(--spacing-3);
+  color: var(--color-text-muted);
+  font-weight: 600;
+  font-size: var(--font-size-xs);
+  text-transform: uppercase;
+  letter-spacing: 0.02em;
+  border-bottom: 1px solid var(--color-border);
+}
+
+.table td {
+  padding: var(--spacing-2) var(--spacing-3);
+  border-bottom: 1px solid var(--color-border);
+  vertical-align: middle;
+}
+
+.table tr:last-child td {
+  border-bottom: none;
+}
+
+.interviewStatusEmpty {
+  color: var(--color-text-muted);
+}
+
+.inlineLink {
+  color: var(--color-primary);
+  font-weight: 500;
+  text-decoration: none;
+}
+
+.inlineLink:hover {
+  text-decoration: underline;
+}

@@ -25,3 +25,17 @@ export function getCandidateIdentity(candidateId) {
 export function getCandidates() {
   return request("/v1/candidates");
 }
+
+/**
+ * A candidate's professional knowledge -- RWS's transient proxy to Second Brain's
+ * own GET /v1/knowledge/candidates/{candidate_id}. RWS never persists this. Returns
+ * only { candidate_id, skills, job_titles, years_of_experience } -- no raw_text, no
+ * source_version, no embedding (see FRONTEND_HANDOFF.md §9 and
+ * schemas.CandidateKnowledgeResponse on the backend).
+ *
+ * @param {string} candidateId
+ * @returns {Promise<{ candidate_id: string, skills: string[], job_titles: string[], years_of_experience: number|null }>}
+ */
+export function getCandidateKnowledge(candidateId) {
+  return request(`/v1/candidates/${candidateId}/knowledge`);
+}

@@ -70,6 +70,15 @@
   border-bottom: none;
 }
 
+.row {
+  cursor: pointer;
+  transition: background-color var(--transition-fast);
+}
+
+.row:hover {
+  background: var(--color-hover-bg);
+}
+
 .candidateName {
   font-weight: 500;
 }

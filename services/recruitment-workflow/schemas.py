@@ -213,6 +213,25 @@ class CandidateSummaryResponse(BaseModel):
 
 
 # ---------------------------------------------------------------------------
+# Candidate professional knowledge (recruiter-facing, transient proxy to Second
+# Brain -- reuses clients.get_candidate(), the same call POST /v1/jobs already
+# makes per retrieved candidate during scoring). An explicit allow-list, not
+# CandidateSummary minus a blocklist: no raw_text (the text Second Brain embeds --
+# not PII, but not "useful structured data" either) and no source_version (an
+# internal staleness-tracking tag, meaningless to a recruiter). Second Brain's own
+# schema has no embedding field to even accidentally expose.
+# ---------------------------------------------------------------------------
+
+class CandidateKnowledgeResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    candidate_id: UUID4
+    skills: list[str] = Field(default_factory=list, max_length=200)
+    job_titles: list[str] = Field(default_factory=list, max_length=50)
+    years_of_experience: Optional[float] = Field(None, ge=0.0, le=100.0)
+
+
+# ---------------------------------------------------------------------------
 # Interview invitation (RWS -> VoiceHR, gated on a Resume Intelligence contact lookup)
 # ---------------------------------------------------------------------------
 
