@@ -46,6 +46,7 @@ from db import (
     get_scoring_config_by_version,
     insert_webhook_event,
     list_all_applications,
+    list_all_match_results,
     list_applications_for_job,
     list_jobs_with_match_counts,
     list_match_results_for_job,
@@ -60,9 +61,12 @@ from resume_intelligence_client import ResumeIntelligenceClientError
 from schemas import (
     ApplicationResponse,
     CandidateIdentityResponse,
+    CandidateJobGraphResponse,
     CandidateKnowledgeResponse,
     CandidateSummaryResponse,
     GlobalApplicationResponse,
+    GraphEdge,
+    GraphJobNode,
     InviteApplicationRequest,
     JobResponse,
     JobSubmissionRequest,
@@ -878,6 +882,59 @@ async def get_candidate_knowledge(
         job_titles=candidate["job_titles"],
         years_of_experience=candidate["years_of_experience"],
     )
+
+
+# ---------------------------------------------------------------------------
+# Candidate/job knowledge graph -- recruiter-facing, RWS-native (see the
+# knowledge-graph design audit tracked in handoff.md). Unlike the identity/
+# knowledge/candidates-list endpoints above, this one genuinely reads RWS's own
+# Postgres (hence the `db` dependency) rather than proxying another service --
+# there is nothing to proxy, since every field it returns already lives in the
+# immutable MatchResult/Job rows scoring itself already persisted. No new
+# persistence, no Second Brain call, no scoring recomputation: this is a pure
+# read of the existing audit trail.
+# ---------------------------------------------------------------------------
+
+@app.get("/v1/graph/candidates-jobs", response_model=CandidateJobGraphResponse)
+def get_candidates_jobs_graph(
+    db: Session = Depends(get_db),
+    recruiter: Recruiter = Depends(require_recruiter),
+):
+    """
+    Every persisted MatchResult across every job, shaped as a candidate<->job graph:
+    one job node per job that has at least one match (with its title), one edge per
+    MatchResult (candidate_id, job_id, final_score, qualified, hard_gate_passed,
+    matched/missing_requirements). Candidate nodes are deliberately not enumerated
+    here -- RWS has no display-worthy candidate data of its own; the frontend
+    derives the candidate-node set from edges[].candidate_id and resolves names via
+    the already-existing GET /v1/candidates in a second call, not a proxy call this
+    endpoint would otherwise need to make. Qualified and disqualified matches are
+    both included, unfiltered -- see list_all_match_results's own docstring for why.
+    One JOIN query, not an N+1 per-match job lookup.
+    """
+    rows = list_all_match_results(db)
+
+    seen_job_ids: set[uuid.UUID] = set()
+    jobs: list[GraphJobNode] = []
+    edges: list[GraphEdge] = []
+    for match, job_title in rows:
+        if match.job_id not in seen_job_ids:
+            seen_job_ids.add(match.job_id)
+            jobs.append(GraphJobNode(job_id=match.job_id, title=job_title))
+        edges.append(
+            GraphEdge(
+                match_id=match.id,
+                candidate_id=match.candidate_id,
+                job_id=match.job_id,
+                final_score=match.final_score,
+                qualified=match.qualified,
+                hard_gate_passed=match.hard_gate_passed,
+                matched_requirements=match.matched_requirements,
+                missing_requirements=match.missing_requirements,
+            )
+        )
+
+    return CandidateJobGraphResponse(jobs=jobs, edges=edges)
 
 
 # ---------------------------------------------------------------------------

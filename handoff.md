@@ -1407,34 +1407,178 @@ implementation — see the bootstrap instructions.
     reachable through this new endpoint. An unknown candidate UUID returned a real
     `404`. `docker logs csb-recruitment-workflow` for these requests showed no skill/
     experience data or exception text in any log line.
+- **VoiceHR SQLite persistence hardening**: **DONE**. Fixes the Known Limitation above
+  with the smallest possible change — one line in one file, no docker-compose.yml
+  change, no schema change, no API change.
+  - **The fix**: `services/voicehr/backend/database.py: DB_PATH` changed from
+    `"voicehr.db"` to `"storage/voicehr.db"`. `storage/` is the exact directory
+    `infra/docker-compose.yml`'s existing `voicehr_data:/app/storage` volume mount
+    already covers, and the Dockerfile's existing `RUN mkdir -p storage/recordings
+    storage/transcripts` already guarantees `storage/` itself exists before the DB is
+    ever opened — so this required no new volume, no new mount, and no Dockerfile
+    change. SQLite itself, the schema, and every query/route/service in this codebase
+    are completely unchanged; every one of the eight other call sites that reference
+    the database path (`deps.py`, `interview.py`, `report.py`, `session.py`,
+    `processing.py`) reads `database.DB_PATH` (or imports the name once, which
+    resolves to the already-updated value at process startup) rather than a second
+    hardcoded literal, so none of them needed touching.
+  - **Deliberately not made configurable via settings/env**: every other storage path
+    in this codebase (`storage/recordings`, `storage/transcripts`) is already a plain
+    hardcoded literal, not settings-driven — adding env-var configurability only for
+    the DB path would be the one inconsistent exception to that existing pattern, not
+    a genuine need this task identified. Matches CLAUDE.md's "boring over clever" and
+    "no infra ahead of demonstrated need."
+  - **No data migration was needed**: the previous (bugged) path never actually
+    persisted anything across a container recreate in the first place — confirmed
+    live this session (see below) that the container started this pass with zero
+    interview rows, exactly as the bug predicts, so there was nothing real at the old
+    path to carry forward.
+  - **`.gitignore` already covers the new path**: `services/voicehr/.gitignore`'s
+    existing `*.db` rule matches at any depth, including `storage/voicehr.db` —
+    confirmed via `git check-ignore -v`. No `.gitignore` change was needed. Also
+    confirmed (and worth recording precisely): `voicehr_data` is a Docker **named**
+    volume, not a bind mount, so its contents (including the SQLite file) live
+    entirely inside Docker's own volume storage — the file never actually appears
+    in the git working tree at all under the current compose config; the `.gitignore`
+    rule is correct defense-in-depth in case that ever changes to a bind mount.
+  - **Tests**: no test changes were needed or made — every existing VoiceHR test
+    already monkeypatches `DB_PATH` to its own `tempfile`-generated path (`tests/
+    conftest.py`'s `client`/`db` fixtures, `tests/test_database.py`), completely
+    independent of the production value, confirmed by grepping the whole tree for
+    any literal reference to the old `"voicehr.db"` string (found only in this
+    change's own explanatory comment). Full suite: **140/140 passed on host**,
+    unchanged from before this fix (same count, since nothing about test behavior
+    changed) — confirming the fix didn't regress anything, not that it added new
+    coverage (a path constant has no meaningful unit-testable behavior of its own;
+    this task's real verification is the live persistence test below).
+  - **Live end-to-end persistence test verified against the real running stack, the
+    strongest form this task asked for**: rebuilt `csb-voicehr`'s image and recreated
+    the container with the new `DB_PATH` — confirmed directly (`docker exec`) that
+    `storage/voicehr.db` now exists inside the persisted volume, the old bare
+    `voicehr.db` path no longer exists, and `backend.database.DB_PATH` resolves to the
+    new value at runtime. Then drove a **real** interview through the actual pipeline
+    (no hand-crafted webhook or DB write, per this project's established discipline):
+    submitted a real job (`POST /v1/jobs`, real Gemini JD structuring), selected and
+    invited a real qualified match for a candidate with a real Resume Intelligence
+    contact record (`POST /v1/matches/{id}/select`, `POST /v1/applications/{id}/invite`
+    — real `POST /api/invite` call to the live VoiceHR container), then called
+    `backend.services.processing.process_interview` directly inside the container with
+    a real multi-turn transcript — producing a real Gemini evaluation
+    (`overall_score: 85, cefr_level: "C1"`) and a real webhook delivery to RWS
+    (confirmed via `docker logs csb-recruitment-workflow`, `outcome: "processed"`).
+    Confirmed the interview + report rows existed in `storage/voicehr.db` before the
+    critical test. **Then ran the actual test this task asked for**: `docker compose
+    down` (the whole stack — all four service containers plus the network removed,
+    confirmed by the real command output) followed by `docker compose up -d` (full
+    stack recreated from scratch, all five containers — including Postgres — reported
+    healthy). Re-queried `storage/voicehr.db` inside the freshly-recreated `csb-voicehr`
+    container: **the exact same interview row (same token), the exact same report row
+    (same `report_token`, same `overall_score: 85`, same `cefr_level: "C1"`) was still
+    present** — the bug this task exists to fix is confirmed genuinely gone, not just
+    reasoned about. Re-ran the full VoiceHR test suite post-restart: 140/140 passed
+    again. Re-verified both report-serving paths post-restart with the same surviving
+    record: RWS's own proxy (`GET /v1/interviews/{application_id}/report`, added two
+    sessions ago) returned the identical real data; VoiceHR's own admin surface
+    (`GET /api/admin/reports`, Basic auth) independently confirmed the same one report.
+    Also linked a real recording file to the surviving interview post-restart and
+    confirmed the full recording-proxy chain (`GET /v1/interviews/{application_id}/
+    recording`) still serves real bytes with the correct `audio/webm` content-type —
+    proving the fix didn't disturb the separate recording-serving code path either.
+    Finally confirmed via `git check-ignore`/`git status`/a dry-run `git add` that no
+    `.db` file is trackable, staged, or shown as a pending change anywhere in
+    `services/voicehr/` — the only real diff in the whole service is the one-line
+    `database.py` change itself. The synthetic job/application/interview created for
+    this test (`"Persistence Test Engineer"`) was left in place, not cleaned up,
+    matching this project's own established convention.
+  - **Not done this pass, deliberately**: no migration off SQLite, no schema
+    consolidation, no change to interview-conduct logic, reports, Gemini usage, or
+    webhook behavior — all explicitly out of this task's scope, and CLAUDE.md's own
+    "VoiceHR keeps its own SQLite persistence, unmigrated" rule remains fully intact
+    (this was a path bug, not a persistence-model change).
+- **Knowledge graph design audit**: **DONE** — delivered as a chat-response design
+  proposal (no design-doc file was created; nothing in the repo changed for this step,
+  as instructed). Recommended: Candidate↔Job graph only, skills deferred (Second
+  Brain's `skills`/`job_titles` already sit on `MatchResult.candidate_snapshot`
+  per-match, so a future skill layer needs zero new persistence or Second Brain calls
+  when it's actually wanted); one compact recruiter-JWT RWS endpoint rather than
+  per-node API calls; Cytoscape.js (`react-cytoscapejs`) over react-force-graph/
+  three.js and raw D3-force, for readability/maintainability at the hundreds-of-nodes
+  scale this project actually has; a dedicated `/graph` page (not the dashboard or
+  candidate-detail placeholder) with 2D force layout, edge thickness/opacity by
+  `final_score`, a clear qualified/disqualified visual distinction, click-to-highlight,
+  and links back into the existing job/candidate detail pages; qualification/hard-gate
+  status stays backend-authoritative throughout, the graph only ever renders what's
+  already persisted. This session (below) implemented the one concrete backend
+  prerequisite that proposal identified as the actual next step.
+- **Knowledge graph backend endpoint — `GET /v1/graph/candidates-jobs`**: **DONE**.
+  Recruiter-JWT-protected (same `get_current_recruiter` dependency as every other
+  recruiter route), reads RWS's own already-persisted `MatchResult`/`Job` rows only —
+  no Second Brain call, no scoring recomputation, no new persistence.
+  - `db.py`: added `list_all_match_results(db)` — one unfiltered JOIN of `MatchResult`
+    × `Job.title`, directly mirroring the existing `list_all_applications` /
+    `list_match_results_for_job` pattern (drop the per-job `.filter()`, keep the
+    `.join()` for the title). Deliberately no `ORDER BY` — the graph layout, not the
+    query, owns node/edge ordering.
+  - `schemas.py`: added `GraphJobNode` (`job_id`, `title`), `GraphEdge` (`match_id`,
+    `candidate_id`, `job_id`, `final_score`, `qualified`, `hard_gate_passed`,
+    `matched_requirements`, `missing_requirements` — every field copied straight off
+    `MatchResult`, nothing recomputed), and `CandidateJobGraphResponse` (`jobs`,
+    `edges`), all with `extra="forbid"`. Deliberately **no** `candidates[]` array in
+    the response: RWS has no display-worthy candidate data of its own (name lives in
+    Resume Intelligence), so the frontend is expected to derive the candidate-node set
+    from `edges[].candidate_id` and resolve names via the already-existing
+    `GET /v1/candidates` in a second call, rather than this endpoint proxying Resume
+    Intelligence for no reason — directly following the design audit's own
+    recommendation above.
+  - `main.py`: added the route (placed next to `get_candidate_knowledge`), with a
+    comment explaining why this endpoint legitimately declares a `db` dependency —
+    unlike `get_candidate_identity`/`get_candidates`/`get_candidate_knowledge` (transient
+    proxies to other services, structurally provable as "persists/reads nothing of
+    RWS's own" by having no `db` parameter at all), this route reads RWS's own Postgres
+    directly, so a `db: Session = Depends(get_db)` dependency is correct here, not a
+    smell.
+  - Both qualified and disqualified matches are included — no filtering — per
+    CLAUDE.md's audit-trail principle for `MatchResult`; the graph is a read of that
+    full trail, not a curated subset.
+  - **Tests**: new `tests/test_candidates_jobs_graph.py`, 8 tests — JWT required (401
+    with no auth and with a service API key instead of a JWT), empty graph, multiple
+    jobs/candidates producing correct deduplicated job nodes with the right joined
+    title, qualified and disqualified edges both present and not filtered, exact
+    persisted-field passthrough (unrounded `final_score`, exact requirement lists), no
+    `candidates[]` array and no extra response fields, and a structural
+    `inspect.getsource` proof that the route body contains no `db.add(`/`db.commit(`.
+    All 8 passed individually; full RWS suite **69/69 passed** on host and again
+    inside the rebuilt/recreated `csb-recruitment-workflow` container.
+  - **Live verification against the real running stack**: logged in as the real
+    seeded recruiter; `GET /v1/graph/candidates-jobs` with no `Authorization` header
+    returned a real `401`; with a valid recruiter JWT returned a real `200` with **4
+    real jobs and 26 real edges (17 qualified, 9 disqualified)** drawn from data
+    created in prior sessions' live tests — a sample edge showed correct field shapes
+    and a full-precision, non-rounded `final_score`. Confirmed the response body has
+    exactly the two top-level keys `{jobs, edges}` (no `candidates` array). Checked
+    `docker logs csb-recruitment-workflow` for the request: only a clean access-log
+    line, no PII or exception text leaked.
+  - **Not done this pass, deliberately**: no React/graph-rendering work of any kind
+    (explicitly out of scope — "no frontend work yet"), no candidate-node data, no new
+    persistence, no change to scoring/matching.
 - Nothing is BLOCKED.
 
 ## Known Limitations (discovered this session)
 
-- **VoiceHR's SQLite database does not survive a container recreate.** `backend/
-  database.py: DB_PATH = "voicehr.db"` is a bare relative path in the container's
-  working directory (`/app/`), which is outside the `voicehr_data` named volume
-  (`infra/docker-compose.yml` only mounts that volume at `/app/storage`, covering
-  recordings/transcripts, not the database file). Every `docker compose up
-  --force-recreate voicehr` (or a rebuild) across this project's entire history has
-  therefore silently reset every interview/report row to empty, even though RWS's own
-  `interview_assessment` (Postgres-persisted, written once at webhook-delivery time)
-  correctly survives. Discovered concretely this session: every previously-real
-  completed-interview application in the live dataset returned 404 from the new
-  `GET /v1/interviews/{id}/report` proxy, because VoiceHR no longer had any matching
-  interview row at all — not a bug in the new endpoint, confirmed by directly querying
-  `voicehr.db` inside the container (`SELECT count(*) FROM interviews` returned `0`
-  right after the routine rebuild this session's own work required). Not fixed here —
-  out of this task's scope, and CLAUDE.md's own "VoiceHR keeps its own SQLite
-  persistence, unmigrated" rule plus "no infra ahead of demonstrated need" both caution
-  against unprompted infrastructure changes. The smallest future fix, if this is ever
-  revisited, is moving `DB_PATH` under `/app/storage/voicehr.db` (already inside the
-  persisted volume) — a one-line change plus a migration note for any environment with
-  pre-existing data at the old path. Worth knowing before any future demo/session that
-  rebuilds the VoiceHR container: all interview history is lost, and demo-usable
-  completed-interview data must be regenerated (a real invite + a real
-  `backend.services.processing.process_interview` call, as this session did) rather
-  than assumed to already exist.
+- **RESOLVED this session — VoiceHR's SQLite database did not survive a container
+  recreate.** Originally discovered two sessions ago: `backend/database.py: DB_PATH =
+  "voicehr.db"` was a bare relative path in the container's working directory (`/app/`),
+  which sits outside the `voicehr_data` named volume (`infra/docker-compose.yml` only
+  mounts that volume at `/app/storage`, covering recordings/transcripts, not the
+  database file). Every container recreate or rebuild therefore silently reset every
+  interview/report row to empty, even though RWS's own `interview_assessment`
+  (Postgres-persisted) correctly survived. **Fix** (see "VoiceHR SQLite persistence
+  hardening" below for the full session record): `DB_PATH` moved to
+  `"storage/voicehr.db"` — a one-line change in `database.py`, nothing else. Every
+  other reference in the codebase reads `database.DB_PATH` at call time (or imports the
+  name once, at process startup, after the new value is already set), so no other file
+  needed touching. No `docker-compose.yml` change was needed either — `storage/` is
+  already the exact directory the existing `voicehr_data` volume mounts.
 - No existing Resume Intelligence or VoiceHR source code is available in this environment —
   only README-level documentation (`ResumeParser.md`, `VoiceHR.md`). User has confirmed both
   will be placed into `services/resume-intelligence/` and `services/voicehr/` respectively.
@@ -2185,27 +2329,34 @@ implementation — see the bootstrap instructions.
 
 ## Exact Next Steps
 
-**[NEXT] VoiceHR SQLite persistence hardening.** Concrete problem, already discovered and
-documented above (Known Limitations): `services/voicehr/backend/database.py: DB_PATH =
-"voicehr.db"` is a bare relative path in the container's working directory (`/app/`), which sits
-outside the `voicehr_data` named volume (`infra/docker-compose.yml` only mounts that volume at
-`/app/storage`, covering recordings/transcripts). Every VoiceHR container recreate or rebuild —
-which is routine, not rare; this project's own sessions trigger one on nearly every VoiceHR-
-touching pass — silently resets every interview/report row to empty, while RWS's own
-Postgres-persisted `interview_assessment` survives untouched. Smallest fix: move `DB_PATH` to
-`storage/voicehr.db` (already inside the persisted volume) — a one-line change in `database.py`
-(and anywhere else that opens a raw `sqlite3.connect(DB_PATH)`-equivalent path, if any exist
-outside that one constant), verified by a real rebuild + recreate + a real interview created
-before the rebuild still being queryable after it. This is infrastructure hardening, not a new
-feature — CLAUDE.md's "VoiceHR keeps its own SQLite persistence, unmigrated" rule is about not
-rewriting VoiceHR's *storage engine*, not about tolerating a path bug that silently discards its
-data on every deploy. Do not use this as an opportunity to also migrate VoiceHR off SQLite,
-consolidate its schema, or otherwise go beyond the concrete path-persistence problem named here.
+**VoiceHR SQLite persistence hardening is done** — see the entry above for the full session
+record (the fix, why it needed no other file/config change, and the live `docker compose down`/
+`up` persistence test that proves it). CLAUDE.md's "VoiceHR keeps its own SQLite persistence,
+unmigrated" rule remains fully intact; this was a path bug, not a persistence-model change.
 
-`FRONTEND_HANDOFF.md` §24 confirms no frontend feature work is queued (Candidate Detail + every
-cross-link named in this session's task are done) — this next step is backend/infra-only, tracked
-here rather than there per §23's own rule. The items below predate this session's work and remain
-genuine open design questions, not gaps surfaced by this session.
+**Knowledge graph design audit is done** (chat-delivered proposal) and **the backend prerequisite it
+identified — `GET /v1/graph/candidates-jobs` — is done** (see the two entries above). CLAUDE.md's
+scoring/qualification rules were untouched throughout; the endpoint only reads already-persisted
+`MatchResult`/`Job` rows.
+
+**[NEXT] Knowledge graph React page.** Build the recruiter-facing graph view the design audit
+proposed, consuming the now-live `GET /v1/graph/candidates-jobs` endpoint. Concrete guidance carried
+over from the design audit so this doesn't need to be re-derived: (1) library — Cytoscape.js +
+`react-cytoscapejs` (not react-force-graph/three.js, not raw D3-force); (2) placement — a new
+dedicated `/graph` route, not the dashboard or the `CandidateDetailPage` placeholder; (3) data —
+one call to `GET /v1/graph/candidates-jobs` for job nodes + edges, merged client-side with the
+already-existing `GET /v1/candidates` call to get candidate display names (the graph endpoint
+deliberately has no `candidates[]` array — see the entry above for why); (4) rendering — 2D force
+layout, edge thickness/opacity scaled by `final_score`, a clear qualified (`qualified: true`) vs.
+disqualified visual distinction (color/style, not filtering — disqualified edges must stay visible,
+they're part of the audit trail), click-to-highlight a node's connected edges, hover for score/
+requirement detail, zoom/rotate/reset controls, and click-through links into the existing job and
+candidate detail pages; (5) qualification/hard-gate status is rendered exactly as returned, never
+recomputed or re-derived client-side. Out of scope for this step: any new backend endpoint, any
+change to scoring/matching, any skill-node layer (deferred per the design audit).
+
+The items below predate this session's work and remain genuine open design questions, not gaps
+surfaced by this session.
 
 1. Nothing currently reads `second_brain.candidate_feedback` — it's a write-back sink only.
    Whether/how it should ever influence retrieval or scoring (e.g. down-weighting a candidate

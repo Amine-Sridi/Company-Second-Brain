@@ -239,3 +239,46 @@ class InviteApplicationRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     language: Literal["en", "fr"] = "en"
+
+
+# ---------------------------------------------------------------------------
+# Candidate/job knowledge graph (recruiter-facing, RWS-native -- no cross-service
+# call, no new persistence). Built entirely from already-persisted MatchResult +
+# Job rows (see db.py: list_all_match_results) -- a read of the existing audit
+# trail, never a recomputation of it. Candidate nodes are deliberately not
+# enumerated here: RWS has no display-worthy candidate data of its own (name lives
+# in Resume Intelligence), so the frontend derives the candidate-node set from
+# `edges[].candidate_id` and resolves names via the already-existing
+# GET /v1/candidates in a second call, rather than this endpoint proxying Resume
+# Intelligence for no reason.
+# ---------------------------------------------------------------------------
+
+class GraphJobNode(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    job_id: UUID4
+    title: str = Field(min_length=1, max_length=200)
+
+
+class GraphEdge(BaseModel):
+    """One immutable MatchResult, exactly as scored -- qualified and disqualified
+    matches are both included (see get_candidates_jobs_graph's own docstring).
+    Every field here is copied straight off MatchResult; nothing is recomputed."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    match_id: UUID4
+    candidate_id: UUID4
+    job_id: UUID4
+    final_score: float
+    qualified: bool
+    hard_gate_passed: bool
+    matched_requirements: list[str]
+    missing_requirements: list[str]
+
+
+class CandidateJobGraphResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    jobs: list[GraphJobNode]
+    edges: list[GraphEdge]

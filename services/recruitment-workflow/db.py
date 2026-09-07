@@ -477,6 +477,26 @@ def list_match_results_for_job(db: Session, job_id: uuid.UUID) -> list[MatchResu
     )
 
 
+def list_all_match_results(db: Session) -> list[tuple[MatchResult, str]]:
+    """
+    Every persisted MatchResult across every job, each paired with its job's title --
+    the global counterpart to list_match_results_for_job, for the candidate/job
+    knowledge-graph endpoint (see FRONTEND_HANDOFF.md's knowledge-graph design audit
+    and main.py: get_candidates_jobs_graph). One JOIN, not an N+1 per-match job
+    lookup -- the exact same shape as list_all_applications. Qualified and
+    disqualified matches are both returned, unfiltered: the graph is a read of the
+    full audit trail already implied by "every scored candidate gets an immutable
+    MatchResult row, regardless of qualification outcome" (CLAUDE.md), not a
+    second-guessing of it.
+    """
+    rows = (
+        db.query(MatchResult, Job.title)
+        .join(Job, Job.id == MatchResult.job_id)
+        .all()
+    )
+    return [(match, job_title) for match, job_title in rows]
+
+
 def get_match_result(db: Session, match_id: uuid.UUID) -> Optional[MatchResult]:
     return db.query(MatchResult).filter(MatchResult.id == match_id).first()
 

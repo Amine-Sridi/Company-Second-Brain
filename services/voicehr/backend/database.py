@@ -1,6 +1,15 @@
 import sqlite3
 
-DB_PATH = "voicehr.db"
+# "storage/" is the one directory Docker actually persists for this service
+# (infra/docker-compose.yml mounts the named volume voicehr_data at /app/storage;
+# the Dockerfile creates storage/recordings and storage/transcripts under it at
+# build time, so the parent directory always exists before this path is opened).
+# The database previously lived at a bare "voicehr.db" -- relative to the
+# container's CWD (/app/), which is *outside* that volume -- so every container
+# recreate silently reset every interview/report to empty. Moving it here is the
+# entire fix: same SQLite file, same schema, same every other line in this
+# module; only where it physically lives on disk changes.
+DB_PATH = "storage/voicehr.db"
 
 def init_db():
     conn = sqlite3.connect(DB_PATH)
