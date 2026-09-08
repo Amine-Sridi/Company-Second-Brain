@@ -12,6 +12,7 @@ import ApplicationsPage from "../pages/ApplicationsPage.jsx";
 import InterviewsPage from "../pages/InterviewsPage.jsx";
 import ReportsPage from "../pages/ReportsPage.jsx";
 import ReportDetailPage from "../pages/ReportDetailPage.jsx";
+import GraphPage from "../pages/GraphPage.jsx";
 
 export default function AppRouter() {
   return (
@@ -35,6 +36,7 @@ export default function AppRouter() {
         <Route path="/interviews" element={<InterviewsPage />} />
         <Route path="/reports" element={<ReportsPage />} />
         <Route path="/reports/:applicationId" element={<ReportDetailPage />} />
+        <Route path="/graph" element={<GraphPage />} />
         <Route path="*" element={<Navigate to="/" replace />} />
       </Route>
     </Routes>

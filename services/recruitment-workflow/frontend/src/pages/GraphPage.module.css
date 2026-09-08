@@ -1,0 +1,277 @@
+.page {
+  max-width: 1200px;
+}
+
+.resetButton {
+  flex-shrink: 0;
+  background: var(--color-surface);
+  color: var(--color-text);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius);
+  padding: var(--spacing-2) var(--spacing-4);
+  font-size: var(--font-size-base);
+  font-weight: 600;
+  white-space: nowrap;
+  transition: background-color var(--transition-fast), border-color var(--transition-fast);
+}
+
+.resetButton:hover:not(:disabled) {
+  background: var(--color-bg);
+  border-color: var(--color-text-muted);
+}
+
+.resetButton:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.status {
+  color: var(--color-text-muted);
+  font-size: var(--font-size-base);
+}
+
+.error {
+  background: var(--color-danger-bg);
+  color: var(--color-danger);
+  padding: var(--spacing-2) var(--spacing-3);
+  border-radius: var(--radius);
+  font-size: var(--font-size-base);
+}
+
+.graphLayout {
+  display: flex;
+  gap: var(--spacing-3);
+  align-items: flex-start;
+}
+
+.graphCard {
+  flex: 1 1 auto;
+  min-width: 0;
+  height: 70vh;
+  min-height: 480px;
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow-sm);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+/* The Cytoscape canvas needs an explicit pixel box to size itself against --
+   flex: 1 on this wrapper (inside a flex-column parent) supplies that. */
+.canvasWrapper {
+  flex: 1 1 auto;
+  min-height: 0;
+}
+
+.legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--spacing-3);
+  padding: var(--spacing-2) var(--spacing-3);
+  border-bottom: 1px solid var(--color-border);
+  font-size: var(--font-size-xs);
+  color: var(--color-text-muted);
+}
+
+.legendItem {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--spacing-1);
+}
+
+.legendSwatch {
+  display: inline-block;
+  width: 10px;
+  height: 10px;
+}
+
+.legendJob {
+  background: var(--color-primary);
+  border-radius: 2px;
+}
+
+.legendCandidate {
+  background: var(--color-accent);
+  border-radius: 50%;
+}
+
+.legendLine {
+  display: inline-block;
+  width: 16px;
+  height: 3px;
+  border-radius: var(--radius-pill);
+}
+
+.legendQualified {
+  background: var(--color-success);
+}
+
+.legendDisqualified {
+  background: var(--color-danger);
+}
+
+.panel {
+  flex: 0 0 300px;
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow-sm);
+  padding: var(--spacing-3);
+  height: 70vh;
+  min-height: 480px;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-3);
+}
+
+.panelEmpty {
+  color: var(--color-text-muted);
+  font-size: var(--font-size-sm);
+}
+
+.panelTitle {
+  font-size: var(--font-size-lg);
+  font-weight: 600;
+  margin: 0;
+  word-break: break-word;
+}
+
+.openLink {
+  align-self: flex-start;
+  color: var(--color-primary);
+  font-size: var(--font-size-sm);
+  font-weight: 600;
+}
+
+.openLink:hover {
+  text-decoration: underline;
+}
+
+.panelLabel {
+  display: block;
+  color: var(--color-text-muted);
+  font-size: var(--font-size-xs);
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.02em;
+  margin-bottom: 2px;
+}
+
+.panelValue {
+  font-size: var(--font-size-base);
+  font-weight: 600;
+}
+
+.panelValueLink {
+  font-size: var(--font-size-base);
+  font-weight: 600;
+  color: var(--color-primary);
+}
+
+.panelValueLink:hover {
+  text-decoration: underline;
+}
+
+.edgeParties {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-2);
+  padding: var(--spacing-2) var(--spacing-3);
+  background: var(--color-bg);
+  border-radius: var(--radius);
+}
+
+.scoreRow {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.connectionList {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-2);
+}
+
+.connectionListLabel {
+  color: var(--color-text-muted);
+  font-size: var(--font-size-xs);
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.02em;
+}
+
+.connectionRow {
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-2);
+  font-size: var(--font-size-sm);
+}
+
+.connectionName {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.connectionScore {
+  color: var(--color-text-muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.chipGroup {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-1);
+}
+
+.chipGroupLabel {
+  color: var(--color-text-muted);
+  font-size: var(--font-size-xs);
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.02em;
+}
+
+.chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--spacing-1);
+}
+
+.chipMatched {
+  background: var(--color-success-bg);
+  color: var(--color-success);
+  border-radius: var(--radius-pill);
+  padding: 2px 10px;
+  font-size: var(--font-size-xs);
+  font-weight: 600;
+}
+
+.chipMissing {
+  background: var(--color-danger-bg);
+  color: var(--color-danger);
+  border-radius: var(--radius-pill);
+  padding: 2px 10px;
+  font-size: var(--font-size-xs);
+  font-weight: 600;
+}
+
+@media (max-width: 768px) {
+  .graphLayout {
+    flex-direction: column;
+  }
+
+  .graphCard,
+  .panel {
+    flex: 1 1 auto;
+    width: 100%;
+    height: 60vh;
+    min-height: 360px;
+  }
+}

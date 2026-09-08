@@ -11,6 +11,7 @@ const NAV_ITEMS = [
   { to: "/jobs", label: "Jobs", icon: IconJobs },
   { to: "/interviews", label: "VoiceHR", icon: IconVoiceHR },
   { to: "/reports", label: "Reports", icon: IconReports },
+  { to: "/graph", label: "Knowledge Graph", icon: IconGraph },
 ];
 
 export default function Sidebar() {
@@ -78,6 +79,18 @@ function IconReports(props) {
       <path d="M7 9h6" />
       <path d="M7 12h6" />
       <path d="M7 15h3" />
+    </svg>
+  );
+}
+
+function IconGraph(props) {
+  return (
+    <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.6" {...props}>
+      <circle cx="5" cy="6" r="2" />
+      <circle cx="5" cy="14" r="2" />
+      <circle cx="14" cy="10" r="2.6" />
+      <path d="M6.8 6.9 11.7 9" />
+      <path d="M6.8 13.1 11.7 11" />
     </svg>
   );
 }

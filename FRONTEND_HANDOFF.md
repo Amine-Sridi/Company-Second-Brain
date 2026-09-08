@@ -979,14 +979,19 @@ future phase.
   `/candidates/:candidateId`; every candidate name across the app now links to it;
   new RWS `GET /v1/candidates/{id}/knowledge` proxy to Second Brain — see §20/§24;
   tracked cross-service in `handoff.md`)*
+- [x] **Phase 16 — Knowledge graph React page** *(new `GraphPage` at `/graph`,
+  Cytoscape.js + `react-cytoscapejs`, consuming the backend prerequisite added last
+  session (`GET /v1/graph/candidates-jobs`, tracked in `handoff.md`) plus the
+  already-existing `GET /v1/candidates` for name resolution — no new backend call;
+  read-only/exploratory, per the knowledge-graph design audit's own recommendations
+  — see §20/§21/§24)*
 
 **The frontend now has every screen named in the original admin-dashboard redesign
-proposal, plus the candidate-detail cross-linking hub tying them together.** All
-fifteen phases done: Dashboard, Candidates (+ detail), Upload, Jobs, VoiceHR
-(interviews), and Reports, with every candidate name anywhere in the app now a real
-link. §24 confirms no frontend feature work is currently queued — the next bounded
-task (VoiceHR SQLite persistence hardening) is backend/infra-only, tracked in
-`handoff.md`.
+proposal, plus the candidate-detail cross-linking hub and the candidate/job
+knowledge graph.** All sixteen phases done: Dashboard, Candidates (+ detail),
+Upload, Jobs, VoiceHR (interviews), Reports, and the Knowledge Graph, with every
+candidate name anywhere in the app still a real link. §24 names the next bounded
+task.
 
 Future sessions: update the checkboxes and the relevant page/section status above as
 each phase lands. Do not duplicate this checklist elsewhere or restate history that's
@@ -2012,6 +2017,115 @@ accept`, `/v1/applications/{application_id}/reject`, `/v1/jobs/{job_id}/applicat
 
 ---
 
+**Phase 16 — Knowledge graph React page (`/graph`)**: **DONE**. Implements the design
+audit's own recommendation (chat-delivered proposal, tracked in `handoff.md`) plus the
+backend prerequisite it named (`GET /v1/graph/candidates-jobs`, also tracked in
+`handoff.md` from last session) — this session was frontend-only.
+
+- **New dependency**: `cytoscape` (^3.34.3) + `react-cytoscapejs` (^2.0.0, the thin
+  official React wrapper — a `<div>` ref plus declarative elements/stylesheet/layout
+  props, no extra state management or abstraction of its own). Chosen over react-force-
+  graph/three.js (3D, unneeded per the design audit's own "no 3D yet" scope) and raw
+  D3-force (more code to own for the same result). No other new dependency.
+- **`src/api/graph.js`** (new): one function, `getCandidatesJobsGraph()`, calling
+  `GET /v1/graph/candidates-jobs` through the existing `request()` wrapper — same
+  pattern as every other `api/*.js` module, so it's covered by `client.js`'s existing
+  JWT-attachment/401-handling/error-normalization with no new code.
+- **`src/pages/GraphPage.jsx` + `.module.css`** (new), routed at `/graph`
+  (`AppRouter.jsx`):
+  - **Data**: one `Promise.all` of `getCandidatesJobsGraph()` (jobs + edges) and the
+    already-existing `getCandidates()` (for display names) on mount — no new backend
+    call beyond the one endpoint added last session, and no direct call to any
+    service other than RWS.
+  - **Graph construction**: job nodes from `jobs[]`; candidate nodes derived from the
+    *unique* `candidate_id` values across `edges[]` (the backend deliberately returns
+    no `candidates[]` array — see `handoff.md`'s endpoint entry — so this is exactly
+    the client-side derivation its own schema docstring expects); one Cytoscape edge
+    per `MatchResult`, both qualified and disqualified, never filtered or deduplicated.
+  - **Visuals**: job nodes are primary-colored rounded squares, candidate nodes are
+    accent-colored circles (`--color-primary`/`--color-accent`, read from the real
+    computed CSS custom properties at stylesheet-build time — Cytoscape renders to
+    canvas, so it cannot reference `var(--color-x)` itself the way DOM CSS can; this
+    keeps node colors tied to the one real token source instead of a second, driftable
+    set of hex literals). Edge width and opacity scale with `final_score` via
+    Cytoscape's own `mapData()`; qualified edges are solid `--color-success`,
+    disqualified edges are dashed `--color-danger` (color *and* line-style, not color
+    alone, so the distinction doesn't depend on color perception). A small legend
+    (plain DOM/CSS, not canvas) explains all four visual encodings.
+  - **Interactions**: click a node → `closedNeighborhood()` highlights it and its
+    edges/neighbors, everything else fades (`.faded`/`.highlighted` CSS classes on the
+    Cytoscape elements, added/removed by the click handlers — no extra state machine);
+    click an edge → the edge and its two endpoint nodes highlight the same way; click
+    the background → clears the highlight and the detail panel. A persistent detail
+    panel (plain DOM, not canvas) shows, for a node, its name/kind and a sorted list of
+    its connections (other party, score, qualified badge); for an edge, both
+    endpoints (candidate/job, each a real `<Link>` into their existing detail page —
+    the "separate Open action" requirement), final score, hard-gate result, and
+    matched/missing requirement chips (visually identical to `JobDetailPage`'s own
+    chips — a small deliberate duplication rather than a new shared component for one
+    reuse, matching this project's own duplication-over-premature-abstraction rule).
+    Zoom/pan are Cytoscape's own default mouse/touch handling; a "Reset view" button in
+    the page header re-fits the graph and clears any selection/highlight.
+  - **Layout**: Cytoscape core's own built-in `cose` force-directed layout (no extra
+    layout plugin/dependency) — 2D only, as scoped; `animate: false` so the graph
+    appears already-settled rather than visibly animating into place.
+  - **No scoring/qualification logic of any kind lives in this page** — `qualified`,
+    `hard_gate_passed`, and `final_score` are rendered exactly as the backend returns
+    them, never recomputed or re-derived.
+  - **Sidebar**: a "Knowledge Graph" nav entry was added to `Sidebar.jsx` (new inline
+    SVG icon, same pattern as every other nav icon) — added last, only once the page
+    itself was built, verified, and working, matching this task's own explicit
+    ordering.
+- **Verification**:
+  - `npm run build`: 98 modules, 0 errors, both on host and inside a real Docker
+    multi-stage build of the `recruitment-workflow` image (the same two-stage
+    Dockerfile from Phase 9, unchanged). The production JS bundle grew to ~675 kB
+    (~215 kB gzipped) from cytoscape's own size — a real, disclosed trade-off of
+    picking a graph-rendering library at all, not a regression in this page's own
+    code; noted in §21, not hidden.
+  - Full RWS backend suite (`pytest tests/`, unaffected by a frontend-only change):
+    **69/69 passed**, host and inside the rebuilt/recreated `csb-recruitment-workflow`
+    container.
+  - **Live production-serving verification**, same technique as Phase 9: hard-refresh
+    equivalents (`curl`) against the real port 8003 for `/graph`, `/`, `/jobs`,
+    `/candidates`, `/interviews`, `/reports`, `/upload`, and `/health` all returned
+    real `200`s with the correct content types; the served bundle was fetched and
+    confirmed to actually contain `cytoscape`, the `/v1/graph/candidates-jobs` path
+    literal, the `/graph` route, and the `"Knowledge Graph"` sidebar label — not just
+    a build that happened to succeed.
+  - **Live data correctness, against the real running stack** (real recruiter login,
+    real JWT): `GET /v1/graph/candidates-jobs` returned **4 real jobs, 26 real edges
+    (17 qualified / 9 disqualified)**; `GET /v1/candidates` returned 6 real candidates.
+    Rather than asserting the page would render this correctly, this exact live JSON
+    was fed into a small headless-Cytoscape script (the real `cytoscape` package
+    version this app bundles, run with `headless: true` — no DOM/canvas required)
+    that reconstructs `GraphPage.jsx`'s own `buildElements()` logic and then exercises
+    the *actual Cytoscape APIs the page's click handlers call* against it: job/
+    candidate/edge counts matched the live payload exactly; every resolvable
+    candidate node's label matched its real `GET /v1/candidates` name; every job
+    node's label matched its real persisted title; the `edge[?qualified]`/
+    `edge[!qualified]` boolean data-selectors used by the actual stylesheet selected
+    exactly the 17/9 real qualified/disqualified edges with no overlap or gap;
+    `closedNeighborhood()` on a real job node returned exactly that job's own real
+    edges plus its distinct candidates (proving the click-to-highlight logic is
+    correct against real data, not just plausible); `connectedEdges()` on a real
+    candidate node returned exactly that candidate's real matches; a real edge's
+    `source()`/`target()` correctly resolved to its candidate/job endpoints (what the
+    detail panel's edge view relies on); and the `cose` layout ran headlessly without
+    throwing and assigned every node a finite position. All 14 checks passed. This is
+    the honest substitute for a literal browser click-through: **no browser is
+    available in this environment** (the same gap Phase 9 already disclosed) — every
+    piece of interactive logic that a click-through would exercise was instead run
+    for real, against real data, through the real library, just without a rendered
+    canvas/pixels to look at.
+  - `git status` after the pass showed only the expected files changed: `api/graph.js`
+    (new), `pages/GraphPage.jsx` + `.module.css` (new), `router/AppRouter.jsx` (one
+    route added), `components/Sidebar.jsx` (one nav entry + icon added),
+    `package.json`/`package-lock.json` (the two new dependencies) — no existing page's
+    own file was touched.
+
+---
+
 ## 21. Known limitations / deliberately deferred
 
 - One recruiter/admin account (the existing seeded account); no registration.
@@ -2113,6 +2227,30 @@ accept`, `/v1/applications/{application_id}/reject`, `/v1/jobs/{job_id}/applicat
   correct handling of that condition, not something new to build. Worth knowing
   before a live demo: prefer candidates already confirmed to have a real contact
   record when demonstrating Select/Invite live.
+- **Deliberate scope decisions from the Phase 16 (Knowledge graph) pass**: no
+  hover-triggered tooltip was added alongside click-to-select — the task's own click/
+  highlight/reset behavior is fully specified and click-based, and a second,
+  independent hover interaction would be extra state for no clearly-asked-for benefit;
+  the detail panel already gives the same information a hover tooltip would, on a
+  click. The graph canvas uses a fixed `70vh` height rather than a precise `calc()`
+  against the topbar/padding chrome — simpler and robust across window sizes, at the
+  cost of not filling the viewport to the exact pixel; `Layout.module.css`'s own
+  `.content` has no fixed-height convention for any other page to follow here. No
+  node search/filter/pagination was added — consistent with this project's existing
+  "no infra ahead of demonstrated need" rule for every other list page — click-to-
+  highlight is the only way to find a specific node's connections for now; revisit
+  only if a real dataset's node count makes that impractical. `CandidateDetailPage`'s
+  "Knowledge Graph" section (Phase 15) is still a static `EmptyState` placeholder —
+  Phase 16 built the standalone `/graph` explorer only; embedding a per-candidate
+  "ego graph" (this same Cytoscape engine, scoped to one candidate's own connections)
+  into that placeholder is the next task (§24), not done here. The production JS bundle is now ~675 kB (~215 kB gzipped, per Vite's own build
+  output) — noticeably larger than before Cytoscape was added, and now past Vite's
+  500 kB warning threshold. This is a real, disclosed cost of adding any graph-
+  rendering library at all, not something Phase 16 could avoid while still meeting
+  the task's own "use Cytoscape.js" requirement; code-splitting `/graph` into its own
+  chunk (`React.lazy`) would reclaim this weight for every other route but was judged
+  premature ahead of an actual demo-load complaint, per this project's own "no infra
+  ahead of demonstrated need" rule.
 
 ---
 
@@ -2162,43 +2300,41 @@ Before starting frontend work:
 
 ## 24. [NEXT]
 
-**Phases 11–14 are done** — admin shell redesign, the Candidates page + real
-Dashboard data, the global VoiceHR interviews page, and the VoiceHR Reports
-backend proxy + Reports pages. Full detail for each is in §19/§20, not restated
-here.
+**Phases 1–16 are all done** — every screen from the original admin-dashboard
+redesign proposal, the candidate-detail cross-linking hub, and now the candidate/
+job knowledge graph at `/graph`. Full detail for each phase is in §19/§20, not
+restated here.
 
-**Phase 15 (Candidate detail + cross-linking) is done** — the piece every prior
-phase since Phase 12 deliberately deferred:
+**[NEXT] Candidate-detail ego graph reuse.** `CandidateDetailPage`'s "Knowledge
+Graph" section (built in Phase 15) is still a static `EmptyState` placeholder —
+Phase 16 built only the standalone, whole-dataset `/graph` explorer. This task is
+to reuse that same Cytoscape engine to render one candidate's own "ego graph"
+(that candidate's node plus only the jobs it's matched against, i.e. a single-hop
+neighborhood) inside that existing placeholder section, in place of the
+`EmptyState`. Concrete guidance:
 
-- **Backend** (tracked in full in `handoff.md` per §23's own rule — cross-service
-  work): one new RWS endpoint, `GET /v1/candidates/{candidate_id}/knowledge`
-  (recruiter-JWT, transient proxy to Second Brain via the *already-existing*
-  `clients.get_candidate()` — no new Second Brain client code needed). Returns
-  only `candidate_id`/`skills`/`job_titles`/`years_of_experience`; no `raw_text`,
-  no `source_version`, no embedding.
-- **Frontend**: new `CandidateDetailPage` at `/candidates/:candidateId` — identity
-  via the existing `useCandidateIdentity` hook, professional knowledge from the
-  new endpoint, and this candidate's applications (filtered client-side from the
-  already-fetched `GET /v1/applications`, no new endpoint needed for that part),
-  each linking to its Job and, when a report exists, its Report. A reserved,
-  static "Knowledge Graph" placeholder section — not the graph itself.
-- **Every candidate name in the app now links to it**: `CandidatesPage`'s rows,
-  `JobDetailPage`'s ranked-candidate name, `ApplicationsPage`'s and
-  `InterviewsPage`'s candidate names, `ReportsPage`'s rows, and
-  `ReportDetailPage`'s header (via a best-effort lookup, since VoiceHR's own
-  report has no concept of RWS's `candidate_id`).
-- Live-verified against the real rebuilt/recreated `csb-recruitment-workflow`
-  container: real skills/job-titles/experience for a real candidate, cross-linked
-  data reconciled by hand against real `GET /v1/applications` output, hard refresh
-  confirmed on `/candidates/{id}` and both cross-linked destinations. `npm run
-  build`: 87 modules, 0 errors. Full detail in §20.
-
-**`[NEXT]` for this file: none — no frontend feature work is currently queued.**
-Every screen from the original admin-dashboard redesign proposal exists, works,
-and is fully cross-linked. The next bounded task across the whole project is
-**VoiceHR SQLite persistence hardening** — backend/infrastructure only (VoiceHR's
-`DB_PATH` doesn't survive a container recreate; see `handoff.md`'s Known
-Limitations and its own `[NEXT]` for the full problem statement and smallest fix).
-Nothing in that task should require a frontend change; if a future session's
-implementation of it somehow does, that's the point to give this file a real
-`[NEXT]` again, not before.
+- **No new backend call.** `GET /v1/graph/candidates-jobs` already returns every
+  edge; filter client-side to `edges.filter(e => e.candidate_id === candidateId)`
+  and derive the small set of job nodes from that filtered list, the same
+  derivation pattern `GraphPage.jsx`'s `buildElements()` already uses for the
+  full graph, just pre-filtered. `CandidateDetailPage` already fetches this
+  candidate's identity and knowledge separately; reuse `getCandidatesJobsGraph()`
+  from `api/graph.js` for this too rather than inventing a per-candidate endpoint.
+- **Reuse, don't fork, the rendering/interaction code.** `GraphPage.jsx`'s
+  `buildElements`/`buildStylesheet`/click-handler logic should be extracted into
+  something both `GraphPage` and this new ego-graph view can call (a small shared
+  module under a new `src/graph/` or similar, not a full component — this is the
+  first real duplication between the two, so it's the right point to factor it,
+  per this project's own "promote to shared only once real duplication exists"
+  rule) rather than copy-pasted a second time.
+- **Scale down, don't reuse 1:1.** An ego graph is a handful of nodes — the full
+  page's Reset-view button, legend, and 70vh canvas are probably oversized for an
+  embedded section; a smaller fixed height and no legend (or a compact one) likely
+  fits `CandidateDetailPage`'s existing layout better. Click-to-highlight and the
+  detail panel (or a simplified inline version of it) are still worth keeping —
+  the interaction, not just the visual, is the point of a graph here.
+- Each job node in the ego graph should still link to `/jobs/:jobId` (the "Open"
+  action), consistent with `/graph`'s own behavior.
+- Out of scope for this task: any change to `/graph` itself beyond the extraction
+  needed to share code with it, any new backend endpoint, any skill-node layer
+  (still deferred per the original design audit).
