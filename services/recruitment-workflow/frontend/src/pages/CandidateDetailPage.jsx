@@ -1,12 +1,14 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { Link, useParams } from "react-router-dom";
 import { getCandidateKnowledge } from "../api/candidates.js";
 import { getAllApplications } from "../api/applications.js";
+import { getCandidatesJobsGraph } from "../api/graph.js";
 import { ApiError } from "../api/client.js";
 import { useCandidateIdentity } from "../hooks/useCandidateIdentity.js";
 import PageHeader from "../components/PageHeader.jsx";
 import StatusBadge from "../components/StatusBadge.jsx";
 import EmptyState from "../components/EmptyState.jsx";
+import MatchGraph, { EGO_GRAPH_LAYOUT } from "../components/MatchGraph.jsx";
 import { STATUS_LABELS, STATUS_TONE } from "../constants/applicationStatus.js";
 import styles from "./CandidateDetailPage.module.css";
 
@@ -39,9 +41,16 @@ export default function CandidateDetailPage() {
   const [applicationsLoading, setApplicationsLoading] = useState(true);
   const [applicationsError, setApplicationsError] = useState(null);
 
+  // { jobs, edges } from GET /v1/graph/candidates-jobs, filtered client-side to this
+  // one candidate -- see loadEgoGraph() below.
+  const [egoGraph, setEgoGraph] = useState(null);
+  const [egoGraphLoading, setEgoGraphLoading] = useState(true);
+  const [egoGraphError, setEgoGraphError] = useState(null);
+
   useEffect(() => {
     loadKnowledge();
     loadApplications();
+    loadEgoGraph();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [candidateId]);
 
@@ -75,12 +84,39 @@ export default function CandidateDetailPage() {
     }
   }
 
+  async function loadEgoGraph() {
+    setEgoGraphLoading(true);
+    setEgoGraphError(null);
+    try {
+      // Same GET /v1/graph/candidates-jobs GraphPage (/graph) already calls -- no
+      // new backend endpoint for this candidate's own "ego graph". Filtered
+      // client-side to just this candidate's edges, and to only the jobs those
+      // edges reference, same "filter an existing unscoped read" pattern this
+      // project already uses for GET /v1/applications above.
+      const graph = await getCandidatesJobsGraph();
+      const edges = graph.edges.filter((edge) => edge.candidate_id === candidateId);
+      const jobIds = new Set(edges.map((edge) => edge.job_id));
+      const jobs = graph.jobs.filter((job) => jobIds.has(job.job_id));
+      setEgoGraph({ jobs, edges });
+    } catch (err) {
+      setEgoGraphError(err instanceof ApiError ? err.message : "Unable to load the knowledge graph.");
+    } finally {
+      setEgoGraphLoading(false);
+    }
+  }
+
   const displayName =
     identity.status === "ready"
       ? identity.name
       : identity.status === "loading"
         ? "Loading…"
         : `Candidate ${candidateId.slice(0, 8)}…`;
+
+  // MatchGraph resolves a candidate node's label from this map -- reuses the name
+  // already fetched by useCandidateIdentity above instead of a second GET
+  // /v1/candidates call (GraphPage's own name source) for a graph of just one
+  // candidate.
+  const candidateNames = useMemo(() => new Map([[candidateId, displayName]]), [candidateId, displayName]);
 
   return (
     <div className={styles.page}>
@@ -208,15 +244,29 @@ export default function CandidateDetailPage() {
           )}
         </section>
 
-        {/* Reserved for a future candidate <-> job knowledge-graph visualization
-            (see the admin-dashboard redesign proposal) -- deliberately just a
-            placeholder slot this pass, not the graph itself. */}
         <section className={styles.section}>
           <h2 className={styles.sectionTitle}>Knowledge Graph</h2>
-          <EmptyState
-            title="Coming soon"
-            description="A visual map of this candidate's connections to jobs and skills will live here."
-          />
+          {egoGraphLoading && <p className={styles.status}>Loading…</p>}
+          {!egoGraphLoading && egoGraphError && (
+            <div className={styles.error} role="alert">
+              {egoGraphError}
+            </div>
+          )}
+          {!egoGraphLoading && !egoGraphError && egoGraph && egoGraph.edges.length === 0 && (
+            <EmptyState
+              title="No job matches yet"
+              description="This candidate has no persisted matches against any job yet."
+            />
+          )}
+          {!egoGraphLoading && !egoGraphError && egoGraph && egoGraph.edges.length > 0 && (
+            <MatchGraph
+              rawGraph={egoGraph}
+              candidateNames={candidateNames}
+              layout={EGO_GRAPH_LAYOUT}
+              showResetButton
+              size="ego"
+            />
+          )}
         </section>
       </div>
     </div>

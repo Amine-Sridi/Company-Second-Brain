@@ -985,13 +985,17 @@ future phase.
   already-existing `GET /v1/candidates` for name resolution — no new backend call;
   read-only/exploratory, per the knowledge-graph design audit's own recommendations
   — see §20/§21/§24)*
+- [x] **Phase 17 — Candidate-detail ego graph reuse** *(the Phase 15 "Knowledge
+  Graph" placeholder on `CandidateDetailPage` now renders a real, scoped graph of
+  just that candidate and its own matched jobs; Phase 16's Cytoscape engine was
+  extracted into a new shared `MatchGraph` component so `GraphPage` and this embed
+  are two call sites of the same code, not two implementations — no new backend
+  call, no new dependency — see §20/§21/§24)*
 
 **The frontend now has every screen named in the original admin-dashboard redesign
-proposal, plus the candidate-detail cross-linking hub and the candidate/job
-knowledge graph.** All sixteen phases done: Dashboard, Candidates (+ detail),
-Upload, Jobs, VoiceHR (interviews), Reports, and the Knowledge Graph, with every
-candidate name anywhere in the app still a real link. §24 names the next bounded
-task.
+proposal, the candidate-detail cross-linking hub, the whole-dataset knowledge graph,
+and a per-candidate ego graph reusing the same engine.** All seventeen phases done.
+§24 names the next bounded task.
 
 Future sessions: update the checkboxes and the relevant page/section status above as
 each phase lands. Do not duplicate this checklist elsewhere or restate history that's
@@ -2126,6 +2130,105 @@ backend prerequisite it named (`GET /v1/graph/candidates-jobs`, also tracked in
 
 ---
 
+**Phase 17 — Candidate-detail ego graph reuse**: **DONE**. Replaces the Phase 15
+static `EmptyState` placeholder in `CandidateDetailPage`'s "Knowledge Graph" section
+with a real graph scoped to that one candidate: the candidate's own node, only the
+jobs it has a persisted `MatchResult` against, and those edges — no skills, no 3D,
+no scoring recomputation, exactly as scoped.
+
+- **Extraction (the "do only the minimum refactor" requirement)**: Phase 16's
+  `GraphPage.jsx` held all of the Cytoscape element-building, stylesheet, click/
+  highlight interaction, and detail-panel rendering inline. All of that moved,
+  unchanged in behavior, into a new shared component, **`src/components/
+  MatchGraph.jsx`** (+ `.module.css`) — the only refactor this task made, done
+  because there are now genuinely two call sites, not in anticipation of a third.
+  `MatchGraph` takes an already-fetched, already-filtered `{ jobs, edges }` object
+  (`CandidateJobGraphResponse`'s own shape) and a `candidateNames` map; it makes no
+  API call and recomputes no score/qualification value itself — identical to
+  Phase 16's own rule, just relocated. Two props let each call site differ without
+  forking the code: `size` (`"full"` | `"ego"`, a fixed CSS size variant — see
+  below) and `showResetButton` (GraphPage instead calls `ref.resetView()` from its
+  own `PageHeader` button, via `forwardRef`/`useImperativeHandle`, to keep that
+  button in exactly the place it already was; the ego embed has no page-header
+  action to reuse, so it renders its own small internal button).
+- **`GraphPage.jsx`** (rewritten, much shorter): now owns only data-fetching
+  (unchanged: `GET /v1/graph/candidates-jobs` + `GET /v1/candidates`) and page
+  chrome (header, reset button, loading/error/empty states), rendering
+  `<MatchGraph size="full" showLegend layout={FULL_GRAPH_LAYOUT} ... />`. Its own
+  `.module.css` was trimmed to just page-level rules (`.page`, `.resetButton`,
+  `.status`, `.error`) — every rule `MatchGraph` now owns (`.legend*`, `.panel*`,
+  `.connectionList*`, `.chipGroup*`, etc.) was moved to `MatchGraph.module.css`
+  verbatim.
+- **`CandidateDetailPage.jsx`**: added `loadEgoGraph()` — calls the *same*
+  `getCandidatesJobsGraph()` `GraphPage` already calls (no new backend endpoint, as
+  required), then filters client-side: `edges.filter(e => e.candidate_id ===
+  candidateId)`, then `jobs.filter(j => matchedJobIds.has(j.job_id))` — the same
+  "filter an existing unscoped read" pattern this page already uses for `GET
+  /v1/applications`. Candidate name resolution reuses the identity this page
+  already fetches via `useCandidateIdentity` (`new Map([[candidateId,
+  displayName]])`) rather than a second `GET /v1/candidates` call — a graph of one
+  candidate only ever needs that one candidate's name. Renders
+  `<MatchGraph size="ego" layout={EGO_GRAPH_LAYOUT} showResetButton ... />` in
+  place of the old placeholder, with its own loading/error/empty ("No job matches
+  yet") states matching the page's existing per-section pattern.
+- **Simpler layout, not just a smaller canvas**: an ego graph is inherently a star
+  (one candidate, a handful of jobs) — rather than reuse `cose`'s iterative
+  force simulation at that trivial scale, `MatchGraph.jsx` exports a second layout
+  constant, `EGO_GRAPH_LAYOUT`, using Cytoscape core's built-in `concentric` layout
+  (no extra dependency) with the candidate node pinned to the center ring and job
+  nodes to the outer ring — deterministic, and visually a clean star rather than a
+  physics simulation settling over 2–4 nodes. `GraphPage`'s own `FULL_GRAPH_LAYOUT`
+  (`cose`) is untouched.
+- **Size variants over an arbitrary height prop**: `MatchGraph` takes `size="full"`
+  (70vh/480px, 60vh/360px under 768px — identical numbers to Phase 16's original
+  CSS) or `size="ego"` (a fixed 320px/220px, 260px/200px under 768px) as CSS
+  classes, not an inline height. An inline style would have silently defeated the
+  existing mobile-breakpoint media query (inline styles beat media queries
+  regardless of specificity) — named size variants keep that responsive behavior a
+  plain CSS rule for both call sites.
+- **Verification**:
+  - `npm run build`: 100 modules, 0 errors, both on host and inside a real Docker
+    multi-stage rebuild of `recruitment-workflow` (bundle now ~677 kB / ~216 kB
+    gzipped — a small further increase from `MatchGraph`'s own two exported layout
+    constants and the `forwardRef`/`useImperativeHandle` wiring, not a new
+    dependency).
+  - Full RWS backend suite: **69/69 passed**, host and inside the rebuilt/recreated
+    `csb-recruitment-workflow` container (unaffected — frontend-only change).
+  - **Live production-serving verification** (same `curl`-against-port-8003
+    technique as Phase 9/16): `/`, `/jobs`, `/candidates`, `/interviews`,
+    `/reports`, `/upload`, `/graph`, and a real candidate-detail URL
+    (`/candidates/a90600f8-...`) all returned real `200`s with the built bundle
+    referenced correctly — confirming `/graph`'s own hard-refresh behavior is
+    unchanged by the extraction.
+  - **Live data correctness** (real recruiter JWT, real running stack): pulled the
+    real `GET /v1/graph/candidates-jobs` (4 jobs, 26 edges) and `GET /v1/candidates`
+    payloads and, as with Phase 16, fed them into a headless-Cytoscape script (the
+    real bundled `cytoscape` package, `headless: true`) that reconstructs both
+    `CandidateDetailPage.jsx`'s `loadEgoGraph()` filter and `MatchGraph.jsx`'s
+    `buildGraphElements()` and runs them against a real candidate ("Amine Sridi")
+    with **3 of the system's 4 real jobs matched** — chosen specifically because it
+    has multiple matches *and* at least one job correctly excluded, proving the
+    filter both includes and excludes correctly rather than trivially passing on a
+    candidate matched to everything. All 12 checks passed: exactly that candidate's
+    3 real edges and no others; exactly the 3 jobs those edges reference (the 4th
+    real job correctly absent); the candidate node's label resolved from the
+    identity-hook-backed map with no second `GET /v1/candidates` call; every edge's
+    score/qualified/hard-gate value passed through unchanged from its real
+    persisted `MatchResult`; the real `concentric` layout ran headlessly and placed
+    the candidate node at a real, non-zero distance from every job node (a genuine
+    star shape, not a degenerate stack); and a candidate with zero real matches
+    produced a correctly empty `{ jobs: [], edges: [] }` (the `EmptyState` path).
+    As with Phase 16, **no browser is available in this environment** — this is
+    the same honest, real-library/real-data substitute for a literal click-through,
+    not a claim that pixels were inspected.
+  - `git status` after the pass showed exactly the expected files: `components/
+    MatchGraph.jsx` + `.module.css` (new), `pages/GraphPage.jsx` +
+    `.module.css` (trimmed to page-only chrome), `pages/CandidateDetailPage.jsx`
+    (ego-graph section) — no route, no sidebar entry, no `package.json` change (no
+    new dependency was needed), and no other existing page touched.
+
+---
+
 ## 21. Known limitations / deliberately deferred
 
 - One recruiter/admin account (the existing seeded account); no registration.
@@ -2240,17 +2343,35 @@ backend prerequisite it named (`GET /v1/graph/candidates-jobs`, also tracked in
   "no infra ahead of demonstrated need" rule for every other list page — click-to-
   highlight is the only way to find a specific node's connections for now; revisit
   only if a real dataset's node count makes that impractical. `CandidateDetailPage`'s
-  "Knowledge Graph" section (Phase 15) is still a static `EmptyState` placeholder —
-  Phase 16 built the standalone `/graph` explorer only; embedding a per-candidate
-  "ego graph" (this same Cytoscape engine, scoped to one candidate's own connections)
-  into that placeholder is the next task (§24), not done here. The production JS bundle is now ~675 kB (~215 kB gzipped, per Vite's own build
+  "Knowledge Graph" section (Phase 15) was, at the time of this Phase 16 pass, still
+  a static `EmptyState` placeholder — **resolved in Phase 17** (see above; embedding
+  a per-candidate ego graph into it was the very next task named here, and is now
+  done, not a remaining gap).
+
+  The production JS bundle is now ~675 kB (~215 kB gzipped, per Vite's own build
   output) — noticeably larger than before Cytoscape was added, and now past Vite's
   500 kB warning threshold. This is a real, disclosed cost of adding any graph-
   rendering library at all, not something Phase 16 could avoid while still meeting
   the task's own "use Cytoscape.js" requirement; code-splitting `/graph` into its own
   chunk (`React.lazy`) would reclaim this weight for every other route but was judged
   premature ahead of an actual demo-load complaint, per this project's own "no infra
-  ahead of demonstrated need" rule.
+  ahead of demonstrated need" rule. (Still true after Phase 17 — no new dependency
+  was added, so the bundle only grew by the small amount of new code itself; see the
+  §20 Phase 17 entry for the exact number.)
+- **Deliberate scope decisions from the Phase 17 (ego graph reuse) pass**: the ego
+  graph shows only jobs this candidate has an actual persisted `MatchResult`
+  against — a candidate matched to every job in the current (small, smoke-test-
+  seeded) dataset will see a graph that looks identical in shape to a slice of the
+  full `/graph` explorer; this is correct behavior, not a bug, and was specifically
+  verified against a candidate whose matches *don't* span every job to prove the
+  exclusion path too (see §20). No legend was added to the embedded ego graph
+  (`showLegend` defaults to `false` on `MatchGraph`) — two node shapes/colors and a
+  handful of elements read clearly without one in a small embedded section; the
+  full `/graph` page, with far more elements and less surrounding context, keeps
+  its legend. The embedded graph keeps its own "Reset view" button (rendered
+  inside `MatchGraph` itself via `showResetButton`) rather than adding one to
+  `CandidateDetailPage`'s own page header, since that header is the candidate's
+  name/email, not a toolbar for one section among three.
 
 ---
 
@@ -2300,41 +2421,42 @@ Before starting frontend work:
 
 ## 24. [NEXT]
 
-**Phases 1–16 are all done** — every screen from the original admin-dashboard
-redesign proposal, the candidate-detail cross-linking hub, and now the candidate/
-job knowledge graph at `/graph`. Full detail for each phase is in §19/§20, not
-restated here.
+**Phases 1–17 are all done** — every screen from the original admin-dashboard
+redesign proposal, the candidate-detail cross-linking hub, the whole-dataset
+knowledge graph at `/graph`, and the candidate-detail ego graph reusing the same
+`MatchGraph` engine. Full detail for each phase is in §19/§20, not restated here.
 
-**[NEXT] Candidate-detail ego graph reuse.** `CandidateDetailPage`'s "Knowledge
-Graph" section (built in Phase 15) is still a static `EmptyState` placeholder —
-Phase 16 built only the standalone, whole-dataset `/graph` explorer. This task is
-to reuse that same Cytoscape engine to render one candidate's own "ego graph"
-(that candidate's node plus only the jobs it's matched against, i.e. a single-hop
-neighborhood) inside that existing placeholder section, in place of the
-`EmptyState`. Concrete guidance:
+**[NEXT] Knowledge graph visual refinement / optional 3D exploration — proposal
+only.** Both graph screens (`/graph` and the `CandidateDetailPage` ego graph) are
+functionally complete and live-verified (§20), built deliberately plainly per the
+original design audit's own "MVP first" phasing. This task is a **written proposal
+only** — no rendering code, no new dependency, no layout/stylesheet change in
+`MatchGraph.jsx` — evaluating whether/how to refine the graphs' visual polish now
+that the underlying engine and both call sites are proven. At minimum, weigh:
 
-- **No new backend call.** `GET /v1/graph/candidates-jobs` already returns every
-  edge; filter client-side to `edges.filter(e => e.candidate_id === candidateId)`
-  and derive the small set of job nodes from that filtered list, the same
-  derivation pattern `GraphPage.jsx`'s `buildElements()` already uses for the
-  full graph, just pre-filtered. `CandidateDetailPage` already fetches this
-  candidate's identity and knowledge separately; reuse `getCandidatesJobsGraph()`
-  from `api/graph.js` for this too rather than inventing a per-candidate endpoint.
-- **Reuse, don't fork, the rendering/interaction code.** `GraphPage.jsx`'s
-  `buildElements`/`buildStylesheet`/click-handler logic should be extracted into
-  something both `GraphPage` and this new ego-graph view can call (a small shared
-  module under a new `src/graph/` or similar, not a full component — this is the
-  first real duplication between the two, so it's the right point to factor it,
-  per this project's own "promote to shared only once real duplication exists"
-  rule) rather than copy-pasted a second time.
-- **Scale down, don't reuse 1:1.** An ego graph is a handful of nodes — the full
-  page's Reset-view button, legend, and 70vh canvas are probably oversized for an
-  embedded section; a smaller fixed height and no legend (or a compact one) likely
-  fits `CandidateDetailPage`'s existing layout better. Click-to-highlight and the
-  detail panel (or a simplified inline version of it) are still worth keeping —
-  the interaction, not just the visual, is the point of a graph here.
-- Each job node in the ego graph should still link to `/jobs/:jobId` (the "Open"
-  action), consistent with `/graph`'s own behavior.
-- Out of scope for this task: any change to `/graph` itself beyond the extraction
-  needed to share code with it, any new backend endpoint, any skill-node layer
-  (still deferred per the original design audit).
+- **2D visual refinement within Cytoscape**, e.g. curved/bundled edges when many
+  edges connect to one job node, node sizing by connection count, animated
+  transitions on highlight instead of instant class toggles, better label
+  collision handling at higher node counts — all achievable without leaving
+  Cytoscape or adding a dependency.
+- **Whether 3D ever earns its place.** The original design audit (tracked in
+  `handoff.md`) explicitly deferred 3D/`react-force-graph`/three.js in favor of
+  Cytoscape's 2D rendering, on readability/maintenance grounds for a project this
+  size. Revisit that call honestly: has anything changed (dataset size, a specific
+  recruiter-value case 2D can't express), or would 3D mainly be visually
+  impressive rather than more useful? CLAUDE.md's "production-oriented design, not
+  maximum sophistication" applies directly, same as it did to the original audit.
+- **Bundle-size cost of either direction.** §21 already flags Cytoscape's own
+  ~215 kB gzipped weight past Vite's 500 kB warning threshold; a 3D library
+  (three.js-based) would add substantially more. Any recommendation should weigh
+  this against the "no infra ahead of demonstrated need" rule explicitly, not
+  silently.
+- **A smallest-first phasing recommendation**, consistent with how the original
+  graph design audit and Phases 16/17 were themselves scoped — e.g. small 2D
+  polish items first, 3D (if recommended at all) as a clearly separate, later,
+  optional phase.
+
+Do not implement anything from the proposal in the same task — that would be a
+separate, later, explicitly-scoped step, exactly as the original knowledge-graph
+design audit was itself handled as a proposal-only pass before any code was
+written.
