@@ -991,11 +991,25 @@ future phase.
   extracted into a new shared `MatchGraph` component so `GraphPage` and this embed
   are two call sites of the same code, not two implementations — no new backend
   call, no new dependency — see §20/§21/§24)*
+- [x] **Phase 18 — Knowledge graph 2D visual polish** *(fixed a real, verified
+  layout-instability bug in the full graph's `cose` layout — root cause was never
+  the `randomize` option, which was already at its correct default — plus a subtle
+  canvas dot-grid, degree-based node sizing, and subtle focus/reset transitions in
+  the shared `MatchGraph` component; no new dependency, no backend change, edge
+  score/qualification encoding untouched — see §20/§21/§24)*
+- [x] **Phase 19 — Interactive graph controls (legend filtering + score filter +
+  node search)** *(full `/graph` only — the legend's qualified/disqualified
+  swatches are themselves now a display-only toggle, a client-side minimum-score
+  slider, and a candidate/job name search that reuses the existing click-highlight
+  path; the `CandidateDetailPage` ego graph is unaffected by construction (it never
+  passes the new opt-in props) — no backend call, no new dependency — see
+  §20/§21/§24)*
 
 **The frontend now has every screen named in the original admin-dashboard redesign
-proposal, the candidate-detail cross-linking hub, the whole-dataset knowledge graph,
-and a per-candidate ego graph reusing the same engine.** All seventeen phases done.
-§24 names the next bounded task.
+proposal, the candidate-detail cross-linking hub, the whole-dataset knowledge graph
+with interactive filtering/search, a per-candidate ego graph reusing the same
+engine, and a visually-polished, layout-stable version of both.** All nineteen
+phases done. §24 names the next bounded task.
 
 Future sessions: update the checkboxes and the relevant page/section status above as
 each phase lands. Do not duplicate this checklist elsewhere or restate history that's
@@ -2229,6 +2243,214 @@ no scoring recomputation, exactly as scoped.
 
 ---
 
+**Phase 18 — Knowledge graph 2D visual polish**: **DONE**. Everything below lives
+entirely in `components/MatchGraph.jsx` + `.module.css` — no other file changed, no
+new dependency, no backend call, no change to `GraphPage.jsx`/`CandidateDetailPage.jsx`.
+
+- **Layout-stability investigation (done first, before any fix, per this task's own
+  instruction)**: inspected `FULL_GRAPH_LAYOUT`/`EGO_GRAPH_LAYOUT` directly — neither
+  sets `randomize`, and the installed `cytoscape` package's own `cose.mjs` source
+  confirms its real default is already `randomize: false` (grepped, not assumed from
+  docs). So the task's own hint was right to be skeptical of touching that option.
+  **Reproduced the instability for real** with a headless-Cytoscape script (the real
+  bundled `cytoscape` package) against real live `/v1/graph/candidates-jobs` data,
+  using the *exact* construction sequence `react-cytoscapejs` itself uses in the
+  browser (`cytoscape({headless:true})` with no elements, then `cy.add(elements)`,
+  then `cy.layout(FULL_GRAPH_LAYOUT).run()` — not the `cytoscape({elements})`
+  constructor shortcut, which turned out to have its own unrelated quirk and would
+  have produced a misleading result). Five runs on identical real data produced five
+  different final layouts.
+  - **Real root cause, found by reading `cytoscape`'s own `cose.mjs` and
+    `element.mjs` source, not guessed**: `buildGraphElements()` never set an initial
+    `position` on any node, so every node defaulted to Cytoscape's own hardcoded
+    `{x: 0, y: 0}` — every node in the graph starts at the exact same point. Cose's
+    force-repulsion calculation (`nodeRepulsion()`) has its own internal fallback,
+    entirely separate from the `randomize` option: whenever two nodes' centers are
+    found to be exactly coincident, it calls `Math.random()` to pick an arbitrary
+    separation direction so the physics simulation isn't stuck computing a
+    force from a zero-length vector. With *every* node pair coincident on the first
+    iteration, this random tie-break fires for all of them, on every run — a real
+    bug, and specifically **not** the `randomize` option's doing, confirming the
+    task's premise.
+  - **Smallest supported fix, verified before landing**: `buildGraphElements()` now
+    assigns each node a small, deterministic, distinct seed position (a point on a
+    fixed-radius circle, placed by the node's own stable index in the array) before
+    handing elements to Cytoscape. No two nodes are ever exactly coincident, so
+    `nodeRepulsion()`'s random fallback is never triggered; cose's own iterative
+    forces (unchanged) still do all the real layout work from there. **No layout
+    *option* was touched** — `FULL_GRAPH_LAYOUT`/`EGO_GRAPH_LAYOUT` are byte-for-byte
+    identical to before this pass. `concentric` (the ego graph's layout) was
+    confirmed, by reading its source, to never read incoming node position at all,
+    so this change has no effect there beyond removing an already-nonexistent risk.
+  - **Verified fixed**, same real-data/real-construction-path method as the repro:
+    5 runs on identical real live data now produce identical positions (within
+    0.01px) for every node, every time.
+- **Canvas surface**: `.canvasWrapper` (the actual Cytoscape canvas area, not the
+  legend/toolbar rows above it) gets a subtle dot-grid via a plain CSS
+  `radial-gradient` background — Cytoscape's own canvas is transparent, so this
+  shows through behind it. Uses the existing `--color-border` token (the app's own
+  subtlest visible-line color) rather than a new one-off value.
+- **Degree-based node sizing**: each node's `data.degree` (its real persisted-match
+  count, precomputed once in `buildGraphElements()` the same way `finalScore`
+  already is for edges) drives its size via `mapData`, replacing the old fixed
+  42×42/26×26 constants. A job matched to many candidates now visibly reads as more
+  central than one with a single match. **Kind distinction preserved and
+  reinforced, not replaced**: shape (round-rectangle vs. ellipse) and color
+  (primary vs. accent) are completely unchanged, and the two size bands
+  (jobs 34–58px, candidates 18–32px) were deliberately chosen not to overlap, so
+  size is a third, always-consistent signal for "job vs. candidate," never a
+  competing one. Degree is clamped to a fixed assumed 1–10 range via `mapData`, the
+  same fixed-domain convention `finalScore` (0–1) already established — not a new
+  pattern.
+- **Subtle focus/reset transitions**: added `transition-property`/
+  `transition-duration` (150ms)/`transition-timing-function` (`ease-out`) to the
+  base `node`/`edge` stylesheet rules. This is a pure stylesheet addition — the
+  `applyHighlight`/`resetView`/click-handler JS is completely untouched, still just
+  adding/removing the same `.faded`/`.highlighted` classes; Cytoscape now animates
+  *any* resulting style change (opacity, border, width) instead of snapping it
+  instantly. As a side effect, this also gives the graph a brief, subtle settle-in
+  on first paint — not asked for specifically, but a harmless byproduct of the same
+  one-line stylesheet mechanism.
+- **Edge score/qualification encoding**: untouched by design — the `finalScore` →
+  width/opacity `mapData` expressions and the `edge[?qualified]`/`edge[!qualified]`
+  boolean selectors are byte-for-byte the same as before this pass; only
+  `transition-property` was added alongside them.
+- **Verification**:
+  - `npm run build`: 100 modules, 0 errors, both on host and inside a real Docker
+    multi-stage rebuild of `recruitment-workflow` (bundle ~678 kB / ~216 kB gzipped
+    — a ~0.6 kB increase from this pass's own code, not a new dependency).
+  - Full RWS backend suite: **69/69 passed**, host and inside the rebuilt/recreated
+    `csb-recruitment-workflow` container (unaffected — frontend-only change).
+  - **Live production-serving verification** (real `curl` against port 8003, same
+    technique as every prior graph phase): `/`, `/jobs`, `/candidates`,
+    `/interviews`, `/reports`, `/upload`, `/graph`, and a real candidate-detail URL
+    all returned real `200`s; the served JS/CSS bundle was fetched and confirmed to
+    actually contain `mapData(degree` and the dot-grid's `radial-gradient` rule —
+    not just a build that happened to succeed. Container logs showed only clean
+    access-log lines for every request, no errors.
+  - **Real-data headless Cytoscape checks** (no browser available in this
+    environment, same honest substitute used for every prior graph phase): against
+    the real live `/v1/graph/candidates-jobs` payload (4 jobs, 26 edges, real
+    degrees `5, 7, 7, 7`) and a real ego graph (candidate "Amine Sridi," 3 of 4 real
+    jobs), using the real bundled `cytoscape` package through the real
+    `react-cytoscapejs` construction sequence: full-graph layout deterministic
+    across 5 runs; ego-graph (`concentric`) layout still deterministic and
+    unaffected by the new seed positions; higher-degree job nodes never rendered
+    smaller than lower-degree ones; job/candidate size bands never overlapped
+    (max candidate width 22.7px < min job width 44.7px); shapes unchanged
+    (round-rectangle / ellipse); the qualified/disqualified boolean selectors still
+    split the real 17/9 edges exactly; edge width still tracked the exact same
+    `finalScore` mapping as before; and `closedNeighborhood()` on a real job node
+    still returned exactly that job's real connected edges — the click/highlight
+    machinery is unaffected by the stylesheet-only transition addition. 11/11
+    checks passed.
+  - `git status` after the pass showed exactly two files changed: `components/
+    MatchGraph.jsx` and `components/MatchGraph.module.css` — no other file
+    (including `GraphPage.jsx`, `CandidateDetailPage.jsx`, `package.json`, the
+    router, or the sidebar) was touched.
+- **Not done this pass, deliberately** (per the task's own explicit exclusions): no
+  filters, no search, no 3D, no skill nodes, no backend/persistence change, no new
+  dependency.
+
+---
+
+**Phase 19 — Interactive graph controls (legend filtering + score filter + node
+search)**: **DONE**. Everything below lives in `components/MatchGraph.jsx` +
+`.module.css`, plus three new props passed from `pages/GraphPage.jsx` — no other
+file changed, no new dependency, no backend call, no new API call.
+
+- **Interactive legend (full graph only)**: the existing Qualified/Disqualified
+  legend swatches are now `<button>`s — clicking one hides that whole edge category.
+  Per this task's own instruction ("keep legend as the control itself"), there are
+  no separate checkboxes anywhere; the legend *is* the toggle. A toggled-off swatch
+  dims (`opacity: 0.45`) so its current state is visible at a glance. The Job/
+  Candidate swatches stay plain labels — there's no filter for node kind.
+- **Minimum-score filter**: a native `<input type="range">` (0–100, step 5, no new
+  dependency) hides edges below the chosen threshold. **Explicitly a display filter
+  only** — it reads each edge's already-persisted `final_score` and never writes to,
+  recomputes, or re-derives it; `qualified` is completely untouched by this control.
+  This is stated in the code's own comments, not just here, precisely because
+  CLAUDE.md's "the LLM/UI never decides qualified" boundary deserves to be
+  unambiguous even for a client-side display concern that's obviously safe.
+- **Node search (full graph only)**: a text input matching against the same
+  `label` every node already carries (job title / candidate display name) — no new
+  data, no new call. Selecting a result calls the *exact same* `applyHighlight()`
+  function a click already uses (not a second, parallel implementation), populates
+  the detail panel via the existing `buildNodeSelection()`, and additionally calls
+  `cy.fit(node.closedNeighborhood(), 50)` to center the view on it — the one thing
+  a plain click doesn't already do. Not present on the ego graph at all (see below).
+- **How filters/search/click all combine**: `hiddenCategories` (legend) and
+  `minScore` (slider) are read together in one `useEffect` that re-syncs a single
+  `.filteredOut` class on every edge — an edge is hidden if it's in a toggled-off
+  category **or** below the score threshold (a set union, verified against real
+  data, not an accidental intersection). This effect only ever toggles a class on
+  already-existing elements; it never calls `cy.add()` or `cy.layout()`, so it
+  cannot disturb the Phase 18 deterministic layout. Search and click-to-highlight
+  are unaffected by the filter state and vice versa — a filtered-out edge stays
+  hidden even if its endpoint gets highlighted (nothing sets `display` back), and
+  search can still find/focus a node whose edges are currently filtered out (search
+  finds *nodes*, the filter hides *edges* — two independent concerns, deliberately
+  not cross-gated).
+- **Reset view — the explicit decision this task asked for**: "Reset view" resets
+  **focus** (the current click/search selection, all highlight/fade classes, and
+  the viewport) back to the whole graph. It **deliberately does not** clear the
+  qualified/disqualified toggles or the score filter — those are treated as a
+  sticky viewing preference the user set up on purpose, not part of "what am I
+  currently looking at." This is stated explicitly in `resetView`'s own comment,
+  not left implicit.
+- **Ego graph unaffected, by construction, not by a special case**: `showScoreFilter`
+  and `showSearch` both default to `false` on `MatchGraph`, and
+  `CandidateDetailPage`'s real `<MatchGraph>` call passes neither (confirmed by
+  reading that call site directly, and by an automated check — see Verification).
+  There was no need to touch `CandidateDetailPage.jsx` at all for this task.
+- **Verification**:
+  - `npm run build`: 100 modules, 0 errors, both on host and inside a real Docker
+    multi-stage rebuild of `recruitment-workflow` (bundle ~681 kB / ~217 kB gzipped
+    — a ~2.8 kB increase from this pass's own code, not a new dependency).
+  - Full RWS backend suite: **69/69 passed**, host and inside the rebuilt/recreated
+    `csb-recruitment-workflow` container (unaffected — frontend-only change).
+  - **Live production-serving verification** (real `curl` against port 8003, same
+    technique as every prior graph phase): `/`, `/jobs`, `/candidates`,
+    `/interviews`, `/reports`, `/upload`, `/graph`, and `/health` all returned real
+    `200`s; the served bundle was fetched and confirmed to actually contain the
+    `filteredOut` class name and the `searchResults` CSS class — not just a build
+    that happened to succeed. Container logs showed only clean access-log lines.
+  - **Real-data headless Cytoscape checks** (no browser available in this
+    environment, same honest substitute used for every prior graph phase): pulled
+    a fresh real `GET /v1/graph/candidates-jobs` (4 jobs, 26 edges — 17 qualified /
+    9 disqualified — a different live count than earlier phases' fixture, refetched
+    for this pass rather than reused stale) and `GET /v1/candidates` (6 real
+    candidates), then ran the actual `buildGraphElements`/`applyHighlight`/filter-
+    sync/search logic verbatim against them through the real bundled `cytoscape`
+    package: toggling the legend's "qualified" swatch off hid exactly the real 17
+    qualified edges and left all 9 disqualified ones visible; toggling both off hid
+    all 26, toggling back on restored all 26; a real median score threshold (83%)
+    hid exactly the 14 real edges below it and none above it; combining "hide
+    disqualified" with that same threshold hid exactly the expected union (14, not
+    a smaller intersection); searching real substrings of a real job title and a
+    real candidate name ("Amine Sridi") found exactly those nodes, case-
+    insensitively, with zero false matches on a nonsense term; selecting a search
+    result highlighted exactly that job's real 5 connected edges via the identical
+    `applyHighlight()` a click uses, then fit-to-neighborhood completed without
+    error; simulating Reset view cleared all highlight/fade state while a still-
+    active legend filter's hidden edges correctly stayed hidden (confirming the
+    explicit reset-focus-not-filters decision); the full-graph layout remained
+    deterministic across 3 runs (unchanged from Phase 18, confirming this pass
+    didn't reintroduce instability); and a direct read of
+    `CandidateDetailPage.jsx`'s own `<MatchGraph>` call confirmed neither
+    `showScoreFilter` nor `showSearch` is passed there. **17/17 checks passed.**
+  - `git status` after the pass showed exactly the expected files: `components/
+    MatchGraph.jsx` + `.module.css` (the controls themselves) and
+    `pages/GraphPage.jsx` (three new props on its existing `<MatchGraph>` call) —
+    `CandidateDetailPage.jsx`, `package.json`, the router, and the sidebar were
+    all untouched.
+- **Not done this pass, deliberately** (out of scope per the task): no skill nodes,
+  no 3D, no backend/persistence change, no new dependency, no "clear filters"
+  button (Reset view intentionally leaves filters alone — see above), no filter-
+  aware search (search and the edge filter are independent, as documented above).
+
+---
+
 ## 21. Known limitations / deliberately deferred
 
 - One recruiter/admin account (the existing seeded account); no registration.
@@ -2421,42 +2643,53 @@ Before starting frontend work:
 
 ## 24. [NEXT]
 
-**Phases 1–17 are all done** — every screen from the original admin-dashboard
+**Phases 1–19 are all done** — every screen from the original admin-dashboard
 redesign proposal, the candidate-detail cross-linking hub, the whole-dataset
-knowledge graph at `/graph`, and the candidate-detail ego graph reusing the same
-`MatchGraph` engine. Full detail for each phase is in §19/§20, not restated here.
+knowledge graph at `/graph` (now with interactive legend filtering, a minimum-score
+filter, and candidate/job search), the candidate-detail ego graph reusing the same
+`MatchGraph` engine, and a visually-polished, layout-stable version of both. Full
+detail for each phase is in §19/§20, not restated here.
 
-**[NEXT] Knowledge graph visual refinement / optional 3D exploration — proposal
-only.** Both graph screens (`/graph` and the `CandidateDetailPage` ego graph) are
-functionally complete and live-verified (§20), built deliberately plainly per the
-original design audit's own "MVP first" phasing. This task is a **written proposal
-only** — no rendering code, no new dependency, no layout/stylesheet change in
-`MatchGraph.jsx` — evaluating whether/how to refine the graphs' visual polish now
-that the underlying engine and both call sites are proven. At minimum, weigh:
+**[NEXT] Optional 3D presentation mode — implementation decision/prototype audit.**
+The Phase 18 visual-refinement proposal (tracked here) recommended 3D only as an
+opt-in, lazy-loaded "presentation mode" layered on top of the working 2D graph —
+never the default, never a replacement — justified mainly by this project's own
+demo-jury context (CLAUDE.md), not by a real recruiter-workflow need a bipartite
+candidate/job graph actually has in 2D. This task is to make (and prove) that
+decision concretely, not just re-argue it:
 
-- **2D visual refinement within Cytoscape**, e.g. curved/bundled edges when many
-  edges connect to one job node, node sizing by connection count, animated
-  transitions on highlight instead of instant class toggles, better label
-  collision handling at higher node counts — all achievable without leaving
-  Cytoscape or adding a dependency.
-- **Whether 3D ever earns its place.** The original design audit (tracked in
-  `handoff.md`) explicitly deferred 3D/`react-force-graph`/three.js in favor of
-  Cytoscape's 2D rendering, on readability/maintenance grounds for a project this
-  size. Revisit that call honestly: has anything changed (dataset size, a specific
-  recruiter-value case 2D can't express), or would 3D mainly be visually
-  impressive rather than more useful? CLAUDE.md's "production-oriented design, not
-  maximum sophistication" applies directly, same as it did to the original audit.
-- **Bundle-size cost of either direction.** §21 already flags Cytoscape's own
-  ~215 kB gzipped weight past Vite's 500 kB warning threshold; a 3D library
-  (three.js-based) would add substantially more. Any recommendation should weigh
-  this against the "no infra ahead of demonstrated need" rule explicitly, not
-  silently.
-- **A smallest-first phasing recommendation**, consistent with how the original
-  graph design audit and Phases 16/17 were themselves scoped — e.g. small 2D
-  polish items first, 3D (if recommended at all) as a clearly separate, later,
-  optional phase.
+- **Decide, don't re-debate, whether to build it at all.** The proposal's own
+  reasoning (a bipartite graph doesn't suffer the edge-crossing problem 3D solves;
+  the case for 3D here is close to entirely visual spectacle for the live demo) is
+  already on record — this task should either commit to a scoped prototype or
+  explicitly decide not to build one, with a real reason tied to this project's
+  actual timeline/risk tolerance, not a re-run of the same tradeoff analysis.
+- **If prototyping**: `react-force-graph`'s `ForceGraph3D` export (wraps three.js +
+  `d3-force-3d`), per the proposal's own library pick — preferred over
+  `@react-three/fiber`/`drei` because it gives drag/zoom/orbit/click handling out of
+  the box instead of requiring hand-written camera/physics code. Reuse the exact
+  same `{jobs, edges}` from `GET /v1/graph/candidates-jobs` plus `GET /v1/candidates`
+  — no new backend call — through a small new adapter (sibling to
+  `buildGraphElements`, not a replacement of it) reshaping into `{nodes, links}`.
+  Carry the *exact* same visual encoding 2D already uses (job vs. candidate color,
+  qualified/disqualified color, score-driven width/opacity) rather than inventing a
+  second visual vocabulary.
+- **Bundle size is not optional to address**: three.js alone is typically
+  500–600 kB+ gzipped on top of the ~217 kB the 2D graph already costs (already
+  past Vite's 500 kB warning threshold per §21). Any prototype **must** be
+  lazy-loaded (`React.lazy`/dynamic import, only fetched when a viewer actually
+  toggles 3D mode) — nobody visiting `/graph` in its normal 2D form should pay that
+  cost. Verify this with a real build, not an assumption.
+- **Demo risk is the actual crux, not a footnote**: WebGL introduces a real new
+  failure mode (older/integrated GPUs, unfamiliar demo-room hardware, driver
+  quirks) that the current pure-canvas 2D rendering doesn't have. Part of this
+  task's own "audit" is being honest about whether that risk is worth taking for a
+  4–6 minute jury demo, or whether the working, reliable 2D graph is simply the
+  better choice to present live — that's a legitimate possible conclusion of this
+  task, not a failure to complete it.
+- Out of scope regardless of the decision: replacing 2D, any backend/persistence
+  change, skill nodes, any change to how `qualified`/`final_score` are computed.
 
-Do not implement anything from the proposal in the same task — that would be a
-separate, later, explicitly-scoped step, exactly as the original knowledge-graph
-design audit was itself handled as a proposal-only pass before any code was
-written.
+`handoff.md`'s own knowledge-graph history (the design audit and the
+`GET /v1/graph/candidates-jobs` endpoint) has no action needed for this task —
+it's frontend-only, same as every graph phase since the endpoint landed.

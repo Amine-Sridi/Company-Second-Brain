@@ -99,6 +99,8 @@ export default function GraphPage() {
           candidateNames={candidateNames}
           layout={FULL_GRAPH_LAYOUT}
           showLegend
+          showScoreFilter
+          showSearch
           size="full"
         />
       )}

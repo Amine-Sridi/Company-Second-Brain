@@ -1,7 +1,7 @@
 /* Shared visual chrome for MatchGraph -- used by both GraphPage (/graph, the full
-   dataset) and CandidateDetailPage's embedded ego graph. Height/min-height are set
-   inline per call site (see MatchGraph.jsx's `height`/`minHeight` props) since the
-   two contexts need very different sizes; everything else here is one shared look. */
+   dataset) and CandidateDetailPage's embedded ego graph. Height/min-height come from
+   the `size` prop's fixed CSS variant (.sizeFull / .sizeEgo below) since the two
+   contexts need very different sizes; everything else here is one shared look. */
 
 .layout {
   display: flex;
@@ -36,10 +36,17 @@
 }
 
 /* The Cytoscape canvas needs an explicit pixel box to size itself against --
-   flex: 1 on this wrapper (inside a flex-column parent) supplies that. */
+   flex: 1 on this wrapper (inside a flex-column parent) supplies that. Cytoscape's
+   own canvas is transparent, so a plain CSS background here shows through behind
+   it -- a subtle dot-grid, so the canvas reads as a distinct "explorable surface"
+   rather than the same flat white as the surrounding card/page. --color-border is
+   already the app's own subtlest visible-line token, reused here rather than a new
+   one-off color. */
 .canvasWrapper {
   flex: 1 1 auto;
   min-height: 0;
+  background-image: radial-gradient(circle, var(--color-border) 1px, transparent 1px);
+  background-size: 18px 18px;
 }
 
 .legend {
@@ -87,6 +94,119 @@
 
 .legendDisqualified {
   background: var(--color-danger);
+}
+
+/* The Qualified/Disqualified legend swatches double as the toggle control itself
+   (no separate checkboxes) -- reset the <button> chrome back to plain text/inline
+   layout so a toggle looks identical to the plain Job/Candidate labels beside it
+   until its "off" state below says otherwise. */
+.legendToggle {
+  background: none;
+  border: none;
+  padding: 0;
+  font: inherit;
+  cursor: pointer;
+}
+
+.legendToggleOff {
+  opacity: 0.45;
+}
+
+.legendToggleOff .legendLine {
+  opacity: 0.6;
+}
+
+/* Score filter + search -- full `/graph` only (MatchGraph's showScoreFilter/
+   showSearch props), same row treatment as .legend above. */
+.filterRow {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--spacing-4);
+  padding: var(--spacing-2) var(--spacing-3);
+  border-bottom: 1px solid var(--color-border);
+}
+
+.scoreFilter {
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-2);
+  font-size: var(--font-size-sm);
+  color: var(--color-text-muted);
+}
+
+.scoreFilterLabel {
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+
+.scoreFilterInput {
+  accent-color: var(--color-primary);
+}
+
+.searchBox {
+  position: relative;
+  flex: 1 1 200px;
+  max-width: 280px;
+}
+
+.searchInput {
+  width: 100%;
+  padding: var(--spacing-1) var(--spacing-2);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius);
+  font-size: var(--font-size-sm);
+  font-family: inherit;
+  color: var(--color-text);
+  background: var(--color-surface);
+}
+
+.searchResults {
+  position: absolute;
+  z-index: 5;
+  top: calc(100% + 4px);
+  left: 0;
+  right: 0;
+  max-height: 220px;
+  overflow-y: auto;
+  margin: 0;
+  padding: var(--spacing-1);
+  list-style: none;
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow-md);
+}
+
+.searchResultButton {
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-2);
+  width: 100%;
+  padding: var(--spacing-1) var(--spacing-2);
+  background: none;
+  border: none;
+  border-radius: var(--radius);
+  font: inherit;
+  color: var(--color-text);
+  text-align: left;
+  cursor: pointer;
+}
+
+.searchResultButton:hover {
+  background: var(--color-hover-bg);
+}
+
+.searchResultLabel {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.searchNoResults {
+  padding: var(--spacing-1) var(--spacing-2);
+  color: var(--color-text-muted);
+  font-size: var(--font-size-sm);
 }
 
 /* Only rendered when a call site opts into its own embedded reset button
