@@ -1,10 +1,17 @@
 import { useNavigate } from "react-router-dom";
+import { motion, useReducedMotion } from "motion/react";
 import { useAuth } from "../context/AuthContext.jsx";
 import styles from "./TopBar.module.css";
 
+/** V2 design system, Phase 1 -- see Sidebar.jsx's own comment for why this
+ * component's dark-glass restyle is safe to apply unconditionally (self-contained,
+ * no --color-* tokens touched). The logout button gets one small hover/focus
+ * micro-interaction, this phase's one requested example of that motion category
+ * outside of Dashboard's cards. */
 export default function TopBar() {
   const { recruiter, logout } = useAuth();
   const navigate = useNavigate();
+  const shouldReduceMotion = useReducedMotion();
 
   function handleLogout() {
     logout();
@@ -14,10 +21,17 @@ export default function TopBar() {
   return (
     <header className={styles.topbar}>
       <span className={styles.email}>{recruiter?.email}</span>
-      <button type="button" className={styles.logoutButton} onClick={handleLogout}>
+      <motion.button
+        type="button"
+        className={styles.logoutButton}
+        onClick={handleLogout}
+        whileHover={shouldReduceMotion ? undefined : { scale: 1.03 }}
+        whileTap={shouldReduceMotion ? undefined : { scale: 0.97 }}
+        transition={{ duration: 0.12 }}
+      >
         <IconLogout className={styles.logoutIcon} />
         Log out
-      </button>
+      </motion.button>
     </header>
   );
 }

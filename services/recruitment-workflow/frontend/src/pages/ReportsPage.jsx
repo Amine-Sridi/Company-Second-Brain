@@ -129,7 +129,15 @@ function ReportRow({ application }) {
           <span className={styles.identityWarning}> (name unavailable)</span>
         )}
       </td>
-      <td>{application.job_title}</td>
+      <td>
+        <Link
+          to={`/jobs/${application.job_id}`}
+          className={styles.inlineLink}
+          onClick={(event) => event.stopPropagation()}
+        >
+          {application.job_title}
+        </Link>
+      </td>
       <td>{assessment.cefr_level ?? "—"}</td>
       <td>{assessment.overall_score != null ? `${assessment.overall_score}/100` : "—"}</td>
       <td className={styles.dateCell}>

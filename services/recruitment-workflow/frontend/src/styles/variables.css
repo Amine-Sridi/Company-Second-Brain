@@ -75,3 +75,73 @@
    collapses to a top bar -- Layout.module.css) and 480px (a second tier for tighter
    phone-width layouts). Every page's own @media rules below reuse these two literal
    values rather than inventing a third. */
+
+/* ===========================================================================
+   V2 design system -- "AI recruitment command center" visual direction.
+   ADDITIVE ONLY: nothing above this line is changed or removed. Every page
+   except Dashboard (and the persistent Sidebar/TopBar chrome) still directly
+   depends on the --color-* tokens above keeping their current light-theme
+   values -- those pages render plain text straight onto the implicit light
+   body background with no surface of their own (see PageHeader's title, for
+   one example, on every un-migrated page). Repointing --color-text or
+   --color-bg to dark values here would silently make that text unreadable on
+   every page this phase does not touch.
+
+   So instead: a second, independent, dark-cinematic token set below, prefixed
+   --v2-, used only by the components this phase actually redesigns (Sidebar,
+   TopBar, StatTile, Dashboard, and the opt-in "glass" variant on
+   StatusBadge/EmptyState). Every other page is completely unaware this block
+   exists. As later phases migrate a page to V2, that page starts reading from
+   --v2-* instead of --color-*; once every page is migrated, this whole comment
+   -- and the "additive, don't touch --color-*" constraint it explains -- can be
+   deleted and --v2-* can simply become the new --color-* (see
+   FRONTEND_HANDOFF.md's Phase 1 entry for the full migration plan). ========= */
+:root {
+  /* Deep charcoal/navy cinematic base -- never pure black (flat/lifeless) or a
+     literal navy hue (reads as "corporate blue", not "command center"). */
+  --v2-bg: #0a0c14;
+  --v2-bg-elevated: #10131e;
+  --v2-bg-inset: #06070d;
+
+  /* Glass panel surfaces -- translucent over --v2-bg, not opaque hex fills, so
+     the aurora/grid backdrop shows faintly through every card (the "layered
+     glass" requirement). Combined with backdrop-filter: blur() where applied. */
+  --v2-surface: rgba(255, 255, 255, 0.035);
+  --v2-surface-strong: rgba(255, 255, 255, 0.06);
+  --v2-border: rgba(255, 255, 255, 0.09);
+  --v2-border-strong: rgba(255, 255, 255, 0.16);
+
+  --v2-text: #eef0f7;
+  --v2-text-muted: #9297ab;
+  --v2-text-faint: #5c6178;
+
+  /* The one signature brand pairing -- restrained deliberately: used for the
+     wordmark, the active-nav indicator, focus rings, and chart accents only,
+     never as a full background fill ("no excessive gradients/glow"). */
+  --v2-cyan: #3fd8e8;
+  --v2-violet: #a78bfa;
+  --v2-cyan-bg: rgba(63, 216, 232, 0.12);
+  --v2-violet-bg: rgba(167, 139, 250, 0.12);
+
+  /* Status colors, re-tuned (brighter/more saturated than --color-*'s versions)
+     specifically for AA contrast against the dark surfaces above -- the light
+     theme's --color-success etc. would be too dim to read here. */
+  --v2-success: #4ade80;
+  --v2-success-bg: rgba(74, 222, 128, 0.12);
+  --v2-danger: #fb7185;
+  --v2-danger-bg: rgba(251, 113, 133, 0.14);
+  --v2-warning: #fbbf24;
+  --v2-warning-bg: rgba(251, 191, 36, 0.12);
+  --v2-neutral-bg: rgba(255, 255, 255, 0.07);
+
+  --v2-radius: 14px;
+  --v2-radius-lg: 20px;
+  --v2-blur: 20px;
+
+  /* Elevation reads as a dark-surface glow/shadow combination, not the light
+     theme's soft-gray drop shadow (invisible on a dark background). */
+  --v2-shadow-elevated: 0 24px 60px -12px rgba(0, 0, 0, 0.55), 0 1px 0 0 rgba(255, 255, 255, 0.04) inset;
+  --v2-shadow-glow-cyan: 0 0 1px rgba(63, 216, 232, 0.4), 0 8px 30px -8px rgba(63, 216, 232, 0.25);
+
+  --v2-transition: 180ms cubic-bezier(0.4, 0, 0.2, 1);
+}

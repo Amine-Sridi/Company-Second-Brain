@@ -163,7 +163,15 @@ function InterviewRow({ application }) {
             <span className={styles.identityWarning}> (name unavailable)</span>
           )}
         </td>
-        <td>{application.job_title}</td>
+        <td>
+          <Link
+            to={`/jobs/${application.job_id}`}
+            className={styles.inlineLink}
+            onClick={(event) => event.stopPropagation()}
+          >
+            {application.job_title}
+          </Link>
+        </td>
         <td>
           <StatusBadge tone={STATUS_TONE[application.status] ?? "neutral"}>
             {STATUS_LABELS[application.status] ?? application.status}

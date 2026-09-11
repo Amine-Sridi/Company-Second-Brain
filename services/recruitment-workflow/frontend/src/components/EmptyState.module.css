@@ -18,3 +18,21 @@
   color: var(--color-text-muted);
   font-size: var(--font-size-sm);
 }
+
+/* V2 design system, Phase 1 -- opt-in dark-surface variant, see EmptyState.jsx.
+   Two classes (higher specificity than the plain rules above) so this wins
+   without editing them. */
+.emptyState.glass {
+  background: var(--v2-surface);
+  border: 1px dashed var(--v2-border-strong);
+  backdrop-filter: blur(var(--v2-blur));
+  -webkit-backdrop-filter: blur(var(--v2-blur));
+}
+
+.glass .title {
+  color: var(--v2-text);
+}
+
+.glass .description {
+  color: var(--v2-text-muted);
+}

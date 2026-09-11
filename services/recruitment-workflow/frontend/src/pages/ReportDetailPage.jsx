@@ -55,21 +55,27 @@ export default function ReportDetailPage() {
   const [recordingUrl, setRecordingUrl] = useState(null);
   const [recordingError, setRecordingError] = useState(null);
 
-  // Best-effort only, for the "candidate name links to Candidate Detail"
-  // cross-link: VoiceHR's report has no concept of RWS's candidate_id, so this
-  // page independently looks it up via the already-existing global applications
-  // list rather than adding a new backend endpoint just for one UUID. A failure
-  // or a not-found row here never blocks the report itself from rendering --
-  // the candidate name just stays plain text instead of a link.
+  // Best-effort only, for the "candidate name links to Candidate Detail" and "job
+  // title links to Job Detail" cross-links: VoiceHR's report has no concept of
+  // RWS's candidate_id or job_id, so this page independently looks both up via the
+  // already-existing global applications list rather than adding a new backend
+  // endpoint or a second call just for two IDs already sitting on that same row. A
+  // failure or a not-found row here never blocks the report itself from rendering
+  // -- the candidate name/job title just stay plain text instead of a link.
   const [candidateId, setCandidateId] = useState(null);
+  const [job, setJob] = useState(null); // { jobId, jobTitle } | null
 
   useEffect(() => {
     loadReport();
     setCandidateId(null);
+    setJob(null);
     getAllApplications()
       .then((applications) => {
         const match = applications.find((application) => application.application_id === applicationId);
-        if (match) setCandidateId(match.candidate_id);
+        if (match) {
+          setCandidateId(match.candidate_id);
+          setJob({ jobId: match.job_id, jobTitle: match.job_title });
+        }
       })
       .catch(() => {
         // Silently left unresolved -- see the comment above.
@@ -154,6 +160,11 @@ export default function ReportDetailPage() {
       {!loading && !error && report && (
         <div className={styles.content}>
           <div className={styles.meta}>
+            {job && (
+              <Link to={`/jobs/${job.jobId}`} className={styles.inlineLink}>
+                {job.jobTitle}
+              </Link>
+            )}
             {report.candidate_email && <span>{report.candidate_email}</span>}
             {report.interview_date && (
               <span>

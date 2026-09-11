@@ -36,3 +36,48 @@
   background: var(--color-danger-bg);
   color: var(--color-danger);
 }
+
+/* V2 design system, Phase 1 -- opt-in dark-surface variant, see StatusBadge.jsx.
+   Each rule pairs with a tone class (e.g. .glass.success) so specificity (two
+   classes beats one) wins over the light-theme tone rules above regardless of
+   source order, without touching those rules at all. */
+.glass {
+  border: 1px solid transparent;
+  backdrop-filter: blur(6px);
+}
+
+.glass.neutral {
+  background: var(--v2-neutral-bg);
+  color: var(--v2-text-muted);
+  border-color: var(--v2-border);
+}
+
+.glass.primary {
+  background: var(--v2-cyan-bg);
+  color: var(--v2-cyan);
+  border-color: rgba(63, 216, 232, 0.3);
+}
+
+.glass.accent {
+  background: var(--v2-violet-bg);
+  color: var(--v2-violet);
+  border-color: rgba(167, 139, 250, 0.3);
+}
+
+.glass.success {
+  background: var(--v2-success-bg);
+  color: var(--v2-success);
+  border-color: rgba(74, 222, 128, 0.3);
+}
+
+.glass.warning {
+  background: var(--v2-warning-bg);
+  color: var(--v2-warning);
+  border-color: rgba(251, 191, 36, 0.3);
+}
+
+.glass.danger {
+  background: var(--v2-danger-bg);
+  color: var(--v2-danger);
+  border-color: rgba(251, 113, 133, 0.3);
+}

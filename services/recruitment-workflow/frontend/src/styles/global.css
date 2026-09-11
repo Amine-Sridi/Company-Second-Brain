@@ -64,3 +64,21 @@ select:focus-visible {
   border-color: var(--color-primary);
   box-shadow: 0 0 0 3px var(--color-primary-bg);
 }
+
+/* App-wide reduced-motion support (V2 design system, Phase 1 -- see
+   FRONTEND_HANDOFF.md). Two layers exist and both need this: plain CSS
+   transitions/@keyframes (the aurora backdrop's slow drift, hover states) are
+   caught here; `motion`-driven animations (page transitions, the sidebar's
+   active-nav indicator, animated stat numbers) are JS-driven and check
+   `useReducedMotion()` individually wherever they're used, since this CSS rule
+   cannot reach into an animation library's own requestAnimationFrame loop. */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.001ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.001ms !important;
+    scroll-behavior: auto !important;
+  }
+}

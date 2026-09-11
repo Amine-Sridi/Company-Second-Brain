@@ -71,6 +71,18 @@
   text-decoration: underline;
 }
 
+/* Same visual treatment as CandidateDetailPage's own .inlineLink -- the Job column
+   should look and behave the same way there and here. */
+.inlineLink {
+  color: var(--color-primary);
+  font-weight: 500;
+  text-decoration: none;
+}
+
+.inlineLink:hover {
+  text-decoration: underline;
+}
+
 .identityWarning {
   color: var(--color-text-muted);
   font-size: var(--font-size-xs);

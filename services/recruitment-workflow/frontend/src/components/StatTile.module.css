@@ -1,29 +1,69 @@
+/* V2 design system, Phase 1 -- direct redesign, sole consumer is DashboardPage
+   (see StatTile.jsx). Glass panel + a restrained top accent line in one of the
+   two brand colors, alternated per tile by DashboardPage. */
+
 .tile {
-  background: var(--color-surface);
-  border: 1px solid var(--color-border);
-  border-radius: var(--radius);
-  box-shadow: var(--shadow-sm);
-  padding: var(--spacing-3) var(--spacing-4);
+  position: relative;
+  background: var(--v2-surface);
+  border: 1px solid var(--v2-border);
+  border-radius: var(--v2-radius);
+  backdrop-filter: blur(var(--v2-blur));
+  -webkit-backdrop-filter: blur(var(--v2-blur));
+  box-shadow: var(--v2-shadow-elevated);
+  padding: var(--spacing-4);
   display: flex;
   flex-direction: column;
   gap: var(--spacing-1);
+  overflow: hidden;
+  transition: border-color var(--v2-transition), box-shadow var(--v2-transition);
+}
+
+.tile::before {
+  content: "";
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 2px;
+}
+
+.accentCyan::before {
+  background: linear-gradient(90deg, var(--v2-cyan), transparent 85%);
+}
+
+.accentViolet::before {
+  background: linear-gradient(90deg, var(--v2-violet), transparent 85%);
+}
+
+.tile:hover {
+  border-color: var(--v2-border-strong);
+}
+
+.accentCyan:hover {
+  box-shadow: var(--v2-shadow-elevated), 0 0 0 1px rgba(63, 216, 232, 0.15);
+}
+
+.accentViolet:hover {
+  box-shadow: var(--v2-shadow-elevated), 0 0 0 1px rgba(167, 139, 250, 0.15);
 }
 
 .label {
   font-size: var(--font-size-xs);
   text-transform: uppercase;
-  letter-spacing: 0.04em;
-  color: var(--color-text-muted);
+  letter-spacing: 0.06em;
+  color: var(--v2-text-muted);
   font-weight: 600;
 }
 
 .value {
-  font-size: var(--font-size-xl);
+  font-size: 2rem;
   font-weight: 700;
-  color: var(--color-text);
+  letter-spacing: -0.02em;
+  color: var(--v2-text);
+  font-variant-numeric: tabular-nums;
 }
 
 .hint {
   font-size: var(--font-size-xs);
-  color: var(--color-text-muted);
+  color: var(--v2-text-faint);
 }

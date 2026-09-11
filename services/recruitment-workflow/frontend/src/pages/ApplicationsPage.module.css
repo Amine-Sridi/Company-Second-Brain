@@ -71,6 +71,19 @@
   text-decoration: underline;
 }
 
+/* Same visual treatment as CandidateDetailPage's own .inlineLink -- "View Report"
+   there and here should look and behave identically. */
+.inlineLink {
+  color: var(--color-primary);
+  font-weight: 500;
+  text-decoration: none;
+  white-space: nowrap;
+}
+
+.inlineLink:hover {
+  text-decoration: underline;
+}
+
 .identityWarning {
   color: var(--color-text-muted);
   font-size: var(--font-size-xs);

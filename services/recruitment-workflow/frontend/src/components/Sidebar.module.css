@@ -1,55 +1,130 @@
+/* V2 design system, Phase 1 (see FRONTEND_HANDOFF.md). Self-contained dark-glass
+   chrome -- every color here is a --v2-* token, never a --color-* one, so this
+   component cannot leak the light theme any un-migrated page still depends on,
+   and cannot be affected by it either. */
+
 .sidebar {
-  background: var(--color-surface);
-  border-right: 1px solid var(--color-border);
+  position: relative;
+  background: var(--v2-bg-elevated);
+  border-right: 1px solid var(--v2-border);
   padding: var(--spacing-4) var(--spacing-3);
   display: flex;
   flex-direction: column;
   gap: var(--spacing-4);
+  overflow: hidden;
+}
+
+/* Faint technical grid + a single soft aurora bloom anchored to the top of the
+   sidebar -- "subtle", not a wallpaper: opacity is low enough that it reads as
+   texture, not pattern, at a glance. Pure CSS, no image asset. */
+.sidebar::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  background-image:
+    radial-gradient(480px 320px at 15% -10%, var(--v2-cyan-bg), transparent 60%),
+    linear-gradient(rgba(255, 255, 255, 0.035) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(255, 255, 255, 0.035) 1px, transparent 1px);
+  background-size:
+    auto,
+    28px 28px,
+    28px 28px;
+  opacity: 0.9;
 }
 
 .brand {
-  font-weight: 700;
-  font-size: var(--font-size-md);
-  letter-spacing: -0.01em;
-  color: var(--color-text);
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-2);
   padding: 0 var(--spacing-2);
 }
 
+.brandMark {
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  border-radius: 8px;
+  background: linear-gradient(135deg, var(--v2-cyan), var(--v2-violet));
+  box-shadow: var(--v2-shadow-glow-cyan);
+}
+
+.brandMarkIcon {
+  width: 16px;
+  height: 16px;
+  color: var(--v2-bg-inset);
+}
+
+.brandText {
+  font-weight: 700;
+  font-size: var(--font-size-base);
+  letter-spacing: -0.01em;
+  color: var(--v2-text);
+  line-height: 1.15;
+}
+
 .nav {
+  position: relative;
   display: flex;
   flex-direction: column;
   gap: 2px;
 }
 
-.link,
-.linkActive {
+.link {
+  position: relative;
   display: flex;
   align-items: center;
   gap: var(--spacing-2);
   padding: var(--spacing-2);
-  border-radius: var(--radius);
+  border-radius: 10px;
   text-decoration: none;
-  color: var(--color-text-muted);
+  color: var(--v2-text-muted);
   font-size: var(--font-size-base);
   font-weight: 500;
-  transition: background-color var(--transition-fast), color var(--transition-fast);
+  transition: color var(--v2-transition);
+  isolation: isolate;
 }
 
-.icon {
+.link:hover {
+  color: var(--v2-text);
+}
+
+.linkActive {
+  color: var(--v2-text);
+  font-weight: 600;
+}
+
+/* The shared motion.span (layoutId) that slides between items -- sits behind
+   the icon/label (z-index via isolation above + this being the first child),
+   never re-mounted on navigation, only repositioned. */
+.activePill {
+  position: absolute;
+  inset: 0;
+  z-index: -1;
+  border-radius: 10px;
+  background: linear-gradient(135deg, var(--v2-cyan-bg), var(--v2-violet-bg));
+  border: 1px solid var(--v2-border-strong);
+}
+
+.icon,
+.iconActive {
   width: 16px;
   height: 16px;
   flex-shrink: 0;
 }
 
-.link:hover {
-  background: var(--color-hover-bg);
-  color: var(--color-text);
+.iconActive {
+  color: var(--v2-cyan);
 }
 
-.linkActive {
-  background: var(--color-primary-bg);
-  color: var(--color-primary);
-  font-weight: 600;
+.linkLabel {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 /* Below the tablet breakpoint, Layout.module.css stacks the sidebar above the page
@@ -60,7 +135,7 @@
     flex-direction: row;
     align-items: center;
     border-right: none;
-    border-bottom: 1px solid var(--color-border);
+    border-bottom: 1px solid var(--v2-border);
     padding: var(--spacing-2) var(--spacing-3);
     gap: var(--spacing-3);
     overflow-x: auto;
@@ -68,6 +143,9 @@
 
   .brand {
     padding: 0;
+  }
+
+  .brandText {
     white-space: nowrap;
   }
 

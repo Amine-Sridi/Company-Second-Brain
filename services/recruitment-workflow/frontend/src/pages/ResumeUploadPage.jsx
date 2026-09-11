@@ -1,4 +1,5 @@
 import { useRef, useState } from "react";
+import { Link } from "react-router-dom";
 import { uploadResume } from "../api/resumes.js";
 import { ApiError } from "../api/client.js";
 import PageHeader from "../components/PageHeader.jsx";
@@ -104,9 +105,16 @@ export default function ResumeUploadPage() {
           </div>
         </div>
 
-        <button type="button" className={styles.resetButton} onClick={handleReset}>
-          Upload another resume
-        </button>
+        <div className={styles.actions}>
+          {/* The created/matched candidate is never a dead-end UUID -- this is the
+              same real candidate_id CandidateDetailPage already renders. */}
+          <Link to={`/candidates/${result.candidate_id}`} className={styles.uploadButton}>
+            View Candidate
+          </Link>
+          <button type="button" className={styles.resetButton} onClick={handleReset}>
+            Upload another resume
+          </button>
+        </div>
       </div>
     );
   }

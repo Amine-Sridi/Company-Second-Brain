@@ -298,6 +298,11 @@ function ApplicationRow({ application, onUpdated }) {
             {application.status === "rejected" && (
               <span className={styles.decidedLabelRejected}>Rejected</span>
             )}
+            {hasAssessment && (
+              <Link to={`/reports/${application.application_id}`} className={styles.inlineLink}>
+                View Report
+              </Link>
+            )}
           </div>
         </td>
       </tr>

@@ -1,4 +1,5 @@
 import { NavLink } from "react-router-dom";
+import { motion, useReducedMotion } from "motion/react";
 import styles from "./Sidebar.module.css";
 
 // Only routes that actually exist get a nav entry -- every item here was added
@@ -14,17 +15,53 @@ const NAV_ITEMS = [
   { to: "/graph", label: "Knowledge Graph", icon: IconGraph },
 ];
 
+/**
+ * V2 design system, Phase 1 (see FRONTEND_HANDOFF.md): the persistent dark-glass
+ * shell chrome, rendered around every page regardless of that page's own
+ * still-unmigrated (light) styling -- safe because this component is entirely
+ * self-contained (its own --v2-* colors, its own classes), so redesigning it
+ * cannot affect any other page's contrast or layout.
+ *
+ * The active item is a single shared `motion.span` (layoutId) that slides
+ * between nav entries instead of each link drawing its own static highlight --
+ * the one "nav active state" motion moment this phase's brief asks for.
+ */
 export default function Sidebar() {
-  const linkClass = ({ isActive }) => (isActive ? styles.linkActive : styles.link);
+  const shouldReduceMotion = useReducedMotion();
+  const pillTransition = shouldReduceMotion
+    ? { duration: 0 }
+    : { type: "spring", stiffness: 420, damping: 34 };
 
   return (
     <nav className={styles.sidebar}>
-      <div className={styles.brand}>Company Second Brain</div>
+      <div className={styles.brand}>
+        <span className={styles.brandMark} aria-hidden="true">
+          <IconGraph className={styles.brandMarkIcon} />
+        </span>
+        <span className={styles.brandText}>Company Second Brain</span>
+      </div>
+
       <div className={styles.nav}>
         {NAV_ITEMS.map(({ to, label, icon: Icon, end }) => (
-          <NavLink key={to} to={to} end={end} className={linkClass}>
-            <Icon className={styles.icon} />
-            <span>{label}</span>
+          <NavLink
+            key={to}
+            to={to}
+            end={end}
+            className={({ isActive }) => (isActive ? `${styles.link} ${styles.linkActive}` : styles.link)}
+          >
+            {({ isActive }) => (
+              <>
+                {isActive && (
+                  <motion.span
+                    layoutId="sidebarActivePill"
+                    className={styles.activePill}
+                    transition={pillTransition}
+                  />
+                )}
+                <Icon className={isActive ? styles.iconActive : styles.icon} />
+                <span className={styles.linkLabel}>{label}</span>
+              </>
+            )}
           </NavLink>
         ))}
       </div>

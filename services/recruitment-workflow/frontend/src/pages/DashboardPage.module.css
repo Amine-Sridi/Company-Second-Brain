@@ -1,68 +1,292 @@
+/* V2 design system, Phase 1 (see FRONTEND_HANDOFF.md). Dashboard is the first full
+   page redesign: everything below is scoped to this one file's classes, using only
+   --v2-* tokens -- it cannot affect any other page, and (Layout.module.css's
+   `.content` is intentionally untouched) sits inside the same light shell content
+   area every other page still does, painting its own dark "panel" over it rather
+   than repainting the whole app background. */
+
 .page {
-  max-width: 960px;
+  position: relative;
+  max-width: 1400px;
+  padding: var(--spacing-5);
+  border-radius: var(--v2-radius-lg);
+  border: 1px solid var(--v2-border);
+  background: var(--v2-bg);
+  box-shadow: var(--v2-shadow-elevated);
+  color: var(--v2-text);
   display: flex;
   flex-direction: column;
-  gap: var(--spacing-4);
+  gap: var(--spacing-5);
+  overflow: hidden;
+}
+
+/* Three layered background effects, each restrained per this phase's own brief
+   ("subtle", "faint", "no excessive gradients/glow"): two soft aurora blooms
+   (cyan top-left, violet bottom-right), a faint technical grid, and a barely-
+   there noise layer (inline SVG feTurbulence data-URI -- no image asset, no new
+   dependency) for texture so large flat dark areas don't look like a flat color
+   fill. All three sit behind the actual content (z-index/stacking via normal
+   document order) and never intercept pointer events. */
+.page::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  background-image:
+    radial-gradient(640px 420px at 8% 0%, var(--v2-cyan-bg), transparent 60%),
+    radial-gradient(560px 420px at 96% 100%, var(--v2-violet-bg), transparent 60%),
+    linear-gradient(rgba(255, 255, 255, 0.025) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(255, 255, 255, 0.025) 1px, transparent 1px);
+  background-size:
+    auto,
+    auto,
+    36px 36px,
+    36px 36px;
+}
+
+.page::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  opacity: 0.05;
+  mix-blend-mode: overlay;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='200' height='200'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='2' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
+}
+
+.page > * {
+  position: relative;
 }
 
 .status {
-  color: var(--color-text-muted);
+  color: var(--v2-text-muted);
   font-size: var(--font-size-base);
 }
 
 .error {
-  background: var(--color-danger-bg);
-  color: var(--color-danger);
+  background: var(--v2-danger-bg);
+  color: var(--v2-danger);
   padding: var(--spacing-2) var(--spacing-3);
-  border-radius: var(--radius);
+  border-radius: var(--v2-radius);
+  font-size: var(--font-size-base);
+  border: 1px solid rgba(251, 113, 133, 0.3);
+}
+
+/* ---------------------------------------------------------------------------
+   Hero
+--------------------------------------------------------------------------- */
+
+.hero {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: var(--spacing-4);
+  padding-bottom: var(--spacing-4);
+  border-bottom: 1px solid var(--v2-border);
+}
+
+.heroText {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-1);
+  min-width: 0;
+}
+
+.heroEyebrow {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--spacing-1);
+  width: fit-content;
+  font-size: var(--font-size-xs);
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--v2-cyan);
+}
+
+.heroEyebrow::before {
+  content: "";
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--v2-cyan);
+  box-shadow: 0 0 8px 1px var(--v2-cyan);
+}
+
+.heroTitle {
+  margin: 0;
+  font-size: clamp(1.6rem, 2.4vw, 2.1rem);
+  font-weight: 700;
+  letter-spacing: -0.02em;
+  color: var(--v2-text);
+}
+
+.heroName {
+  background: linear-gradient(120deg, var(--v2-cyan), var(--v2-violet));
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+}
+
+.heroSubtitle {
+  margin: 0;
+  color: var(--v2-text-muted);
   font-size: var(--font-size-base);
 }
 
-.statGrid {
+.quickActions {
+  display: flex;
+  gap: var(--spacing-2);
+  flex-wrap: wrap;
+  flex-shrink: 0;
+}
+
+.actionPrimary {
+  background: linear-gradient(120deg, var(--v2-cyan), var(--v2-violet));
+  color: var(--v2-bg-inset);
+  border-radius: var(--v2-radius);
+  padding: var(--spacing-2) var(--spacing-4);
+  font-size: var(--font-size-base);
+  font-weight: 700;
+  text-decoration: none;
+  transition: transform var(--v2-transition), box-shadow var(--v2-transition);
+}
+
+.actionPrimary:hover {
+  transform: translateY(-1px);
+  box-shadow: var(--v2-shadow-glow-cyan);
+}
+
+.actionSecondary {
+  background: var(--v2-surface);
+  border: 1px solid var(--v2-border-strong);
+  color: var(--v2-text);
+  border-radius: var(--v2-radius);
+  padding: var(--spacing-2) var(--spacing-4);
+  font-size: var(--font-size-base);
+  font-weight: 600;
+  text-decoration: none;
+  backdrop-filter: blur(var(--v2-blur));
+  -webkit-backdrop-filter: blur(var(--v2-blur));
+  transition: border-color var(--v2-transition), transform var(--v2-transition);
+}
+
+.actionSecondary:hover {
+  border-color: var(--v2-cyan);
+  transform: translateY(-1px);
+}
+
+/* ---------------------------------------------------------------------------
+   Bento grid -- 4 equal columns; the KPI tiles fill row 1 one-per-column, the
+   three panels below split row 2 asymmetrically (2 + 1 + 1), the "bento
+   composition" this phase's brief asks for.
+--------------------------------------------------------------------------- */
+
+.bento {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  grid-template-columns: repeat(4, 1fr);
+  gap: var(--spacing-3);
+  align-items: stretch;
+}
+
+.pipelinePanel {
+  grid-column: span 2;
+}
+
+.activityPanel,
+.graphTeaser {
+  grid-column: span 1;
+}
+
+.pipelinePanel,
+.activityPanel {
+  background: var(--v2-surface);
+  border: 1px solid var(--v2-border);
+  border-radius: var(--v2-radius);
+  backdrop-filter: blur(var(--v2-blur));
+  -webkit-backdrop-filter: blur(var(--v2-blur));
+  box-shadow: var(--v2-shadow-elevated);
+  padding: var(--spacing-4);
+  display: flex;
+  flex-direction: column;
   gap: var(--spacing-3);
 }
 
-.columns {
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: var(--spacing-4);
+.panelTitle {
+  margin: 0;
+  font-size: var(--font-size-base);
+  font-weight: 700;
+  color: var(--v2-text);
 }
 
-.statusBreakdown {
-  background: var(--color-surface);
-  border: 1px solid var(--color-border);
-  border-radius: var(--radius);
-  box-shadow: var(--shadow-sm);
-  padding: var(--spacing-2) var(--spacing-3);
+/* ---------------------------------------------------------------------------
+   Pipeline distribution bar
+--------------------------------------------------------------------------- */
+
+.distributionBar {
+  display: flex;
+  width: 100%;
+  height: 10px;
+  border-radius: var(--radius-pill);
+  overflow: hidden;
+  background: var(--v2-neutral-bg);
 }
 
-.statusRow {
+.distributionSegment {
+  height: 100%;
+}
+
+.segment-selected {
+  background: var(--v2-text-faint);
+}
+
+.segment-invited {
+  background: var(--v2-cyan);
+}
+
+.segment-interviewed {
+  background: var(--v2-violet);
+}
+
+.segment-accepted {
+  background: var(--v2-success);
+}
+
+.segment-rejected {
+  background: var(--v2-danger);
+}
+
+.statusLegend {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-1);
+}
+
+.statusLegendRow {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: var(--spacing-2) 0;
-}
-
-.statusRow + .statusRow {
-  border-top: 1px solid var(--color-border);
+  padding: 2px 0;
 }
 
 .statusCount {
   font-weight: 600;
-  color: var(--color-text);
+  font-variant-numeric: tabular-nums;
+  color: var(--v2-text);
 }
+
+/* ---------------------------------------------------------------------------
+   Recent activity
+--------------------------------------------------------------------------- */
 
 .activityList {
   list-style: none;
   margin: 0;
   padding: 0;
-  background: var(--color-surface);
-  border: 1px solid var(--color-border);
-  border-radius: var(--radius);
-  box-shadow: var(--shadow-sm);
-  padding: var(--spacing-2) var(--spacing-3);
+  display: flex;
+  flex-direction: column;
+  overflow-y: auto;
 }
 
 .activityRow {
@@ -74,80 +298,123 @@
 }
 
 .activityRow + .activityRow {
-  border-top: 1px solid var(--color-border);
+  border-top: 1px solid var(--v2-border);
 }
 
 .activityLabel {
-  font-size: var(--font-size-base);
+  font-size: var(--font-size-sm);
+  color: var(--v2-text);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .activityDate {
   flex-shrink: 0;
-  color: var(--color-text-muted);
-  font-size: var(--font-size-sm);
+  color: var(--v2-text-faint);
+  font-size: var(--font-size-xs);
   white-space: nowrap;
 }
 
-.quickActions {
-  display: flex;
-  gap: var(--spacing-2);
-  flex-wrap: wrap;
-}
+/* ---------------------------------------------------------------------------
+   Graph teaser -- "subtle visual connection to the graph feature" without
+   fetching graph data or overstating the card (no number, see DashboardPage.jsx).
+--------------------------------------------------------------------------- */
 
-.actionPrimary {
-  background: var(--color-primary);
-  color: #ffffff;
-  border-radius: var(--radius);
-  padding: var(--spacing-2) var(--spacing-4);
-  font-size: var(--font-size-base);
-  font-weight: 600;
-  text-decoration: none;
-  transition: background-color var(--transition-fast);
-}
-
-.actionPrimary:hover {
-  background: var(--color-primary-hover);
-}
-
-.actionSecondary {
-  background: var(--color-surface);
-  border: 1px solid var(--color-border);
-  color: var(--color-text);
-  border-radius: var(--radius);
-  padding: var(--spacing-2) var(--spacing-4);
-  font-size: var(--font-size-base);
-  font-weight: 600;
-  text-decoration: none;
-  transition: border-color var(--transition-fast), color var(--transition-fast);
-}
-
-.actionSecondary:hover {
-  border-color: var(--color-primary);
-  color: var(--color-primary);
-}
-
-.section {
+.graphTeaser {
+  background: var(--v2-surface);
+  border: 1px solid var(--v2-border);
+  border-radius: var(--v2-radius);
+  backdrop-filter: blur(var(--v2-blur));
+  -webkit-backdrop-filter: blur(var(--v2-blur));
+  box-shadow: var(--v2-shadow-elevated);
+  padding: var(--spacing-4);
   display: flex;
   flex-direction: column;
   gap: var(--spacing-2);
+  text-decoration: none;
+  transition: border-color var(--v2-transition);
 }
 
-.sectionTitle {
-  margin: 0;
-  font-size: var(--font-size-lg);
+.graphTeaser:hover {
+  border-color: rgba(167, 139, 250, 0.4);
+}
+
+.graphGlyph {
+  width: 56px;
+  height: 35px;
+  color: var(--v2-text-faint);
+}
+
+.glyphCyan {
+  fill: var(--v2-cyan);
+  opacity: 0.9;
+}
+
+.glyphViolet {
+  fill: var(--v2-violet);
+  opacity: 0.9;
+}
+
+.glyphLine {
+  opacity: 0.5;
+}
+
+.graphTeaserText {
+  margin: var(--spacing-1) 0 0;
+  color: var(--v2-text-muted);
+  font-size: var(--font-size-sm);
+}
+
+.graphTeaserLink {
+  margin-top: auto;
+  align-self: flex-start;
+  color: var(--v2-cyan);
+  font-size: var(--font-size-sm);
   font-weight: 600;
+  text-decoration: none;
+}
+
+.graphTeaser:hover .graphTeaserLink {
+  text-decoration: underline;
 }
 
 @media (max-width: 768px) {
-  .columns {
-    grid-template-columns: 1fr;
+  .bento {
+    grid-template-columns: repeat(2, 1fr);
+  }
+
+  .pipelinePanel {
+    grid-column: span 2;
   }
 }
 
 @media (max-width: 480px) {
+  .page {
+    padding: var(--spacing-3);
+  }
+
+  .hero {
+    align-items: flex-start;
+  }
+
+  .quickActions {
+    width: 100%;
+  }
+
   .actionPrimary,
   .actionSecondary {
+    flex: 1 1 auto;
     text-align: center;
-    width: 100%;
+  }
+
+  .bento {
+    grid-template-columns: 1fr;
+  }
+
+  .pipelinePanel,
+  .activityPanel,
+  .graphTeaser {
+    grid-column: span 1;
   }
 }

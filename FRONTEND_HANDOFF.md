@@ -1004,12 +1004,40 @@ future phase.
   path; the `CandidateDetailPage` ego graph is unaffected by construction (it never
   passes the new opt-in props) — no backend call, no new dependency — see
   §20/§21/§24)*
+- [x] **Phase 20 — Final navigation polish (cross-link audit fixes)** *(the four
+  concrete gaps named by the whole-system UX audit: Resume Upload's success screen
+  now links the created/matched candidate; `ApplicationsPage` rows with an
+  assessment now link the full report; `InterviewsPage`/`ReportsPage`'s Job column
+  is now a real link; `ReportDetailPage` now links the job too, reusing the
+  applications call it already makes — no new API call anywhere, no backend
+  change — see §20/§24)*
+- [x] **Phase 21 — V2 design system, app shell, and Dashboard (visual direction
+  change)** *(a deliberate, explicit product decision to move away from the
+  classical light SaaS-admin look toward a dark "AI recruitment command center"
+  aesthetic — new `motion` dependency, new additive `--v2-*` token layer, full
+  redesign of `Sidebar`/`TopBar`/`Layout`'s page-transition wiring, an opt-in
+  dark variant on `StatusBadge`/`EmptyState`, a direct redesign of `StatTile`
+  (its only consumer), and a full rebuild of `DashboardPage` into a bento
+  layout — no backend change, every other page's own styling is completely
+  untouched and still renders exactly as before — see §20/§21/§24)*
+
+**Phase 21 is a deliberate mid-project pivot, not a continuation of Phase 20's
+own `[NEXT]`** ("Final production/demo readiness audit — whole system, no feature
+work" — see the previous revision of this section). The user explicitly redirected
+toward a new visual-direction redesign instead; that readiness audit has not been
+done and is not implied to be cancelled, only postponed — a future session should
+still expect to run it once the V2 migration (this phase plus however many
+"operational pages" phases follow) is complete, per this file's own §23 workflow,
+not skip it.
 
 **The frontend now has every screen named in the original admin-dashboard redesign
 proposal, the candidate-detail cross-linking hub, the whole-dataset knowledge graph
 with interactive filtering/search, a per-candidate ego graph reusing the same
-engine, and a visually-polished, layout-stable version of both.** All nineteen
-phases done. §24 names the next bounded task.
+engine, a visually-polished layout-stable version of both, no remaining
+dead-end/missing cross-links from the final UX audit, and — as of Phase 21 — a new
+V2 dark "command center" visual direction applied to the app shell and Dashboard,
+with every other page still on the original V1 look until its own migration
+phase.** All twenty-one phases done. §24 names the next bounded task.
 
 Future sessions: update the checkboxes and the relevant page/section status above as
 each phase lands. Do not duplicate this checklist elsewhere or restate history that's
@@ -2451,6 +2479,253 @@ file changed, no new dependency, no backend call, no new API call.
 
 ---
 
+**Phase 20 — Final navigation polish (cross-link audit fixes)**: **DONE**. Between
+Phase 19 and this pass, a chat-response-only "final unified admin-dashboard UX
+audit" (no code, no handoff update, per its own explicit scope) reviewed all eleven
+production screens and found four concrete, cheap, real cross-link gaps — every
+one of them a case of a page already holding the exact field needed (`job_id`,
+`application_id`, `candidate_id`) and simply not linking it. This pass implements
+those four, exactly as scoped, and nothing else from that audit's longer polish
+list (the rest was explicitly lower-priority/optional, or explicitly recommended
+*not* to change — see that audit's own findings if revisiting them later).
+
+- **`ResumeUploadPage`**: the success screen's "Candidate ID" field was previously
+  the only outcome shown — a dead-end UUID. Added a **"View Candidate"** link to
+  `/candidates/{candidate_id}` (reusing `result.candidate_id`, already in state
+  from the real `POST /v1/resumes` response — no new call) styled with the
+  existing `.uploadButton` class, placed alongside "Upload another resume" in the
+  existing `.actions` row. `.uploadButton` gained `text-decoration: none` +
+  `display: inline-block` so the same class renders identically on a `<Link>` as
+  it already did on a `<button>` — the only CSS behavior change, and harmless to
+  the button's own existing look.
+- **`ApplicationsPage`**: rows with a non-null `interview_assessment` now show a
+  **"View Report"** link to `/reports/{application_id}` inside the same actions
+  `<td>` that already holds Invite/Accept/Reject and already calls
+  `event.stopPropagation()` at the cell level — so the new link needed no extra
+  propagation handling of its own to avoid triggering the row's expand toggle.
+  Brings this page to parity with `CandidateDetailPage`'s applications table,
+  which already had this exact link.
+- **`InterviewsPage` + `ReportsPage`**: the "Job" column, previously plain
+  `{application.job_title}` text, is now a `<Link to={/jobs/${application.job_id}}>`
+  — the same `job_id` `GlobalApplicationResponse` already carries, just not
+  rendered as a link before. Each gets its own `onClick={(event) =>
+  event.stopPropagation()}`, matching the exact pattern already used by the
+  candidate-name link in the same row (both pages' rows are click-to-expand/
+  click-to-navigate, so this was required to preserve that behavior, not optional).
+- **`ReportDetailPage`**: already called `getAllApplications()` once, purely to
+  resolve `candidateId` for the header link — it now also captures `job_id`/
+  `job_title` off that *same* matched row into one more `useState` (`job`, holding
+  `{jobId, jobTitle} | null`) and renders it as a link in the `.meta` row. Zero new
+  API calls, per the task's explicit requirement — the data was already being
+  fetched and simply not fully used.
+- **New shared CSS class per file**: `ApplicationsPage.module.css`,
+  `InterviewsPage.module.css`, `ReportsPage.module.css`, and
+  `ReportDetailPage.module.css` each gained one `.inlineLink` rule — a byte-for-byte
+  copy of `CandidateDetailPage.module.css`'s existing `.inlineLink` (primary color,
+  no underline until hover). CSS Modules are scoped per file in this codebase (no
+  cross-file style imports anywhere), so matching an existing visual language
+  exactly, file-by-file, is what "reuse existing link/button styles" means in this
+  architecture — not a new visual style, the same one already established.
+- **Verification**:
+  - `npm run build`: 100 modules, 0 errors, both on host and inside a real Docker
+    multi-stage rebuild of `recruitment-workflow` (bundle ~682 kB / ~217 kB
+    gzipped — a negligible increase from four small `<Link>`s and their CSS, no
+    new dependency).
+  - Full RWS backend suite: **69/69 passed**, host and inside the rebuilt/recreated
+    `csb-recruitment-workflow` container (unaffected — frontend-only change, no
+    backend file touched).
+  - **Live verification against the real running stack**: real recruiter login,
+    real `GET /v1/applications` (7 applications, 5 with a real
+    `interview_assessment`) — confirmed a real sample row's `job_id`,
+    `application_id`, and `candidate_id` are all present and match the exact
+    template-literal field names used in each new `<Link>` (grepped the source
+    directly: `` `/jobs/${application.job_id}` ``, `` `/jobs/${job.jobId}` ``,
+    `` `/reports/${application.application_id}` ``,
+    `` `/candidates/${result.candidate_id}` `` — all correct). Hard-refresh
+    equivalents (`curl`) against the real production port 8003 for `/reports/
+    {a real application_id}`, `/jobs/{a real job_id}`, `/candidates/{a real
+    candidate_id}`, and every pre-existing route all returned real `200`s. The
+    served bundle was confirmed to actually contain the new "View Report"/"View
+    Candidate" strings. Container logs showed only clean access-log lines.
+  - **Row click/expand behavior preserved**: confirmed by reading the actual
+    `stopPropagation` placement in each file — `InterviewsPage`/`ReportsPage`'s new
+    Job links each carry their own `onClick={(event) => event.stopPropagation()}`,
+    identical to the pre-existing candidate-name link in the same row;
+    `ApplicationsPage`'s new "View Report" link sits inside the actions cell whose
+    `onClick` already stops propagation at the `<td>` level, the same reason the
+    pre-existing Invite/Accept/Reject buttons never needed their own handler.
+  - `git status` after the pass showed exactly the expected ten files: the JSX and
+    `.module.css` for `ResumeUploadPage`, `ApplicationsPage`, `InterviewsPage`,
+    `ReportsPage`, and `ReportDetailPage` — no other page, no shared component, no
+    API module, no router, no sidebar, and no backend file touched.
+
+---
+
+**Phase 21 — V2 design system, app shell, and Dashboard**: **DONE**. A deliberate
+visual-direction change (the user's own explicit instruction, not a continuation
+of the prior audit trail) — a dark "AI recruitment command center" aesthetic,
+scoped this pass to the persistent shell chrome and Dashboard only.
+
+- **The one load-bearing architectural decision this whole phase depends on**:
+  every un-migrated page (everything except Dashboard) renders its own plain text
+  directly onto the implicit light body background, using `--color-text` (a dark
+  color) for contrast — there is no wrapping "light surface" most of that text
+  sits on. Repointing `--color-bg`/`--color-text`/etc. to dark values, or giving
+  `Layout.module.css`'s `.content` its own dark background, would have made every
+  one of those pages' plain headings/labels instantly illegible (dark-on-dark).
+  So `styles/variables.css` gained a **second, fully additive `--v2-*` token
+  set** — nothing under the original `--color-*` names was touched, removed, or
+  repointed. `Layout.module.css`'s `.content` was **deliberately left alone**
+  (still no background of its own) for the same reason. The result is an
+  intentional, visible seam for now: dark `Sidebar`/`TopBar` chrome framing a
+  light content area for every page except Dashboard (which paints its own dark
+  panel over that same light area). This is the expected, disclosed state of a
+  phased visual migration, not a bug — closing that seam page-by-page is exactly
+  what "V2 visual migration — operational pages" (this phase's own `[NEXT]`) is
+  for.
+- **New dependency**: `motion` (^13.2.0, the current name/successor of
+  `framer-motion`, same team/API family), imported via its `motion/react` entry
+  point. Used for: the sidebar's shared-layout active-nav indicator (`layoutId`),
+  page-entrance transitions (`Layout.jsx`, `AnimatePresence`), card entrance/hover
+  (`StatTile`, Dashboard's panels), the animated KPI count-up (`animate()`), and
+  small hover/tap feedback (`TopBar`'s logout button). No other new dependency.
+- **`styles/variables.css`**: additive `--v2-*` block only (deep charcoal/navy
+  surfaces, glass panel colors, a restrained cyan/violet accent pair, dark-tuned
+  status colors, radii/blur/shadow/transition tokens) — see the file's own long
+  comment for the full "why additive" reasoning, condensed above.
+- **`styles/global.css`**: one new `@media (prefers-reduced-motion: reduce)` rule
+  collapsing all CSS `transition`/`animation` durations app-wide — the safety net
+  for CSS-driven motion (hover states, the aurora backdrop). `motion`-driven
+  animations are JS, not CSS, so they don't get caught by this rule and instead
+  each check `useReducedMotion()` individually (see below) — both layers exist
+  because one media query can't reach into an animation library's own
+  requestAnimationFrame loop.
+- **`Sidebar.jsx`/`.module.css`**: full redesign, safe to do unconditionally
+  because this component is entirely self-contained (own `--v2-*` colors, own
+  classes, no page depends on its internals). Dark glass surface, a faint
+  grid + single aurora bloom (`::before`, pure CSS, no image asset), a small
+  gradient brand mark reusing the graph nav icon's own glyph (the app's one
+  signature branding moment), and the active nav item is now a single shared
+  `motion.span` (`layoutId="sidebarActivePill"`) that slides between items on
+  navigation instead of each link drawing its own static highlight — the "nav
+  active state" motion this phase's brief named specifically. Reduced-motion:
+  the pill's spring transition collapses to `{ duration: 0 }` via
+  `useReducedMotion()`.
+- **`TopBar.jsx`/`.module.css`**: same self-contained redesign; the logout button
+  is a `motion.button` with a small `whileHover`/`whileTap` scale, gated the same
+  way.
+- **`Layout.jsx`**: `.content`'s only change is what's *inside* it — `<Outlet />`
+  is now wrapped in `<AnimatePresence mode="wait"><motion.div key={location.
+  pathname}>` for a plain opacity/8px-offset page-entrance fade, applied at the
+  shell level so **every route gets it for free**, including the ten pages this
+  phase doesn't otherwise touch. `mode="wait"` (full exit before the new page
+  enters) is deliberate while pages have such different layouts (a light 760px
+  page next to Dashboard's dark full-bleed panel) — simultaneous enter/exit would
+  visibly jump. One disclosed side effect, industry-standard for animated route
+  transitions (Next.js App Router, Astro view transitions, etc. all do the same):
+  keying on `location.pathname` means navigating between two different dynamic
+  IDs on the same route (e.g. one job to another) now fully remounts that page
+  instead of relying on its own `useEffect([id])` to refetch in place — strictly
+  safer (guarantees no leftover state from the previous ID), at the cost of a
+  brief loading flash on that specific navigation pattern, which this app's
+  actual flows rarely exercise directly (job-to-job or candidate-to-candidate
+  navigation always goes through an intermediate list page today).
+- **`StatusBadge.jsx`/`.module.css` and `EmptyState.jsx`/`.module.css`**: both
+  heavily reused by still-light pages (`ApplicationsPage`, `InterviewsPage`,
+  `JobDetailPage`, `CandidateDetailPage`, `MatchGraph`, `AssessmentPanel`,
+  `CandidatesPage`, `JobsListPage`, `GraphPage`, `ReportsPage` — grepped to
+  confirm every call site before touching either file), so neither got its
+  default look changed. Both gained one **additive, opt-in `variant="glass"`
+  prop**, defaulting to `undefined` (renders exactly as before); Dashboard is the
+  only caller that passes it. Verified every existing call site passes no
+  `variant` at all, so every one of those ten pages renders pixel-identical to
+  before this phase.
+- **`StatTile.jsx`/`.module.css`**: grepped and confirmed `DashboardPage` is its
+  *only* consumer, so — unlike StatusBadge/EmptyState — this one was redesigned
+  directly in place, no variant needed. Now a glass card with a restrained
+  cyan/violet top accent line (alternated per tile), a staggered entrance
+  (`delay` prop, one `motion` moment), a hover lift, and an animated count-up
+  number (`motion`'s imperative `animate()` tweening from the previous value to
+  the new one) — the "KPI/stat transitions" this phase's brief named. Reduced
+  motion skips straight to the final value instead of tweening.
+- **`PageHeader.jsx` was not touched** — Dashboard no longer uses it (see below),
+  and every other page still needs its current light-theme look unchanged.
+- **`DashboardPage.jsx`/`.module.css`**: full rebuild into an asymmetric bento
+  layout, using **only data this page already fetched before this pass** — no
+  new API call, no invented number:
+  - A bespoke hero (not the shared `PageHeader`) with a real one-line summary
+    derived from already-fetched counts ("N candidates in the pool · M jobs
+    posted"), omitted entirely while loading rather than showing a guessed zero.
+  - Four `StatTile`s (unchanged counts: total candidates, total jobs, in
+    pipeline, interviews completed) filling row 1 of a 4-column grid.
+  - A "Pipeline by status" panel: a new segmented distribution bar
+    (`StatusDistributionBar`) whose segment widths are computed directly from the
+    same `statusCounts` array the legend below it renders as text — one
+    calculation, two presentations, never a second/divergent number. A
+    zero-count status renders no segment (not a zero-width sliver); an empty
+    pipeline shows `EmptyState variant="glass"` instead of a blank bar.
+  - "Recent activity", restyled, same real derivation as before (unchanged logic,
+    only the visual treatment and its `EmptyState variant="glass"` empty case are
+    new).
+  - A "Knowledge Graph" teaser card (`GraphTeaser`): the "subtle visual
+    connection to the graph feature" this phase's brief asked for — a small
+    decorative node/edge glyph (echoing `MatchGraph`'s own candidate/job node
+    styling) and a link to `/graph`. Deliberately shows **no number of its own**:
+    Dashboard does not fetch graph data (no new API call), so there is nothing
+    real to count here without one — the honest choice given this phase's own "no
+    fake metrics" requirement, over fabricating or mis-scoping a figure.
+  - Quick actions (Upload Resume / New Job / View Candidates) restyled as a
+    gradient-filled primary + two glass secondary buttons, same three links as
+    before, unchanged destinations.
+- **Verification**:
+  - `npm run build`: 504 modules (up from ~100 — `motion`'s own internal module
+    graph, not new page count), 0 errors, both on host and inside a real Docker
+    multi-stage rebuild of `recruitment-workflow`. Bundle grew from ~682 kB
+    (~217 kB gzip) to **~823 kB (~264 kB gzip)** — a real, disclosed cost of
+    adding a full animation library, not hidden; a legitimate trade for the
+    motion this phase explicitly asked for, not incidental bloat.
+  - Full RWS backend suite: **69/69 passed**, host and inside the rebuilt/
+    recreated `csb-recruitment-workflow` container (unaffected — no backend file
+    touched).
+  - **Live production-serving verification** (real `curl` against port 8003,
+    same technique as every prior phase): `/`, `/candidates`, `/upload`, `/jobs`,
+    `/interviews`, `/reports`, `/graph`, and `/health` all returned real `200`s.
+    The served JS bundle was fetched directly and confirmed to contain this
+    phase's own authored strings (`sidebarActivePill`, `"Command Center"`, the
+    graph-teaser copy) — not just a build that happened to succeed. The served
+    CSS was confirmed to contain the new `--v2-*` tokens, the `feTurbulence`
+    noise data-URI, the `prefers-reduced-motion` rule, and `backdrop-filter`.
+  - **Live data correctness** (real recruiter login against the real running
+    stack): real `GET /v1/candidates` (6), `GET /v1/jobs` (4), `GET
+    /v1/applications` (7 — 3 still in pipeline, 2 interviews completed) — the
+    exact same three calls Dashboard has always made, confirming this pass
+    changed presentation only, not data. Container logs showed only clean
+    access-log/external-call lines, no errors, no PII.
+  - **Every existing `StatusBadge`/`EmptyState` call site** across the app was
+    grepped and confirmed to pass no `variant` prop, so the "additive, not
+    breaking" claim above is verified, not asserted.
+  - **No visual/pixel inspection was possible** — no browser is available in this
+    environment, the same disclosed gap named throughout this project's history
+    (Phase 9, the knowledge-graph phases, etc.). Verification here is therefore
+    build success + live data correctness + direct source confirmation of every
+    class name referenced in JSX actually being defined in its `.module.css` +
+    confirmation that no existing call site's behavior changed — not a claim that
+    the redesign was seen rendered.
+  - `git status` after the pass showed exactly the expected files: `package.json`/
+    `package-lock.json` (the one new dependency), `components/{Sidebar,TopBar,
+    StatTile,StatusBadge,EmptyState}.jsx` + their `.module.css`,
+    `pages/{Layout,DashboardPage}.jsx` + `DashboardPage.module.css`, and
+    `styles/{variables,global}.css` — no other page, no router, no API module,
+    and no backend file touched.
+- **Not done this pass, deliberately** (per the task's own scope): no other page
+  redesigned, no custom webfont added (a well-tuned system-font type scale was
+  judged sufficient for "stronger typography" without adding a network dependency
+  a live demo venue might not have reliably — see §21), no light/dark toggle (this
+  is a one-way visual-direction change, not a themeable mode), no change to
+  `--sidebar-width` or the shell's grid structure.
+
+---
+
 ## 21. Known limitations / deliberately deferred
 
 - One recruiter/admin account (the existing seeded account); no registration.
@@ -2594,6 +2869,23 @@ file changed, no new dependency, no backend call, no new API call.
   inside `MatchGraph` itself via `showResetButton`) rather than adding one to
   `CandidateDetailPage`'s own page header, since that header is the candidate's
   name/email, not a toolbar for one section among three.
+- **Phase 21 (V2 design system) — the dark/light seam is real and expected, not a
+  bug.** Sidebar/TopBar are now dark; every page's own content area except
+  Dashboard is still the original light theme (see Phase 21's own §20 entry for
+  exactly why `--color-*`/`.content` couldn't be touched this pass). Until
+  "V2 visual migration — operational pages" (this phase's own `[NEXT]`) migrates
+  the rest, there is a visible hard edge between the dark chrome and a light page
+  — do not "fix" this by tweaking `--color-*` or `Layout.module.css`'s `.content`
+  in isolation; that would break every un-migrated page's contrast (dark text on
+  what would become a dark background). The real fix is migrating each page, one
+  at a time, the same way Dashboard was.
+- **Phase 21 — no custom webfont was added for "stronger typography."** A
+  well-tuned system-font type scale (size/weight/letter-spacing/tabular-nums)
+  was judged sufficient, deliberately avoiding a Google-Fonts-style network
+  dependency a live demo venue's network might not load reliably or quickly. If a
+  future session judges a real display font is worth that risk, that's a
+  reasonable call to revisit — it wasn't an oversight here, it was weighed and
+  declined for this pass.
 
 ---
 
@@ -2643,53 +2935,121 @@ Before starting frontend work:
 
 ## 24. [NEXT]
 
-**Phases 1–19 are all done** — every screen from the original admin-dashboard
+**Phases 1–21 are all done** — every screen from the original admin-dashboard
 redesign proposal, the candidate-detail cross-linking hub, the whole-dataset
-knowledge graph at `/graph` (now with interactive legend filtering, a minimum-score
-filter, and candidate/job search), the candidate-detail ego graph reusing the same
-`MatchGraph` engine, and a visually-polished, layout-stable version of both. Full
-detail for each phase is in §19/§20, not restated here.
+knowledge graph at `/graph` (interactive legend filtering, a minimum-score filter,
+candidate/job search), the candidate-detail ego graph reusing the same `MatchGraph`
+engine, a visually-polished layout-stable version of both, no remaining dead-end/
+missing cross-links between any of the eleven production screens, and — as of
+Phase 21 — a new dark "AI recruitment command center" (V2) visual direction
+applied to the persistent shell (`Sidebar`/`TopBar`/`Layout`) and `DashboardPage`.
+Full detail for each phase is in §19/§20, not restated here.
 
-**[NEXT] Optional 3D presentation mode — implementation decision/prototype audit.**
-The Phase 18 visual-refinement proposal (tracked here) recommended 3D only as an
-opt-in, lazy-loaded "presentation mode" layered on top of the working 2D graph —
-never the default, never a replacement — justified mainly by this project's own
-demo-jury context (CLAUDE.md), not by a real recruiter-workflow need a bipartite
-candidate/job graph actually has in 2D. This task is to make (and prove) that
-decision concretely, not just re-argue it:
+**Two chat-response-only audits happened between Phase 19 and Phase 20, neither
+touched code or this file at the time** (both explicitly scoped that way), and are
+recorded here since their conclusions still matter:
 
-- **Decide, don't re-debate, whether to build it at all.** The proposal's own
-  reasoning (a bipartite graph doesn't suffer the edge-crossing problem 3D solves;
-  the case for 3D here is close to entirely visual spectacle for the live demo) is
-  already on record — this task should either commit to a scoped prototype or
-  explicitly decide not to build one, with a real reason tied to this project's
-  actual timeline/risk tolerance, not a re-run of the same tradeoff analysis.
-- **If prototyping**: `react-force-graph`'s `ForceGraph3D` export (wraps three.js +
-  `d3-force-3d`), per the proposal's own library pick — preferred over
-  `@react-three/fiber`/`drei` because it gives drag/zoom/orbit/click handling out of
-  the box instead of requiring hand-written camera/physics code. Reuse the exact
-  same `{jobs, edges}` from `GET /v1/graph/candidates-jobs` plus `GET /v1/candidates`
-  — no new backend call — through a small new adapter (sibling to
-  `buildGraphElements`, not a replacement of it) reshaping into `{nodes, links}`.
-  Carry the *exact* same visual encoding 2D already uses (job vs. candidate color,
-  qualified/disqualified color, score-driven width/opacity) rather than inventing a
-  second visual vocabulary.
-- **Bundle size is not optional to address**: three.js alone is typically
-  500–600 kB+ gzipped on top of the ~217 kB the 2D graph already costs (already
-  past Vite's 500 kB warning threshold per §21). Any prototype **must** be
-  lazy-loaded (`React.lazy`/dynamic import, only fetched when a viewer actually
-  toggles 3D mode) — nobody visiting `/graph` in its normal 2D form should pay that
-  cost. Verify this with a real build, not an assumption.
-- **Demo risk is the actual crux, not a footnote**: WebGL introduces a real new
-  failure mode (older/integrated GPUs, unfamiliar demo-room hardware, driver
-  quirks) that the current pure-canvas 2D rendering doesn't have. Part of this
-  task's own "audit" is being honest about whether that risk is worth taking for a
-  4–6 minute jury demo, or whether the working, reliable 2D graph is simply the
-  better choice to present live — that's a legitimate possible conclusion of this
-  task, not a failure to complete it.
-- Out of scope regardless of the decision: replacing 2D, any backend/persistence
-  change, skill nodes, any change to how `qualified`/`final_score` are computed.
+- **Optional 3D presentation mode — decision**: **NO-GO for now.** A real disposable
+  prototype (outside the repo, never integrated) measured `react-force-graph`'s
+  `ForceGraph3D` at a real **+512 kB gzipped** (confirmed lazy-loadable, so a normal
+  2D visit wouldn't pay it), but also found the library **cannot run at all outside
+  a real browser** (`window is not defined` at import time in plain Node) — unlike
+  Cytoscape, there is no headless verification path for it in this environment at
+  all. Combined with the current dataset (4 jobs, a handful of candidates) being
+  too small for 3D to show anything 2D doesn't already show clearly, and a live
+  demo being the wrong place to introduce a first WebGL dependency, the conclusion
+  was to keep 2D as the only mode. Not revisited unless a future session has a
+  specific reason to.
+- **Final unified admin-dashboard UX audit**: reviewed all eleven production
+  screens end-to-end. Overall verdict was "solid and demo-ready as-is" — no
+  structural or navigational confusion found. It named four concrete, cheap
+  cross-link gaps (each a page already holding the field it needed and simply not
+  linking it) as the one worthwhile polish pass; **Phase 20 (above) implemented all
+  four.** The audit's other, lower-priority observations (terminology nits like
+  "talent pool" vs. "candidate pool", inconsistent page max-widths, no explicit
+  "back to list" link on a few detail pages) were deliberately left alone as not
+  worth demo-prep time — do not "clean these up" speculatively; they were
+  considered and explicitly deprioritized, not missed.
 
-`handoff.md`'s own knowledge-graph history (the design audit and the
-`GET /v1/graph/candidates-jobs` endpoint) has no action needed for this task —
-it's frontend-only, same as every graph phase since the endpoint landed.
+**A note on sequencing**: Phase 20's own `[NEXT]` was "Final production/demo
+readiness audit — whole system, no feature work" (its full scope is preserved
+below, unchanged) — the user then explicitly redirected to the V2 redesign
+instead (Phase 21). That readiness audit is **postponed, not cancelled**: it
+should still run once the V2 migration reaches a stable point (either fully
+migrated, or a deliberate decision to demo the mixed dark/light state as-is), not
+be silently dropped.
+
+**[NEXT] V2 visual migration — operational pages.** Phase 21 proved the V2
+design system on the shell + Dashboard; this task extends it to the remaining ten
+pages (`CandidatesPage`, `CandidateDetailPage`, `ResumeUploadPage`,
+`JobsListPage`, `JobDetailPage`, `ApplicationsPage`, `InterviewsPage`,
+`ReportsPage`, `ReportDetailPage`, `GraphPage`/`MatchGraph`), closing the dark/
+light seam Phase 21 deliberately left open (see §21's own note on why it exists).
+Concrete guidance carried over so it doesn't need to be re-derived:
+
+- **Migrate `--color-*` usage to `--v2-*` page by page**, not by repointing the
+  token values globally — the whole reason Phase 21 added a *second* token layer
+  instead of changing the first. Once every page reads `--v2-*`, a later cleanup
+  task can fold `--v2-*` into `--color-*` and delete the old light values
+  entirely (see `variables.css`'s own comment) — that folding step is explicitly
+  **not** this task's job; do one page at a time and verify each before moving on.
+- **Flip `StatusBadge`/`EmptyState` to `variant="glass"`** on each page as it
+  migrates — the prop already exists and is already proven (Phase 21's own
+  verification confirmed every current call site passes no `variant` and renders
+  unchanged); this task's job is changing call sites' `variant` prop and each
+  page's own surrounding CSS, not the shared components themselves again unless a
+  real gap surfaces.
+- **`PageHeader`** currently has no dark variant at all (Phase 21 didn't need
+  one, since Dashboard bypassed it with a bespoke hero) — this task will likely
+  need to add one, the same additive-variant pattern already used successfully
+  for `StatusBadge`/`EmptyState`, rather than changing its default look out from
+  under whichever pages haven't migrated yet in the same pass.
+- **`MatchGraph`/`GraphPage`** deserve extra care: `MatchGraph.jsx`'s
+  `buildStylesheet()` already reads real computed CSS custom property values
+  (`getComputedStyle(document.documentElement)`) for Cytoscape's own node/edge
+  colors — migrating `GraphPage`'s surrounding chrome to `--v2-*` without also
+  reconsidering those specific token reads could leave the graph canvas's own
+  colors mismatched against its new dark surroundings. Check this specifically,
+  don't assume the existing token-read mechanism "just works" against new values
+  without verifying.
+- Do **not** migrate everything in one sitting — pick one page (or a small
+  related group, e.g. Applications + Interviews + Reports, which already share a
+  lot of visual language), migrate and verify it fully, update this file, and
+  stop, the same discipline every other phase in this project has followed.
+- Once every page is migrated, the *actual* next task after that is the readiness
+  audit named above — don't let it get lost.
+
+---
+
+*(Preserved for when the readiness audit above is actually run — do not delete
+this until that task starts.)* **Final production/demo readiness audit — whole
+system, no feature work.** With every planned feature done, this task is a last
+end-to-end pass across the *whole* system — both backends and the frontend
+together — treating it as "would this survive a live 4–6 minute demo and a
+jury's questions right now," not as a place to design anything new. Concretely:
+
+- **Live, from-scratch verification**: a real `docker compose down` + `up` of the
+  entire stack (all four services + Postgres), then walk the actual demo sequence
+  the UX audit itself proposed (Dashboard → Upload → Candidate Detail → New Job →
+  Job Detail → Applications → Interviews → Reports → Report Detail → Knowledge
+  Graph) end to end against the freshly-started stack, confirming every step still
+  works from cold — not from an environment that's accumulated hours of prior
+  sessions' state.
+- **Check `handoff.md`'s own Known Limitations** for anything still marked
+  unresolved that a jury could plausibly hit live (e.g. any lingering demo-data
+  hygiene notes) and confirm which of them still apply against real current data.
+- **A final `.env`/secrets/config sanity check** — nothing demo-breaking left
+  half-configured, no stale seeded credentials that changed, no service left
+  pointing at the wrong port after all the container rebuilds this project's own
+  history has been through.
+- **Confirm test counts and green status one more time, across every service**,
+  not just the frontend's own — a true "is everything actually still green"
+  snapshot to close out the project, not a repeat of any single phase's own
+  verification.
+- Explicitly **not** in scope: any new page, any new endpoint, any further visual
+  redesign, any of the UX audit's deprioritized items, 3D. This task finds and
+  fixes only what would genuinely embarrass the demo — it does not invent new work.
+
+`handoff.md` should be updated by this next task if (and only if) it finds a real
+cross-service issue; if it finds nothing beyond frontend-only observations, this
+file (`FRONTEND_HANDOFF.md`) is the right place, per §23's own rule.

@@ -11,6 +11,19 @@
   text-decoration: underline;
 }
 
+/* Same visual treatment as CandidateDetailPage's own .inlineLink -- used here for
+   the job-title link in .meta (candidateLink above is deliberately different: it
+   sits inside the page title and inherits that title's own color/weight). */
+.inlineLink {
+  color: var(--color-primary);
+  font-weight: 500;
+  text-decoration: none;
+}
+
+.inlineLink:hover {
+  text-decoration: underline;
+}
+
 .backLink {
   flex-shrink: 0;
   align-self: flex-start;

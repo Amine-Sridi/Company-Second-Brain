@@ -78,6 +78,10 @@
   padding: var(--spacing-2) var(--spacing-4);
   font-size: var(--font-size-md);
   font-weight: 600;
+  /* This class is also reused on the success screen's "View Candidate" <Link> --
+     text-decoration/display reset so it renders identically to the <button> use. */
+  text-decoration: none;
+  display: inline-block;
   transition: background-color var(--transition-fast);
 }
 
