@@ -69,6 +69,7 @@ export default function JobDetailPage() {
             View Applications
           </Link>
         }
+        variant="glass"
       />
 
       {loading && <p className={styles.status}>Loading candidates…</p>}
@@ -81,6 +82,7 @@ export default function JobDetailPage() {
 
       {!loading && !error && matches.length === 0 && (
         <EmptyState
+          variant="glass"
           title="No candidates matched"
           description="This job has no matched candidates yet."
         />
@@ -177,7 +179,7 @@ function CandidateRow({ match }) {
           <ScoreBar value={match.final_score} />
         </td>
         <td>
-          <StatusBadge tone={match.qualified ? "success" : "neutral"}>
+          <StatusBadge variant="glass" tone={match.qualified ? "success" : "neutral"}>
             {match.qualified ? "Qualified" : "Not qualified"}
           </StatusBadge>
         </td>

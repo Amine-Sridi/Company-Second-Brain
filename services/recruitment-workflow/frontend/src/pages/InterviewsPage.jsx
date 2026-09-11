@@ -74,6 +74,7 @@ export default function InterviewsPage() {
       <PageHeader
         title="VoiceHR Interviews"
         subtitle="Every application's interview progress, across every job."
+        variant="glass"
       />
 
       {loading && <p className={styles.status}>Loading interviews…</p>}
@@ -86,6 +87,7 @@ export default function InterviewsPage() {
 
       {!loading && !error && applications.length === 0 && (
         <EmptyState
+          variant="glass"
           title="No applications yet"
           description="Select a candidate from a job's ranked list to get started."
         />
@@ -173,7 +175,7 @@ function InterviewRow({ application }) {
           </Link>
         </td>
         <td>
-          <StatusBadge tone={STATUS_TONE[application.status] ?? "neutral"}>
+          <StatusBadge variant="glass" tone={STATUS_TONE[application.status] ?? "neutral"}>
             {STATUS_LABELS[application.status] ?? application.status}
           </StatusBadge>
         </td>

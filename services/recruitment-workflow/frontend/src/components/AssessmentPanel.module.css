@@ -1,6 +1,10 @@
+/* V2 design system, Phase 2 -- direct redesign, all consumers migrated in this
+   same pass (see AssessmentPanel.jsx). */
+
 .assessment {
-  background: var(--color-bg);
-  border-radius: var(--radius);
+  background: var(--v2-surface);
+  border: 1px solid var(--v2-border);
+  border-radius: var(--v2-radius);
   padding: var(--spacing-3);
   display: flex;
   flex-direction: column;
@@ -19,12 +23,12 @@
   font-size: var(--font-size-xs);
   text-transform: uppercase;
   letter-spacing: 0.02em;
-  color: var(--color-text-muted);
+  color: var(--v2-text-muted);
   font-weight: 600;
 }
 
 .inconclusiveNote {
-  color: var(--color-warning);
+  color: var(--v2-warning);
   font-size: var(--font-size-sm);
 }
 
@@ -39,14 +43,17 @@
   justify-content: space-between;
   font-size: var(--font-size-sm);
   padding: 2px 0;
+  color: var(--v2-text);
+  font-variant-numeric: tabular-nums;
 }
 
 .assessmentRow span:first-child {
-  color: var(--color-text-muted);
+  color: var(--v2-text-muted);
+  font-variant-numeric: initial;
 }
 
 .assessmentFailedText {
   margin: 0;
   font-size: var(--font-size-base);
-  color: var(--color-text-muted);
+  color: var(--v2-text-muted);
 }

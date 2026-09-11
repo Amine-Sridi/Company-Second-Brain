@@ -91,6 +91,7 @@ export default function JobsListPage() {
             {showForm ? "Cancel" : "New Job"}
           </button>
         }
+        variant="glass"
       />
 
       {showForm && (
@@ -178,7 +179,7 @@ export default function JobsListPage() {
       )}
 
       {!loading && !error && jobs.length === 0 && (
-        <EmptyState title="No jobs yet" description="Create one to get started." />
+        <EmptyState variant="glass" title="No jobs yet" description="Create one to get started." />
       )}
 
       {!loading && !error && jobs.length > 0 && (

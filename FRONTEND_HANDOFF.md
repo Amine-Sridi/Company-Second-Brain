@@ -1030,14 +1030,78 @@ still expect to run it once the V2 migration (this phase plus however many
 "operational pages" phases follow) is complete, per this file's own §23 workflow,
 not skip it.
 
+- [x] **Phase 22 — V2 visual migration, slice 1 (Applications / Interviews /
+  Reports / Report Detail)** *(the first of the "operational pages" migration
+  `[NEXT]` named — one cohesive group chosen specifically because `ReportsPage`
+  links directly into `ReportDetailPage`, so migrating one without the other
+  would create a jarring dark→light drill-down; `AssessmentPanel` (sole consumer:
+  exactly these three pages) redesigned directly in place, same reasoning as
+  `StatTile` in Phase 1; `PageHeader` gained the same opt-in `variant="glass"`
+  pattern already proven on `StatusBadge`/`EmptyState` — no backend change, the
+  other six un-migrated pages are untouched — see §20/§21/§24)*
+
+- [x] **Phase 23 — V2 visual migration, slice 2 (Job Detail / Candidate Detail)**
+  *(picked up on a bare "continue" using the exact guidance Phase 22 itself left
+  in §24 — these two specifically, not the list pages, because Phase 22 had
+  left them each linking into a now-dark page (`JobDetailPage` → `Applications
+  Page`, `CandidateDetailPage` → `ReportDetailPage`), a new drill-down seam Phase
+  22 itself flagged; `CandidateDetailPage`'s embedded `MatchGraph` ego graph is
+  deliberately **not** themed (still reads V1 tokens, same as `GraphPage`) — a
+  disclosed, bounded exception, not an oversight — see §20/§21/§24)*
+
+- [x] **Phase 24 — V2 visual migration, slice 3 (Jobs List / Candidates / Resume
+  Upload)** *(picked up on a bare "continue" using the exact guidance Phase 23
+  left in §24 — `JobsListPage` and `CandidatesPage` chosen because their rows/
+  cards link directly into `JobDetailPage`/`CandidateDetailPage`, both V2 since
+  Phase 23, the same "list is the light side of an already-dark seam" pattern
+  that motivated Phase 23's own scope; `ResumeUploadPage` folded in as a small,
+  standalone, low-risk third page rather than its own separate slice; a
+  pre-existing CSS bug (`.resetButton`'s leftover standalone `margin-top`
+  misaligning it against `.uploadButton` once both share `.actions` as a flex
+  row, dating to the earlier navigation-polish pass) was fixed as part of
+  rewriting this file's CSS, not as a separate change — no backend change, only
+  `GraphPage`/`MatchGraph` remain on V1 — see §20/§21/§24)*
+
+- [x] **Phase 25 — V2 visual migration, final slice (`GraphPage` / `MatchGraph`)**
+  *(picked up on a bare "continue" using the guidance Phase 24 left in §24 — the
+  last piece. `MatchGraph.jsx`'s `buildStylesheet()` reads real computed CSS
+  custom properties via `getComputedStyle()` since Cytoscape draws to a
+  `<canvas>`, not the DOM, and cannot use CSS classes for fill colors; that
+  function now reads `--v2-*` token names directly instead of `--color-*`.
+  **Deviation from this phase's own prior `[NEXT]` guidance, made and justified
+  during implementation, not carried over unexamined**: that guidance speculated
+  a `theme`/`variant` param on `buildStylesheet()` so `GraphPage` and
+  `CandidateDetailPage`'s ego graph could independently pick V1 or V2 colors.
+  That speculation assumed one call site might stay V1 — but this same pass
+  migrates `GraphPage` itself, so both of `MatchGraph`'s real call sites land on
+  V2 together and no V1 consumer is left needing the old token names. Adding a
+  toggle for a branch nothing would ever take is exactly the unnecessary
+  abstraction this project's own CLAUDE.md warns against, so `buildStylesheet()`
+  was redesigned directly in place instead — the same "direct redesign, not an
+  opt-in variant" pattern already used for `StatTile`/`AssessmentPanel` once all
+  real consumers were confirmed migrating together. `MatchGraph.module.css`
+  (canvas chrome, legend, filter row, search, detail panel) got the same direct
+  `--v2-*` redesign; all 4 internal `<StatusBadge>` calls flipped to
+  `variant="glass"`. `GraphPage.jsx`/`.module.css` got the same `PageHeader`/
+  `EmptyState` `variant="glass"` flip and "V2 page panel" treatment as every
+  other migrated page. `CandidateDetailPage.jsx`'s `<MatchGraph>` call site
+  needed no prop change (no toggle exists) — only its explanatory comment was
+  updated to say why. No backend change, no new dependency, no logic in
+  `buildGraphElements()`/click-highlight/layout touched — only the token names
+  `buildStylesheet()` reads and 4 `StatusBadge` props — see §20/§21/§24)*
+
 **The frontend now has every screen named in the original admin-dashboard redesign
 proposal, the candidate-detail cross-linking hub, the whole-dataset knowledge graph
 with interactive filtering/search, a per-candidate ego graph reusing the same
 engine, a visually-polished layout-stable version of both, no remaining
-dead-end/missing cross-links from the final UX audit, and — as of Phase 21 — a new
-V2 dark "command center" visual direction applied to the app shell and Dashboard,
-with every other page still on the original V1 look until its own migration
-phase.** All twenty-one phases done. §24 names the next bounded task.
+dead-end/missing cross-links from the final UX audit, and the V2 dark "command
+center" visual direction applied to every one of the eleven production screens:
+the app shell, `DashboardPage` (Phase 21), Applications/Interviews/Reports/Report
+Detail (Phase 22), Job Detail/Candidate Detail (Phase 23), Jobs List/Candidates/
+Resume Upload (Phase 24), and now the Knowledge Graph (Phase 25).** The
+dark/light visual seam that every phase since 22 tracked opening and closing is
+now fully closed — **no page anywhere in the app still renders the original V1
+light theme.** All twenty-five phases done. §24 names the next bounded task.
 
 Future sessions: update the checkboxes and the relevant page/section status above as
 each phase lands. Do not duplicate this checklist elsewhere or restate history that's
@@ -2726,6 +2790,360 @@ scoped this pass to the persistent shell chrome and Dashboard only.
 
 ---
 
+**Phase 22 — V2 visual migration, slice 1 (Applications / Interviews / Reports /
+Report Detail)**: **DONE**. First slice of Phase 21's own `[NEXT]`
+("V2 visual migration — operational pages"), picked up on a bare "continue" with
+no further instruction — the scope decision below is this session's own, made
+using the guidance Phase 21 already left in §24, not a re-litigation of it.
+
+- **Why these four pages, together, as the first slice**: `ReportsPage` links
+  directly into `ReportDetailPage` (`/reports/:id`) — migrating one without the
+  other would swap *which* page has the dark/light seam rather than closing it,
+  and specifically make it worse in the one case that's an actual drill-down
+  (list → detail) rather than a sidebar jump between unrelated sections.
+  `ApplicationsPage` and `InterviewsPage` were folded into the same slice because
+  they already share nearly all of their visual language with `ReportsPage`
+  (identical table/row/status-badge structure) and both use `AssessmentPanel`,
+  whose only three consumers are exactly these three pages — migrating them
+  separately would have meant restyling `AssessmentPanel` (or worse, giving it an
+  opt-in variant it will never need a light-theme fallback for) more than once.
+- **`PageHeader.jsx`/`.module.css`**: gained the same additive, opt-in
+  `variant="glass"` pattern Phase 21 already proved on `StatusBadge`/
+  `EmptyState` — every page not in this slice passes no `variant` and is
+  unaffected. `.title` itself needed no override at all: it has never set its own
+  color, only ever inherited it from whatever page container it sits in, which is
+  exactly why it "just works" once a migrated page's own `.page` class sets
+  `color: var(--v2-text)` — only `.subtitle` (which does hard-code a color)
+  needed the variant's own rule.
+- **`AssessmentPanel.jsx`/`.module.css`**: grepped and confirmed its *only* three
+  consumers (`ApplicationsPage`, `InterviewsPage`, `ReportDetailPage`) are all
+  migrated in this same pass, so — like `StatTile` in Phase 1 — this is a direct
+  redesign in place, not a variant; there is no remaining light-theme call site
+  to preserve. Its own internal `StatusBadge` call now also passes
+  `variant="glass"`.
+- **`ApplicationsPage`/`InterviewsPage`/`ReportsPage`/`ReportDetailPage`**: each
+  gained the same "V2 page panel" treatment already established by
+  `DashboardPage.module.css` in Phase 1 (an opaque dark background, border,
+  radius, and shadow, `color: var(--v2-text)`, plus the identical aurora/grid/
+  noise `::before`/`::after` backdrop) — safe for the same reason as Dashboard: each
+  page paints its own dark surface *over* the still-untouched light area
+  `Layout.module.css`'s `.content` would otherwise show, rather than requiring
+  `.content` itself to change. **This exact block is now duplicated across five
+  files** (Dashboard + these four) — flagged explicitly in each file's own
+  comment as the point a shared global utility class would normally get
+  extracted, per this project's "promote once real duplication is observed"
+  rule; deliberately not done yet in this pass (see Not done, below). Every table,
+  status badge, link, and action button in all four pages was re-tinted to
+  `--v2-*` tokens, preserving every existing semantic distinction (invite=
+  gradient primary, accept=success, reject=danger-outlined, candidate/job links=
+  cyan) — grepped afterward to confirm zero remaining `var(--color-*)`
+  references in any of the five touched CSS files.
+  - `ReportDetailPage`'s native `<audio>` recording player gained
+    `color-scheme: dark`, hinting supporting browsers (Chromium/Firefox) to
+    render its own native chrome (play button, scrubber, volume) in a
+    dark-appropriate palette — a one-line, zero-risk improvement, not a full
+    custom-player rebuild (which would be well past this pass's own scope for
+    one `<audio>` element).
+- **Verification**:
+  - `npm run build`: 504 modules, 0 errors, both on host and inside a real Docker
+    multi-stage rebuild of `recruitment-workflow`. Bundle grew only in CSS
+    (~50 kB → ~55 kB / ~8.4 kB gzipped) — JS was essentially unchanged, as
+    expected: this pass only added a `variant` prop and retinted existing CSS,
+    it introduced no new component logic or dependency.
+  - Full RWS backend suite: **69/69 passed**, host and inside the rebuilt/
+    recreated `csb-recruitment-workflow` container (unaffected — no backend file
+    touched).
+  - **Live production-serving verification** (real `curl` against port 8003,
+    same technique as every prior phase): `/`, `/candidates`, `/upload`, `/jobs`,
+    `/interviews`, `/reports`, `/graph`, and `/health` all returned real `200`s.
+    The served CSS was confirmed to contain `color-scheme:dark` and 35 real
+    usages of `--v2-cyan`; the served JS was confirmed to contain
+    `InterviewsPage`'s own real subtitle text.
+  - **Live data correctness** (real recruiter login against the real running
+    stack): real `GET /v1/applications` returned 7 applications, 5 with a real
+    `interview_assessment` (reportable); a real `/reports/{a real
+    application_id}` hard-refresh returned a real `200`. Container logs showed
+    only clean access-log lines, no errors, no PII.
+  - `git status` after the pass showed exactly the expected files:
+    `components/{AssessmentPanel,PageHeader}.jsx` + their `.module.css`, and
+    `pages/{ApplicationsPage,InterviewsPage,ReportsPage,ReportDetailPage}.jsx` +
+    their `.module.css` — no other page, no router, no API module, no shared
+    component beyond the two named above, and no backend file touched.
+  - **No visual/pixel inspection was possible**, same disclosed environment gap
+    as Phase 21 and every graph phase before it — verification here is build
+    success + live data correctness + a direct grep confirming zero leftover
+    `--color-*` references in any touched CSS file, not a claim that the
+    redesign was seen rendered.
+- **Not done this pass, deliberately**: the six remaining pages
+  (`CandidatesPage`/`CandidateDetailPage`/`ResumeUploadPage`/`JobsListPage`/
+  `JobDetailPage`/`GraphPage`) — left for later slices, per Phase 21's own "one
+  page or small related group at a time" guidance; the "V2 page panel"
+  background block was **not** extracted into a shared utility despite now
+  appearing five times — explicitly flagged as the point that would normally
+  happen, not done reflexively in the same pass as using it a fifth time; no
+  change to `--v2-*` token values themselves.
+
+---
+
+**Phase 23 — V2 visual migration, slice 2 (Job Detail / Candidate Detail)**:
+**DONE**. Second slice of Phase 21's own `[NEXT]`, picked up on a bare
+"continue" — the scope decision below follows the guidance Phase 22 itself left
+in §24, not a fresh re-derivation.
+
+- **Why these two pages, specifically, next**: Phase 22 migrated Applications/
+  Reports without their still-light parent pages, which meant `JobDetailPage`
+  (still V1) linked into the now-V2 `ApplicationsPage`, and `CandidateDetailPage`
+  (still V1) linked into the now-V2 `ReportDetailPage` — two *new* dark/light
+  drill-down seams, called out explicitly in Phase 22's own §24 entry. This
+  slice closes both by migrating the two pages that were the light side of each
+  seam, rather than starting with the list pages that don't yet have this
+  specific problem.
+- **`JobDetailPage`/`.module.css`**: same "V2 page panel" treatment as every
+  Phase 22 page, `PageHeader`/`StatusBadge`/`EmptyState` all flipped to
+  `variant="glass"`. The Select button's solid primary color became the same
+  cyan→violet gradient treatment `DashboardPage`'s primary quick-action already
+  uses, and the score bar's fill became the same gradient — the one place this
+  slice introduced a new visual choice rather than a straight re-tint, chosen to
+  keep the gradient accent consistent with its other "primary/affirmative
+  action" appearances elsewhere in V2 rather than inventing a third color
+  treatment for the same semantic role.
+- **`CandidateDetailPage`/`.module.css`**: same page-panel treatment; the
+  Applications table (with its Job/Report links) and Professional Knowledge
+  section fully re-tinted. **Its embedded `MatchGraph` ego graph (the "Knowledge
+  Graph" section) was deliberately left untouched** — `MatchGraph.jsx`'s
+  `buildStylesheet()` reads real computed `--color-*` values, and `GraphPage`
+  (its other call site) is still V1/light; giving `MatchGraph` a V2 theme here
+  without also handling `GraphPage` would need the same opt-in-variant pattern
+  already used for `StatusBadge`/`EmptyState`/`PageHeader`, and doing that
+  properly is exactly the "`MatchGraph`/`GraphPage` deserve extra care" work
+  Phase 22's own §24 entry already named as its own future slice — not
+  appropriate to do piecemeal, half inside this page's own migration. A comment
+  at the actual `<MatchGraph>` call site in `CandidateDetailPage.jsx` explains
+  this at the point a future reader would actually wonder about it. Net visible
+  effect: that one embedded widget currently renders as a light card inside an
+  otherwise-dark section — a small, contained, consciously-accepted extension
+  of the project's existing disclosed seam, not an oversight.
+- **Verification**:
+  - `npm run build`: 504 modules, 0 errors, both on host and inside a real Docker
+    multi-stage rebuild of `recruitment-workflow`. Bundle grew only in CSS
+    (~55 kB → ~58 kB / ~8.4 kB gzipped) — JS was essentially unchanged, same
+    reasoning as Phase 22 (prop/CSS changes only, no new component logic).
+  - Full RWS backend suite: **69/69 passed**, host and inside the rebuilt/
+    recreated `csb-recruitment-workflow` container (unaffected — no backend file
+    touched).
+  - **Live production-serving verification**: `/`, `/candidates`, `/upload`,
+    `/jobs`, `/interviews`, `/reports`, `/graph`, and `/health` all returned real
+    `200`s against the real production port 8003. The served CSS was confirmed
+    to contain 43 real usages of `--v2-cyan` (up from 35 after Phase 22).
+  - **Live data correctness** (real recruiter login against the real running
+    stack): a real `GET /v1/jobs` + `GET /v1/jobs/{id}/matches` (7 real matches
+    for a real job) and a real `GET /v1/candidates`, followed by real
+    hard-refresh `200`s on `/jobs/{that real job_id}` and `/candidates/{a real
+    candidate_id}`. Container logs showed only clean access-log/external-call
+    lines, no errors, no PII.
+  - `git status` after the pass showed exactly the expected files:
+    `pages/{JobDetailPage,CandidateDetailPage}.jsx` + their `.module.css` — no
+    other page, no shared component, no router, no API module, and no backend
+    file touched.
+  - **No visual/pixel inspection was possible**, same disclosed environment gap
+    as every prior V2 phase — verification here is build success + live data
+    correctness + a direct grep confirming zero leftover `--color-*` references
+    in either touched CSS file, not a claim that the redesign was seen rendered.
+- **Not done this pass, deliberately**: `MatchGraph`'s own theming (see above —
+  explicitly deferred to its own future slice, not started here); the four
+  remaining pages (`CandidatesPage`/`ResumeUploadPage`/`JobsListPage`/
+  `GraphPage`); the "V2 page panel" background block, now duplicated across
+  seven files, was still not extracted into a shared utility — flagged again,
+  still deliberately not done (see §24 for the actual threshold judgment call).
+
+---
+
+**Phase 24 — V2 visual migration, slice 3 (Jobs List / Candidates / Resume
+Upload)**: **DONE**. Third slice of Phase 21's own `[NEXT]`, picked up on a bare
+"continue" — the scope decision below follows the guidance Phase 23 itself left
+in §24.
+
+- **Why these three pages**: `JobsListPage`'s job cards link into
+  `JobDetailPage`, and `CandidatesPage`'s rows link into `CandidateDetailPage` —
+  both already V2/dark since Phase 23, so both list pages were the light side of
+  the exact same "list → already-dark detail" seam pattern that motivated Phase
+  23's own scope choice. `ResumeUploadPage` doesn't have that seam pressure
+  either way (it's a standalone dead-end-free flow, not a list linking
+  anywhere) but was small enough to fold into the same pass as a third page
+  rather than spend a whole separate slice on it.
+- **`JobsListPage`/`CandidatesPage`**: same "V2 page panel" treatment and
+  `PageHeader`/`EmptyState` `variant="glass"` flip as every prior slice. The
+  "New Job" button and form's submit button adopted the same cyan→violet
+  gradient already used for every other primary/affirmative action in V2
+  (Dashboard's quick action, Job Detail's Select button) — consistent
+  treatment, not a new one invented for this page.
+- **`ResumeUploadPage`**: same treatment on both of its render paths (the
+  drop-zone view and the post-upload success view). While rewriting this file's
+  CSS, a **real pre-existing bug** was fixed as a byproduct, not a separate
+  task: `.resetButton` ("Upload another resume") still carried a standalone
+  `margin-top` left over from before the navigation-polish pass (a few sessions
+  ago) moved it into the same `.actions` flex row as the "View Candidate"
+  button — with both as flex-row siblings, that leftover margin was pushing
+  `.resetButton` down and out of alignment with `.uploadButton` beside it. Fixed
+  by removing the stray margin (the row's own `.actions { margin-top }` already
+  provides the correct spacing above the whole row) — this was a real, visible,
+  latent bug independent of the V2 migration itself, caught only because this
+  file's CSS was being read in full anyway.
+- **Verification**:
+  - `npm run build`: 504 modules, 0 errors, both on host and inside a real Docker
+    multi-stage rebuild of `recruitment-workflow`. Bundle grew only in CSS
+    (~58 kB → ~62 kB / ~8.5 kB gzipped) — JS unchanged, same reasoning as every
+    prior V2 slice (prop/CSS changes only).
+  - Full RWS backend suite: **69/69 passed**, host and inside the rebuilt/
+    recreated `csb-recruitment-workflow` container (unaffected — no backend file
+    touched).
+  - **Live production-serving verification**: `/`, `/candidates`, `/upload`,
+    `/jobs`, `/interviews`, `/reports`, `/graph`, and `/health` all returned real
+    `200`s against the real production port 8003. The served CSS was confirmed
+    to contain 57 real usages of `--v2-cyan` (up from 43 after Phase 23).
+  - **Live data correctness** (real recruiter login against the real running
+    stack): real `GET /v1/jobs` (4 real jobs) and `GET /v1/candidates` (7 real
+    candidates) both returned real `200`s. Container logs showed only clean
+    access-log/external-call lines, no errors, no PII.
+  - `git status` after the pass showed exactly the expected files:
+    `pages/{JobsListPage,CandidatesPage,ResumeUploadPage}.jsx` + their
+    `.module.css` — no other page, no shared component, no router, no API
+    module, and no backend file touched.
+  - **No visual/pixel inspection was possible**, same disclosed environment gap
+    as every prior V2 phase — verification here is build success + live data
+    correctness + a direct grep confirming zero leftover `--color-*` references
+    in any of the three touched CSS files, not a claim that the redesign was
+    seen rendered. The `.resetButton` alignment fix in particular could not be
+    visually confirmed either — it's a correct-by-inspection CSS reasoning fix
+    (the exact mechanism of the misalignment was traced through the cascade),
+    not something seen rendered before or after.
+- **Not done this pass, deliberately**: `GraphPage`/`MatchGraph` (the one
+  remaining piece — its own real design decision, named in §24, not started
+  here); the "V2 page panel" background block, now duplicated across ten files,
+  was still not extracted into a shared utility.
+
+**Phase 25 (V2 visual migration, final slice — `GraphPage`/`MatchGraph`)**:
+**DONE**. Picked up on a bare "continue" using the guidance Phase 24 left in
+§24 — the last remaining piece of the V2 migration.
+
+- **Why this needed a real design decision, not just a CSS re-tint**:
+  `MatchGraph.jsx` draws to a Cytoscape `<canvas>`, which cannot read CSS
+  classes — its `buildStylesheet()` function reads real computed CSS custom
+  property values via `getComputedStyle(document.documentElement)` (through a
+  local `readToken(style, name, fallback)` helper) at stylesheet-build time.
+  Re-theming it means changing *which token names* that function reads, not
+  adding a class.
+- **Simpler approach used than the prior `[NEXT]` guidance speculated**: that
+  guidance (written at the end of Phase 24) proposed adding a `theme`/`variant`
+  param to `buildStylesheet()` so `GraphPage` and `CandidateDetailPage`'s ego
+  graph could each independently choose V1 or V2 colors — modeled on the
+  `StatusBadge`/`EmptyState`/`PageHeader` `variant="glass"` opt-in pattern.
+  During implementation this turned out to be unnecessary complexity: this same
+  pass migrates `GraphPage` itself, so both of `MatchGraph`'s real call sites
+  (`GraphPage`, `CandidateDetailPage`'s ego graph) land on V2 together in this
+  one pass, leaving no V1 consumer that would ever take the toggle's other
+  branch. `buildStylesheet()` was instead redesigned directly in place to read
+  `--v2-*` token names unconditionally — the same "direct redesign, not an
+  opt-in variant" pattern already established for `StatTile`/`AssessmentPanel`
+  once all real consumers were confirmed migrating together (see Phase
+  21/22). This reasoning is recorded in a code comment at `buildStylesheet()`
+  itself, not just here.
+- **`MatchGraph.jsx`**: `buildStylesheet()`'s `color` object now reads 8
+  `--v2-*` tokens (`--v2-cyan`, `--v2-violet`, `--v2-success`, `--v2-danger`,
+  `--v2-warning`, `--v2-bg-elevated`, `--v2-text`, `--v2-text-muted`) instead of
+  their `--color-*` equivalents; all 4 internal `<StatusBadge>` call sites
+  (the search-result button, 3 in `DetailPanel`) now pass `variant="glass"`.
+  `buildGraphElements()`, `buildNodeSelection()`/`buildEdgeSelection()`, the
+  position-seeding logic, `FULL_GRAPH_LAYOUT`/`EGO_GRAPH_LAYOUT`, and every
+  click/highlight/reset/filter/search handler are byte-for-byte unchanged —
+  only the token names read for color and the `StatusBadge` props changed.
+- **`MatchGraph.module.css`**: full direct redesign to `--v2-*` tokens (canvas
+  dot-grid background, legend/legend-toggle, score filter/search box and
+  results dropdown, toolbar/reset button, detail panel and its labels/values/
+  connection list/matched-missing chips). Structure, class names, and the
+  mobile media query are unchanged — only colors/tokens.
+- **`GraphPage.jsx`**: `<PageHeader>` and `<EmptyState>` now pass
+  `variant="glass"`, matching every other migrated page. No change to
+  `load()`/data-fetching (`getCandidatesJobsGraph()`, `getCandidates()`) or any
+  other logic.
+- **`GraphPage.module.css`**: full "V2 page panel" treatment identical in
+  structure to the other nine migrated pages (`.page` background/border/
+  shadow/radius, `::before` aurora+grid pseudo-element, `::after` noise
+  pseudo-element, `.resetButton`/`.status`/`.error` re-tinted).
+- **`CandidateDetailPage.jsx`**: the `<MatchGraph>` call site's old "deliberately
+  NOT restyled" comment (from Phase 23, explaining why the ego graph stayed on
+  V1 colors while the rest of the page was V2) was replaced with a short comment
+  noting the theme now lives entirely inside `MatchGraph.jsx` itself and this
+  call site needed no prop change. No prop changes to the actual `<MatchGraph>`
+  call.
+- **Verification**:
+  - `npm run build`: 504 modules, 0 errors, CSS 63.22 kB (8.50 kB gzip), JS
+    823.50 kB (263.98 kB gzip) — JS size unchanged from Phase 24 (no new
+    dependency; CSS/prop/token changes only).
+  - `grep -n "var(--color-" src/pages/GraphPage.module.css
+    src/components/MatchGraph.module.css src/components/MatchGraph.jsx` →
+    zero matches, confirming no leftover V1 token references anywhere in the
+    three touched files.
+  - Cross-checked all 8 `--v2-*` token names referenced in `MatchGraph.jsx`'s
+    `readToken()` calls against `variables.css` — each confirmed defined
+    exactly once (catches a silent-fallback-to-hardcoded-default bug that a
+    misspelled token name would otherwise hide, since `readToken()` has no
+    other way to signal a miss).
+  - Full RWS backend suite, inside a real rebuilt/recreated
+    `csb-recruitment-workflow` container: **69/69 passed** (unaffected — no
+    backend file touched).
+  - **Live production-serving verification**: `/`, `/candidates`, `/upload`,
+    `/jobs`, `/interviews`, `/reports`, `/graph`, and `/health` all returned
+    real `200`s against the real production port 8003. The served CSS was
+    confirmed to contain 65 real usages of `--v2-cyan` (up from 57 after Phase
+    24) and 6 of `--v2-bg-elevated`; the one remaining `var(--color-*)` line in
+    the served CSS belongs to `LoginPage`, the pre-auth screen, which was never
+    in scope for this migration (only the eleven post-login operational
+    screens were) — confirmed by inspecting that line's actual selector
+    context, not assumed.
+  - **Live data correctness** (real recruiter login against the real running
+    stack): real `GET /v1/graph/candidates-jobs` and `GET /v1/candidates` both
+    returned real `200`s with real data — 4 jobs, 26 edges, 7 candidates, 17
+    qualified / 9 disqualified matches. Container logs showed only clean
+    access-log lines, no errors, no PII.
+  - **Headless Cytoscape structural re-verification**, using the real bundled
+    `cytoscape` package against this same real live data (mirroring the exact
+    unchanged `buildGraphElements()` logic and the post-slice
+    `buildStylesheet()`'s selector/mapping logic, with literal hex values
+    standing in for the `getComputedStyle()` read that itself needs a real
+    browser): full-graph `cose` layout still deterministic across 3 runs;
+    `edge[?qualified]`/`edge[!qualified]` still split the real 17/9 edges
+    exactly; job/candidate node shapes and non-overlapping degree-based size
+    bands intact; a real job's `closedNeighborhood()` still returns exactly its
+    real edges (5, for the sampled job); a real multi-job candidate's ego
+    (`concentric`) layout still deterministic; edge width still tracks the same
+    `finalScore` → `[1,7]` mapping. All 8 checks passed — this logic was never
+    touched by this slice, but re-verifying closes the loop honestly rather
+    than assuming.
+  - `git status --porcelain` after the pass showed exactly the expected files
+    touched for this slice: `components/MatchGraph.jsx` +
+    `MatchGraph.module.css`, `pages/GraphPage.jsx` + `GraphPage.module.css`,
+    `pages/CandidateDetailPage.jsx` — no other page, no backend file. (The
+    working tree also still shows every other un-committed V2 phase's files
+    modified, per this project's practice of not committing until the user
+    asks.)
+  - **No visual/pixel inspection was possible**, same disclosed environment gap
+    as every prior V2 phase — verification here is build success + live data
+    correctness + headless structural proof + direct token-existence
+    cross-checks, not a claim that the dark Cytoscape canvas colors were seen
+    rendered.
+- **Milestone**: this closes the dark/light seam across the **entire**
+  application — all eleven production screens are now on the V2 "AI
+  recruitment command center" look; no page anywhere still renders the
+  original V1 light theme. The "V2 page panel" background block (the
+  aurora/grid `::before` + noise `::after` pseudo-element pair) is now
+  duplicated across all ten migrated page CSS files (`DashboardPage` plus the
+  nine operational pages; `DashboardPage.module.css` in fact has it twice, once
+  per bento panel) — still not extracted, now explicitly the token-fold task's
+  job (see §24), not a new deferral.
+
+---
+
 ## 21. Known limitations / deliberately deferred
 
 - One recruiter/admin account (the existing seeded account); no registration.
@@ -2869,16 +3287,20 @@ scoped this pass to the persistent shell chrome and Dashboard only.
   inside `MatchGraph` itself via `showResetButton`) rather than adding one to
   `CandidateDetailPage`'s own page header, since that header is the candidate's
   name/email, not a toolbar for one section among three.
-- **Phase 21 (V2 design system) — the dark/light seam is real and expected, not a
-  bug.** Sidebar/TopBar are now dark; every page's own content area except
-  Dashboard is still the original light theme (see Phase 21's own §20 entry for
-  exactly why `--color-*`/`.content` couldn't be touched this pass). Until
-  "V2 visual migration — operational pages" (this phase's own `[NEXT]`) migrates
-  the rest, there is a visible hard edge between the dark chrome and a light page
-  — do not "fix" this by tweaking `--color-*` or `Layout.module.css`'s `.content`
-  in isolation; that would break every un-migrated page's contrast (dark text on
-  what would become a dark background). The real fix is migrating each page, one
-  at a time, the same way Dashboard was.
+- **Phase 21 (V2 design system) introduced a dark/light seam; Phase 25 closed
+  it — recorded here for history, no longer a live limitation.** Sidebar/TopBar
+  went dark in Phase 21 while every page's own content area except Dashboard
+  stayed on the original light theme (see Phase 21's own §20 entry for exactly
+  why `--color-*`/`.content` couldn't be touched that pass), and each following
+  slice (22, 23, 24, 25) migrated more pages until, as of Phase 25, **every
+  production page is on V2 and the seam no longer exists anywhere** (the one
+  deliberate exception is `LoginPage`, a pre-auth screen never in scope for
+  this redesign). The old guidance not to "fix" the seam by touching
+  `--color-*`/`.content` in isolation no longer applies now that no page still
+  depends on the light values for contrast — but see §24's token-fold `[NEXT]`
+  task before actually deleting `--color-*`'s old values, since `LoginPage`
+  still reads them directly and needs to be checked against the new palette
+  first.
 - **Phase 21 — no custom webfont was added for "stronger typography."** A
   well-tuned system-font type scale (size/weight/letter-spacing/tabular-nums)
   was judged sufficient, deliberately avoiding a Google-Fonts-style network
@@ -2935,15 +3357,20 @@ Before starting frontend work:
 
 ## 24. [NEXT]
 
-**Phases 1–21 are all done** — every screen from the original admin-dashboard
+**Phases 1–25 are all done** — every screen from the original admin-dashboard
 redesign proposal, the candidate-detail cross-linking hub, the whole-dataset
 knowledge graph at `/graph` (interactive legend filtering, a minimum-score filter,
 candidate/job search), the candidate-detail ego graph reusing the same `MatchGraph`
 engine, a visually-polished layout-stable version of both, no remaining dead-end/
-missing cross-links between any of the eleven production screens, and — as of
-Phase 21 — a new dark "AI recruitment command center" (V2) visual direction
-applied to the persistent shell (`Sidebar`/`TopBar`/`Layout`) and `DashboardPage`.
-Full detail for each phase is in §19/§20, not restated here.
+missing cross-links between any of the eleven production screens, and the dark
+"AI recruitment command center" (V2) visual direction now applied to **every one
+of the eleven production screens**: the persistent shell, `DashboardPage` (Phase
+21), Applications/Interviews/Reports/Report Detail (Phase 22), Job Detail/
+Candidate Detail (Phase 23), Jobs List/Candidates/Resume Upload (Phase 24), and
+the Knowledge Graph / `MatchGraph` (Phase 25 — the final slice). **No page
+anywhere in the app still renders the original V1 light theme** (the one
+exception is `LoginPage`, a pre-auth screen that was never in scope for this
+redesign). Full detail for each phase is in §19/§20, not restated here.
 
 **Two chat-response-only audits happened between Phase 19 and Phase 20, neither
 touched code or this file at the time** (both explicitly scoped that way), and are
@@ -2979,45 +3406,57 @@ should still run once the V2 migration reaches a stable point (either fully
 migrated, or a deliberate decision to demo the mixed dark/light state as-is), not
 be silently dropped.
 
-**[NEXT] V2 visual migration — operational pages.** Phase 21 proved the V2
-design system on the shell + Dashboard; this task extends it to the remaining ten
-pages (`CandidatesPage`, `CandidateDetailPage`, `ResumeUploadPage`,
-`JobsListPage`, `JobDetailPage`, `ApplicationsPage`, `InterviewsPage`,
-`ReportsPage`, `ReportDetailPage`, `GraphPage`/`MatchGraph`), closing the dark/
-light seam Phase 21 deliberately left open (see §21's own note on why it exists).
-Concrete guidance carried over so it doesn't need to be re-derived:
+**[NEXT] `--v2-*` → `--color-*` token fold (cleanup, no visual change).** Every
+production page is now on V2 (Phase 25 just closed the last seam) and
+`LoginPage` is deliberately out of scope, so the additive-dual-token-set
+scaffolding that made incremental migration safe has now done its job and
+should be folded away rather than carried indefinitely. Concrete guidance,
+carried over so it doesn't need re-deriving:
 
-- **Migrate `--color-*` usage to `--v2-*` page by page**, not by repointing the
-  token values globally — the whole reason Phase 21 added a *second* token layer
-  instead of changing the first. Once every page reads `--v2-*`, a later cleanup
-  task can fold `--v2-*` into `--color-*` and delete the old light values
-  entirely (see `variables.css`'s own comment) — that folding step is explicitly
-  **not** this task's job; do one page at a time and verify each before moving on.
-- **Flip `StatusBadge`/`EmptyState` to `variant="glass"`** on each page as it
-  migrates — the prop already exists and is already proven (Phase 21's own
-  verification confirmed every current call site passes no `variant` and renders
-  unchanged); this task's job is changing call sites' `variant` prop and each
-  page's own surrounding CSS, not the shared components themselves again unless a
-  real gap surfaces.
-- **`PageHeader`** currently has no dark variant at all (Phase 21 didn't need
-  one, since Dashboard bypassed it with a bespoke hero) — this task will likely
-  need to add one, the same additive-variant pattern already used successfully
-  for `StatusBadge`/`EmptyState`, rather than changing its default look out from
-  under whichever pages haven't migrated yet in the same pass.
-- **`MatchGraph`/`GraphPage`** deserve extra care: `MatchGraph.jsx`'s
-  `buildStylesheet()` already reads real computed CSS custom property values
-  (`getComputedStyle(document.documentElement)`) for Cytoscape's own node/edge
-  colors — migrating `GraphPage`'s surrounding chrome to `--v2-*` without also
-  reconsidering those specific token reads could leave the graph canvas's own
-  colors mismatched against its new dark surroundings. Check this specifically,
-  don't assume the existing token-read mechanism "just works" against new values
-  without verifying.
-- Do **not** migrate everything in one sitting — pick one page (or a small
-  related group, e.g. Applications + Interviews + Reports, which already share a
-  lot of visual language), migrate and verify it fully, update this file, and
-  stop, the same discipline every other phase in this project has followed.
-- Once every page is migrated, the *actual* next task after that is the readiness
-  audit named above — don't let it get lost.
+- **The fold itself**: in `variables.css`, delete the old light `--color-*`
+  values and rename/merge the `--v2-*` block into `--color-*` (or, if a literal
+  rename touches too many call sites at once, repoint every `--color-*`
+  definition to its `--v2-*` equivalent and then delete the now-redundant
+  `--v2-*` names) — `variables.css`'s own comment on the `--v2-*` block already
+  describes this as the eventual plan, written at the time that block was
+  added. `LoginPage` is the one file that still reads `--color-*` directly, so
+  after the fold it will simply pick up the new dark values — check
+  `LoginPage.module.css`/`LoginPage.jsx` render correctly against the new
+  palette as part of this task (it was never redesigned, only automatically
+  repainted by the token rename), and if it doesn't read cleanly, treat that as
+  this task's finding, not a reason to keep two token sets alive.
+- **Remove the now-redundant explanatory comments** every migrated file
+  accumulated during the incremental migration (the "why this is additive"
+  comment in `variables.css`, the `variant="glass"`/direct-redesign rationale
+  comments scattered across `StatusBadge`, `EmptyState`, `PageHeader`,
+  `StatTile`, `AssessmentPanel`, `MatchGraph.jsx`/`.module.css`, and each
+  page's "V2 design system" CSS header comment) — they explained why two token
+  sets coexisted; once there is only one token set, they document a historical
+  decision, not a live constraint, and should either be deleted or condensed to
+  a single line if genuinely still useful context.
+- **`variant="glass"` props become unconditional/removable** on `StatusBadge`,
+  `EmptyState`, and `PageHeader` once there is no more default (light) render
+  path left for any of them to preserve — a judgment call on whether to
+  actually remove the prop plumbing now or leave it as an inert no-op prop;
+  removing it is more thorough but touches every call site again, so weigh
+  that against how much of this task's time budget is left.
+- **The "V2 page panel" background block, now duplicated across ten page CSS
+  files** (Dashboard + nine operational pages, `DashboardPage.module.css`
+  twice), is a natural thing to finally extract into a shared class (in
+  `global.css` or a small new plain-CSS file, applied via className
+  composition) while this file is already being touched for the rename — not
+  mandatory for the fold itself, but the cheapest time to do it is now, not a
+  twelfth duplication later.
+- **Verification for this task is different in kind from every prior slice**:
+  since no page's visible colors should change (only which token name produces
+  them), the bar is "confirm nothing moved," not "confirm a new look appeared"
+  — diff the resolved CSS custom property values before/after for a sample of
+  pages if possible, confirm the build's CSS bundle size doesn't shift
+  unexpectedly, and re-run the full live-route + live-data checks every prior
+  phase has used.
+- **Once this fold lands, the *actual* next task is the readiness audit
+  preserved below** — don't let it get lost; it's been postponed since Phase
+  20, and this fold is the last piece of V2 migration cleanup blocking it.
 
 ---
 

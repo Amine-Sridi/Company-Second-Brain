@@ -46,6 +46,7 @@ export default function ReportsPage() {
       <PageHeader
         title="Reports"
         subtitle="Every application with a completed interview assessment."
+        variant="glass"
       />
 
       {loading && <p className={styles.status}>Loading reports…</p>}
@@ -58,6 +59,7 @@ export default function ReportsPage() {
 
       {!loading && !error && reportable.length === 0 && (
         <EmptyState
+          variant="glass"
           title="No reports yet"
           description="Reports appear here once a candidate completes an interview."
         />

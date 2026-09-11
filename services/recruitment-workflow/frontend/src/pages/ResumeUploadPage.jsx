@@ -85,7 +85,11 @@ export default function ResumeUploadPage() {
   if (status === "success" && result) {
     return (
       <div className={styles.page}>
-        <PageHeader title="Upload Resume" subtitle="Add a candidate's resume to the talent pool." />
+        <PageHeader
+          title="Upload Resume"
+          subtitle="Add a candidate's resume to the talent pool."
+          variant="glass"
+        />
 
         <div className={styles.success} role="status">
           <p className={styles.successTitle}>

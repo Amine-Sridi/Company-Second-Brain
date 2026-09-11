@@ -147,6 +147,7 @@ export default function ReportDetailPage() {
             Back to Reports
           </Link>
         }
+        variant="glass"
       />
 
       {loading && <p className={styles.status}>Loading report…</p>}

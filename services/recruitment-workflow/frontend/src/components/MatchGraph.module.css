@@ -1,7 +1,13 @@
 /* Shared visual chrome for MatchGraph -- used by both GraphPage (/graph, the full
    dataset) and CandidateDetailPage's embedded ego graph. Height/min-height come from
    the `size` prop's fixed CSS variant (.sizeFull / .sizeEgo below) since the two
-   contexts need very different sizes; everything else here is one shared look. */
+   contexts need very different sizes; everything else here is one shared look.
+
+   V2 design system, final slice (see FRONTEND_HANDOFF.md): direct redesign in
+   place, not an opt-in variant -- both real call sites (GraphPage,
+   CandidateDetailPage's ego graph) are migrated to V2 in this same pass, so
+   there is no remaining V1 consumer to preserve (same reasoning as
+   AssessmentPanel/StatTile in earlier phases). */
 
 .layout {
   display: flex;
@@ -12,10 +18,10 @@
 .card {
   flex: 1 1 auto;
   min-width: 0;
-  background: var(--color-surface);
-  border: 1px solid var(--color-border);
-  border-radius: var(--radius);
-  box-shadow: var(--shadow-sm);
+  background: var(--v2-bg-elevated);
+  border: 1px solid var(--v2-border);
+  border-radius: var(--v2-radius);
+  box-shadow: var(--v2-shadow-elevated);
   display: flex;
   flex-direction: column;
   overflow: hidden;
@@ -39,13 +45,11 @@
    flex: 1 on this wrapper (inside a flex-column parent) supplies that. Cytoscape's
    own canvas is transparent, so a plain CSS background here shows through behind
    it -- a subtle dot-grid, so the canvas reads as a distinct "explorable surface"
-   rather than the same flat white as the surrounding card/page. --color-border is
-   already the app's own subtlest visible-line token, reused here rather than a new
-   one-off color. */
+   rather than the same flat color as the surrounding card. */
 .canvasWrapper {
   flex: 1 1 auto;
   min-height: 0;
-  background-image: radial-gradient(circle, var(--color-border) 1px, transparent 1px);
+  background-image: radial-gradient(circle, var(--v2-border) 1px, transparent 1px);
   background-size: 18px 18px;
 }
 
@@ -54,9 +58,9 @@
   flex-wrap: wrap;
   gap: var(--spacing-3);
   padding: var(--spacing-2) var(--spacing-3);
-  border-bottom: 1px solid var(--color-border);
+  border-bottom: 1px solid var(--v2-border);
   font-size: var(--font-size-xs);
-  color: var(--color-text-muted);
+  color: var(--v2-text-muted);
 }
 
 .legendItem {
@@ -72,12 +76,12 @@
 }
 
 .legendJob {
-  background: var(--color-primary);
+  background: var(--v2-cyan);
   border-radius: 2px;
 }
 
 .legendCandidate {
-  background: var(--color-accent);
+  background: var(--v2-violet);
   border-radius: 50%;
 }
 
@@ -89,11 +93,11 @@
 }
 
 .legendQualified {
-  background: var(--color-success);
+  background: var(--v2-success);
 }
 
 .legendDisqualified {
-  background: var(--color-danger);
+  background: var(--v2-danger);
 }
 
 /* The Qualified/Disqualified legend swatches double as the toggle control itself
@@ -105,6 +109,7 @@
   border: none;
   padding: 0;
   font: inherit;
+  color: inherit;
   cursor: pointer;
 }
 
@@ -124,7 +129,7 @@
   align-items: center;
   gap: var(--spacing-4);
   padding: var(--spacing-2) var(--spacing-3);
-  border-bottom: 1px solid var(--color-border);
+  border-bottom: 1px solid var(--v2-border);
 }
 
 .scoreFilter {
@@ -132,7 +137,7 @@
   align-items: center;
   gap: var(--spacing-2);
   font-size: var(--font-size-sm);
-  color: var(--color-text-muted);
+  color: var(--v2-text-muted);
 }
 
 .scoreFilterLabel {
@@ -141,7 +146,7 @@
 }
 
 .scoreFilterInput {
-  accent-color: var(--color-primary);
+  accent-color: var(--v2-cyan);
 }
 
 .searchBox {
@@ -153,12 +158,17 @@
 .searchInput {
   width: 100%;
   padding: var(--spacing-1) var(--spacing-2);
-  border: 1px solid var(--color-border);
-  border-radius: var(--radius);
+  border: 1px solid var(--v2-border-strong);
+  border-radius: var(--v2-radius);
   font-size: var(--font-size-sm);
   font-family: inherit;
-  color: var(--color-text);
-  background: var(--color-surface);
+  color: var(--v2-text);
+  background: var(--v2-bg-inset);
+}
+
+.searchInput:focus-visible {
+  outline: none;
+  border-color: var(--v2-cyan);
 }
 
 .searchResults {
@@ -172,10 +182,10 @@
   margin: 0;
   padding: var(--spacing-1);
   list-style: none;
-  background: var(--color-surface);
-  border: 1px solid var(--color-border);
-  border-radius: var(--radius);
-  box-shadow: var(--shadow-md);
+  background: var(--v2-bg-elevated);
+  border: 1px solid var(--v2-border-strong);
+  border-radius: var(--v2-radius);
+  box-shadow: var(--v2-shadow-elevated);
 }
 
 .searchResultButton {
@@ -186,15 +196,15 @@
   padding: var(--spacing-1) var(--spacing-2);
   background: none;
   border: none;
-  border-radius: var(--radius);
+  border-radius: var(--v2-radius);
   font: inherit;
-  color: var(--color-text);
+  color: var(--v2-text);
   text-align: left;
   cursor: pointer;
 }
 
 .searchResultButton:hover {
-  background: var(--color-hover-bg);
+  background: var(--v2-surface-strong);
 }
 
 .searchResultLabel {
@@ -205,7 +215,7 @@
 
 .searchNoResults {
   padding: var(--spacing-1) var(--spacing-2);
-  color: var(--color-text-muted);
+  color: var(--v2-text-muted);
   font-size: var(--font-size-sm);
 }
 
@@ -216,33 +226,34 @@
   display: flex;
   justify-content: flex-end;
   padding: var(--spacing-2) var(--spacing-3);
-  border-bottom: 1px solid var(--color-border);
+  border-bottom: 1px solid var(--v2-border);
 }
 
 .resetButton {
   flex-shrink: 0;
-  background: var(--color-surface);
-  color: var(--color-text);
-  border: 1px solid var(--color-border);
-  border-radius: var(--radius);
+  background: var(--v2-surface);
+  color: var(--v2-text);
+  border: 1px solid var(--v2-border-strong);
+  border-radius: var(--v2-radius);
   padding: var(--spacing-1) var(--spacing-3);
   font-size: var(--font-size-sm);
   font-weight: 600;
   white-space: nowrap;
-  transition: background-color var(--transition-fast), border-color var(--transition-fast);
+  backdrop-filter: blur(var(--v2-blur));
+  -webkit-backdrop-filter: blur(var(--v2-blur));
+  transition: border-color var(--v2-transition);
 }
 
 .resetButton:hover {
-  background: var(--color-bg);
-  border-color: var(--color-text-muted);
+  border-color: var(--v2-cyan);
 }
 
 .panel {
   flex: 0 0 300px;
-  background: var(--color-surface);
-  border: 1px solid var(--color-border);
-  border-radius: var(--radius);
-  box-shadow: var(--shadow-sm);
+  background: var(--v2-bg-elevated);
+  border: 1px solid var(--v2-border);
+  border-radius: var(--v2-radius);
+  box-shadow: var(--v2-shadow-elevated);
   padding: var(--spacing-3);
   overflow-y: auto;
   display: flex;
@@ -251,7 +262,7 @@
 }
 
 .panelEmpty {
-  color: var(--color-text-muted);
+  color: var(--v2-text-muted);
   font-size: var(--font-size-sm);
 }
 
@@ -259,12 +270,13 @@
   font-size: var(--font-size-lg);
   font-weight: 600;
   margin: 0;
+  color: var(--v2-text);
   word-break: break-word;
 }
 
 .openLink {
   align-self: flex-start;
-  color: var(--color-primary);
+  color: var(--v2-cyan);
   font-size: var(--font-size-sm);
   font-weight: 600;
 }
@@ -275,7 +287,7 @@
 
 .panelLabel {
   display: block;
-  color: var(--color-text-muted);
+  color: var(--v2-text-muted);
   font-size: var(--font-size-xs);
   font-weight: 600;
   text-transform: uppercase;
@@ -286,12 +298,13 @@
 .panelValue {
   font-size: var(--font-size-base);
   font-weight: 600;
+  color: var(--v2-text);
 }
 
 .panelValueLink {
   font-size: var(--font-size-base);
   font-weight: 600;
-  color: var(--color-primary);
+  color: var(--v2-cyan);
 }
 
 .panelValueLink:hover {
@@ -303,8 +316,8 @@
   flex-direction: column;
   gap: var(--spacing-2);
   padding: var(--spacing-2) var(--spacing-3);
-  background: var(--color-bg);
-  border-radius: var(--radius);
+  background: var(--v2-surface);
+  border-radius: var(--v2-radius);
 }
 
 .scoreRow {
@@ -320,7 +333,7 @@
 }
 
 .connectionListLabel {
-  color: var(--color-text-muted);
+  color: var(--v2-text-muted);
   font-size: var(--font-size-xs);
   font-weight: 600;
   text-transform: uppercase;
@@ -332,6 +345,7 @@
   align-items: center;
   gap: var(--spacing-2);
   font-size: var(--font-size-sm);
+  color: var(--v2-text);
 }
 
 .connectionName {
@@ -343,7 +357,7 @@
 }
 
 .connectionScore {
-  color: var(--color-text-muted);
+  color: var(--v2-text-muted);
   font-variant-numeric: tabular-nums;
 }
 
@@ -354,7 +368,7 @@
 }
 
 .chipGroupLabel {
-  color: var(--color-text-muted);
+  color: var(--v2-text-muted);
   font-size: var(--font-size-xs);
   font-weight: 600;
   text-transform: uppercase;
@@ -368,8 +382,8 @@
 }
 
 .chipMatched {
-  background: var(--color-success-bg);
-  color: var(--color-success);
+  background: var(--v2-success-bg);
+  color: var(--v2-success);
   border-radius: var(--radius-pill);
   padding: 2px 10px;
   font-size: var(--font-size-xs);
@@ -377,8 +391,8 @@
 }
 
 .chipMissing {
-  background: var(--color-danger-bg);
-  color: var(--color-danger);
+  background: var(--v2-danger-bg);
+  color: var(--v2-danger);
   border-radius: var(--radius-pill);
   padding: 2px 10px;
   font-size: var(--font-size-xs);

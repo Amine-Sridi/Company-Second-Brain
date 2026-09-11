@@ -123,6 +123,7 @@ export default function CandidateDetailPage() {
       <PageHeader
         title={displayName}
         subtitle={identity.status === "ready" ? identity.email ?? undefined : undefined}
+        variant="glass"
       />
 
       {identity.status === "error" && (
@@ -191,6 +192,7 @@ export default function CandidateDetailPage() {
           )}
           {!applicationsLoading && !applicationsError && applications.length === 0 && (
             <EmptyState
+              variant="glass"
               title="No applications yet"
               description="This candidate hasn't been selected for any job yet."
             />
@@ -215,7 +217,7 @@ export default function CandidateDetailPage() {
                         </Link>
                       </td>
                       <td>
-                        <StatusBadge tone={STATUS_TONE[application.status] ?? "neutral"}>
+                        <StatusBadge variant="glass" tone={STATUS_TONE[application.status] ?? "neutral"}>
                           {STATUS_LABELS[application.status] ?? application.status}
                         </StatusBadge>
                       </td>
@@ -254,11 +256,17 @@ export default function CandidateDetailPage() {
           )}
           {!egoGraphLoading && !egoGraphError && egoGraph && egoGraph.edges.length === 0 && (
             <EmptyState
+              variant="glass"
               title="No job matches yet"
               description="This candidate has no persisted matches against any job yet."
             />
           )}
           {!egoGraphLoading && !egoGraphError && egoGraph && egoGraph.edges.length > 0 && (
+            // MatchGraph.jsx's own buildStylesheet() now reads --v2-* tokens
+            // directly (V2 design system, final slice -- see
+            // FRONTEND_HANDOFF.md) since both of its real call sites (here and
+            // GraphPage) are on V2 as of this same pass -- no theme prop needed
+            // here, this call is unchanged from before that migration.
             <MatchGraph
               rawGraph={egoGraph}
               candidateNames={candidateNames}

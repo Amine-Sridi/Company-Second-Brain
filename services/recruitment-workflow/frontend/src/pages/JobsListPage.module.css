@@ -1,29 +1,74 @@
+/* V2 design system, Phase 2 slice 3 (see FRONTEND_HANDOFF.md). Same dark-panel
+   treatment as ApplicationsPage.module.css et al.; see that file's own comment
+   for why this is safe and why the panel block is currently duplicated per page.
+   This page's own migration was prioritized specifically because its job cards
+   link directly into JobDetailPage, already V2/dark since Phase 23 -- leaving
+   this page V1/light would have kept that drill-down seam open. */
+
 .page {
+  position: relative;
   max-width: 760px;
+  padding: var(--spacing-4);
+  border-radius: var(--v2-radius-lg);
+  border: 1px solid var(--v2-border);
+  background: var(--v2-bg);
+  box-shadow: var(--v2-shadow-elevated);
+  color: var(--v2-text);
+  overflow: hidden;
+}
+
+.page::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  background-image:
+    radial-gradient(560px 360px at 10% 0%, var(--v2-cyan-bg), transparent 60%),
+    linear-gradient(rgba(255, 255, 255, 0.025) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(255, 255, 255, 0.025) 1px, transparent 1px);
+  background-size:
+    auto,
+    36px 36px,
+    36px 36px;
+}
+
+.page::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  opacity: 0.05;
+  mix-blend-mode: overlay;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='200' height='200'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='2' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
+}
+
+.page > * {
+  position: relative;
 }
 
 .newJobButton {
   flex-shrink: 0;
-  background: var(--color-primary);
-  color: #ffffff;
+  background: linear-gradient(120deg, var(--v2-cyan), var(--v2-violet));
+  color: var(--v2-bg-inset);
   border: none;
-  border-radius: var(--radius);
+  border-radius: var(--v2-radius);
   padding: var(--spacing-2) var(--spacing-4);
   font-size: var(--font-size-base);
-  font-weight: 600;
+  font-weight: 700;
   white-space: nowrap;
-  transition: background-color var(--transition-fast);
+  transition: transform var(--v2-transition);
 }
 
 .newJobButton:hover {
-  background: var(--color-primary-hover);
+  transform: translateY(-1px);
 }
 
 .form {
-  background: var(--color-surface);
-  border: 1px solid var(--color-border);
-  border-radius: var(--radius);
-  box-shadow: var(--shadow-sm);
+  background: var(--v2-surface);
+  border: 1px solid var(--v2-border);
+  border-radius: var(--v2-radius);
+  backdrop-filter: blur(var(--v2-blur));
+  -webkit-backdrop-filter: blur(var(--v2-blur));
   padding: var(--spacing-4);
   margin-bottom: var(--spacing-4);
   display: flex;
@@ -37,25 +82,32 @@
   gap: var(--spacing-1);
   font-size: var(--font-size-sm);
   font-weight: 500;
-  color: var(--color-text-muted);
+  color: var(--v2-text-muted);
 }
 
 .field input,
 .field textarea {
   padding: var(--spacing-2);
-  border: 1px solid var(--color-border);
-  border-radius: var(--radius);
+  border: 1px solid var(--v2-border-strong);
+  border-radius: var(--v2-radius);
+  background: var(--v2-bg-inset);
   font-size: var(--font-size-base);
   font-family: inherit;
-  color: var(--color-text);
+  color: var(--v2-text);
   resize: vertical;
+}
+
+.field input:focus-visible,
+.field textarea:focus-visible {
+  outline: none;
+  border-color: var(--v2-cyan);
 }
 
 .advancedToggle {
   align-self: flex-start;
   border: none;
   background: none;
-  color: var(--color-primary);
+  color: var(--v2-cyan);
   font-size: var(--font-size-sm);
   font-weight: 500;
   padding: 0;
@@ -80,36 +132,38 @@
 }
 
 .submitButton {
-  background: var(--color-primary);
-  color: #ffffff;
+  background: linear-gradient(120deg, var(--v2-cyan), var(--v2-violet));
+  color: var(--v2-bg-inset);
   border: none;
-  border-radius: var(--radius);
+  border-radius: var(--v2-radius);
   padding: var(--spacing-2) var(--spacing-4);
   font-size: var(--font-size-md);
-  font-weight: 600;
-  transition: background-color var(--transition-fast);
+  font-weight: 700;
+  transition: transform var(--v2-transition);
 }
 
 .submitButton:hover:not(:disabled) {
-  background: var(--color-primary-hover);
+  transform: translateY(-1px);
 }
 
 .submitButton:disabled {
-  opacity: 0.6;
+  opacity: 0.5;
   cursor: not-allowed;
+  transform: none;
 }
 
 .status {
-  color: var(--color-text-muted);
+  color: var(--v2-text-muted);
   font-size: var(--font-size-base);
 }
 
 .error {
-  background: var(--color-danger-bg);
-  color: var(--color-danger);
+  background: var(--v2-danger-bg);
+  color: var(--v2-danger);
   padding: var(--spacing-2) var(--spacing-3);
-  border-radius: var(--radius);
+  border-radius: var(--v2-radius);
   font-size: var(--font-size-base);
+  border: 1px solid rgba(251, 113, 133, 0.3);
 }
 
 .jobList {
@@ -124,31 +178,32 @@
 .jobCard {
   width: 100%;
   text-align: left;
-  background: var(--color-surface);
-  border: 1px solid var(--color-border);
-  border-radius: var(--radius);
+  background: var(--v2-surface);
+  border: 1px solid var(--v2-border);
+  border-radius: var(--v2-radius);
   padding: var(--spacing-3);
   display: flex;
   flex-direction: column;
   gap: var(--spacing-1);
   font-family: inherit;
-  transition: border-color var(--transition-fast), background-color var(--transition-fast),
-    box-shadow var(--transition-fast);
+  backdrop-filter: blur(var(--v2-blur));
+  -webkit-backdrop-filter: blur(var(--v2-blur));
+  transition: border-color var(--v2-transition), background-color var(--v2-transition);
 }
 
 .jobCard:hover {
-  border-color: var(--color-primary);
-  background: var(--color-primary-bg);
-  box-shadow: var(--shadow-sm);
+  border-color: var(--v2-cyan);
+  background: var(--v2-surface-strong);
 }
 
 .jobTitle {
   font-weight: 600;
   font-size: var(--font-size-lg);
+  color: var(--v2-text);
 }
 
 .jobMeta {
-  color: var(--color-text-muted);
+  color: var(--v2-text-muted);
   font-size: var(--font-size-sm);
 }
 

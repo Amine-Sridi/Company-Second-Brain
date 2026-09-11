@@ -1,5 +1,46 @@
+/* V2 design system, Phase 2 -- same dark-panel treatment as ApplicationsPage.module
+   .css; see that file's own comment for why this is safe (Layout's `.content`
+   still untouched) and why this block is currently duplicated per page. */
+
 .page {
+  position: relative;
   max-width: 760px;
+  padding: var(--spacing-4);
+  border-radius: var(--v2-radius-lg);
+  border: 1px solid var(--v2-border);
+  background: var(--v2-bg);
+  box-shadow: var(--v2-shadow-elevated);
+  color: var(--v2-text);
+  overflow: hidden;
+}
+
+.page::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  background-image:
+    radial-gradient(560px 360px at 10% 0%, var(--v2-cyan-bg), transparent 60%),
+    linear-gradient(rgba(255, 255, 255, 0.025) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(255, 255, 255, 0.025) 1px, transparent 1px);
+  background-size:
+    auto,
+    36px 36px,
+    36px 36px;
+}
+
+.page::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  opacity: 0.05;
+  mix-blend-mode: overlay;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='200' height='200'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='2' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
+}
+
+.page > * {
+  position: relative;
 }
 
 .candidateLink {
@@ -11,11 +52,8 @@
   text-decoration: underline;
 }
 
-/* Same visual treatment as CandidateDetailPage's own .inlineLink -- used here for
-   the job-title link in .meta (candidateLink above is deliberately different: it
-   sits inside the page title and inherits that title's own color/weight). */
 .inlineLink {
-  color: var(--color-primary);
+  color: var(--v2-cyan);
   font-weight: 500;
   text-decoration: none;
 }
@@ -27,33 +65,37 @@
 .backLink {
   flex-shrink: 0;
   align-self: flex-start;
-  border: 1px solid var(--color-border);
-  background: var(--color-surface);
-  border-radius: var(--radius);
+  border: 1px solid var(--v2-border-strong);
+  background: var(--v2-surface);
+  color: var(--v2-text);
+  border-radius: var(--v2-radius);
   padding: var(--spacing-2) var(--spacing-3);
   font-size: var(--font-size-base);
   font-weight: 500;
   text-decoration: none;
   white-space: nowrap;
-  transition: border-color var(--transition-fast), color var(--transition-fast);
+  backdrop-filter: blur(var(--v2-blur));
+  -webkit-backdrop-filter: blur(var(--v2-blur));
+  transition: border-color var(--v2-transition), color var(--v2-transition);
 }
 
 .backLink:hover {
-  border-color: var(--color-primary);
-  color: var(--color-primary);
+  border-color: var(--v2-cyan);
+  color: var(--v2-cyan);
 }
 
 .status {
-  color: var(--color-text-muted);
+  color: var(--v2-text-muted);
   font-size: var(--font-size-base);
 }
 
 .error {
-  background: var(--color-danger-bg);
-  color: var(--color-danger);
+  background: var(--v2-danger-bg);
+  color: var(--v2-danger);
   padding: var(--spacing-2) var(--spacing-3);
-  border-radius: var(--radius);
+  border-radius: var(--v2-radius);
   font-size: var(--font-size-base);
+  border: 1px solid rgba(251, 113, 133, 0.3);
 }
 
 .content {
@@ -66,7 +108,7 @@
   display: flex;
   gap: var(--spacing-3);
   flex-wrap: wrap;
-  color: var(--color-text-muted);
+  color: var(--v2-text-muted);
   font-size: var(--font-size-sm);
 }
 
@@ -77,10 +119,11 @@
 }
 
 .notesColumn {
-  background: var(--color-surface);
-  border: 1px solid var(--color-border);
-  border-radius: var(--radius);
-  box-shadow: var(--shadow-sm);
+  background: var(--v2-surface);
+  border: 1px solid var(--v2-border);
+  border-radius: var(--v2-radius);
+  backdrop-filter: blur(var(--v2-blur));
+  -webkit-backdrop-filter: blur(var(--v2-blur));
   padding: var(--spacing-3);
 }
 
@@ -89,7 +132,7 @@
   font-size: var(--font-size-sm);
   text-transform: uppercase;
   letter-spacing: 0.02em;
-  color: var(--color-text-muted);
+  color: var(--v2-text-muted);
   font-weight: 600;
 }
 
@@ -97,21 +140,28 @@
   margin: 0;
   padding-left: var(--spacing-3);
   font-size: var(--font-size-base);
+  color: var(--v2-text);
   display: flex;
   flex-direction: column;
   gap: var(--spacing-1);
 }
 
 .section {
-  background: var(--color-surface);
-  border: 1px solid var(--color-border);
-  border-radius: var(--radius);
-  box-shadow: var(--shadow-sm);
+  background: var(--v2-surface);
+  border: 1px solid var(--v2-border);
+  border-radius: var(--v2-radius);
+  backdrop-filter: blur(var(--v2-blur));
+  -webkit-backdrop-filter: blur(var(--v2-blur));
   padding: var(--spacing-3);
 }
 
+/* `color-scheme: dark` hints the browser's own native <audio> control chrome
+   (play button, scrubber, volume) to render in a dark-appropriate palette --
+   real browser support (Chromium/Firefox), not a full custom-control rebuild,
+   which would be well past this phase's own "no excessive" scope for one player. */
 .audio {
   width: 100%;
+  color-scheme: dark;
 }
 
 .transcript {
@@ -126,11 +176,12 @@
   margin: 0;
   font-size: var(--font-size-base);
   line-height: 1.5;
+  color: var(--v2-text);
 }
 
 .transcriptRole {
   font-weight: 600;
-  color: var(--color-text-muted);
+  color: var(--v2-text-muted);
 }
 
 @media (max-width: 480px) {

@@ -1,20 +1,66 @@
+/* V2 design system, Phase 2 slice 3 (see FRONTEND_HANDOFF.md). Same dark-panel
+   treatment as ApplicationsPage.module.css et al.; see that file's own comment
+   for why this is safe and why the panel block is currently duplicated per page.
+   Unlike the other pages in this slice, this one wasn't picked for a drill-down
+   seam (it doesn't link into an already-dark page) -- it was simply small,
+   standalone, and low-risk enough to fold into the same pass. */
+
 .page {
+  position: relative;
   max-width: 560px;
+  padding: var(--spacing-4);
+  border-radius: var(--v2-radius-lg);
+  border: 1px solid var(--v2-border);
+  background: var(--v2-bg);
+  box-shadow: var(--v2-shadow-elevated);
+  color: var(--v2-text);
+  overflow: hidden;
+}
+
+.page::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  background-image:
+    radial-gradient(560px 360px at 10% 0%, var(--v2-cyan-bg), transparent 60%),
+    linear-gradient(rgba(255, 255, 255, 0.025) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(255, 255, 255, 0.025) 1px, transparent 1px);
+  background-size:
+    auto,
+    36px 36px,
+    36px 36px;
+}
+
+.page::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  opacity: 0.05;
+  mix-blend-mode: overlay;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='200' height='200'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='2' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
+}
+
+.page > * {
+  position: relative;
 }
 
 .dropZone {
-  border: 2px dashed var(--color-border);
-  border-radius: var(--radius);
-  background: var(--color-surface);
+  border: 2px dashed var(--v2-border-strong);
+  border-radius: var(--v2-radius);
+  background: var(--v2-surface);
   padding: var(--spacing-5) var(--spacing-4);
   text-align: center;
-  transition: border-color var(--transition-fast), background-color var(--transition-fast);
+  backdrop-filter: blur(var(--v2-blur));
+  -webkit-backdrop-filter: blur(var(--v2-blur));
+  transition: border-color var(--v2-transition), background-color var(--v2-transition);
 }
 
 .dropZone:hover,
 .dropZoneActive {
-  border-color: var(--color-primary);
-  background: var(--color-primary-bg);
+  border-color: var(--v2-cyan);
+  background: var(--v2-cyan-bg);
 }
 
 .dropZoneDisabled {
@@ -24,7 +70,7 @@
 
 .dropZoneHint {
   margin: var(--spacing-1) 0 0;
-  color: var(--color-text-muted);
+  color: var(--v2-text-muted);
   font-size: var(--font-size-sm);
 }
 
@@ -35,9 +81,9 @@
 .selectedFile {
   margin-top: var(--spacing-3);
   padding: var(--spacing-2) var(--spacing-3);
-  border: 1px solid var(--color-border);
-  border-radius: var(--radius);
-  background: var(--color-surface);
+  border: 1px solid var(--v2-border);
+  border-radius: var(--v2-radius);
+  background: var(--v2-surface);
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -54,67 +100,68 @@
 .clearButton {
   border: none;
   background: none;
-  color: var(--color-text-muted);
+  color: var(--v2-text-muted);
   font-size: var(--font-size-sm);
   padding: 0;
-  transition: color var(--transition-fast);
+  transition: color var(--v2-transition);
 }
 
 .clearButton:hover {
-  color: var(--color-danger);
+  color: var(--v2-danger);
 }
 
 .actions {
   margin-top: var(--spacing-3);
   display: flex;
+  align-items: center;
   gap: var(--spacing-2);
 }
 
 .uploadButton {
-  background: var(--color-primary);
-  color: #ffffff;
+  background: linear-gradient(120deg, var(--v2-cyan), var(--v2-violet));
+  color: var(--v2-bg-inset);
   border: none;
-  border-radius: var(--radius);
+  border-radius: var(--v2-radius);
   padding: var(--spacing-2) var(--spacing-4);
   font-size: var(--font-size-md);
-  font-weight: 600;
-  /* This class is also reused on the success screen's "View Candidate" <Link> --
-     text-decoration/display reset so it renders identically to the <button> use. */
+  font-weight: 700;
   text-decoration: none;
   display: inline-block;
-  transition: background-color var(--transition-fast);
+  transition: transform var(--v2-transition);
 }
 
 .uploadButton:hover:not(:disabled) {
-  background: var(--color-primary-hover);
+  transform: translateY(-1px);
 }
 
 .uploadButton:disabled {
-  opacity: 0.6;
+  opacity: 0.5;
   cursor: not-allowed;
+  transform: none;
 }
 
 .error {
   margin-top: var(--spacing-3);
-  background: var(--color-danger-bg);
-  color: var(--color-danger);
+  background: var(--v2-danger-bg);
+  color: var(--v2-danger);
   padding: var(--spacing-2) var(--spacing-3);
-  border-radius: var(--radius);
+  border-radius: var(--v2-radius);
   font-size: var(--font-size-base);
+  border: 1px solid rgba(251, 113, 133, 0.3);
 }
 
 .success {
   margin-top: var(--spacing-3);
-  border: 1px solid var(--color-border);
-  border-radius: var(--radius);
+  border: 1px solid rgba(74, 222, 128, 0.3);
+  border-radius: var(--v2-radius);
   padding: var(--spacing-3);
-  background: var(--color-success-bg);
+  background: var(--v2-success-bg);
 }
 
 .successTitle {
   margin: 0 0 var(--spacing-2);
   font-weight: 600;
-  color: var(--color-success);
+  color: var(--v2-success);
 }
 
 .successField {
@@ -122,10 +169,11 @@
   gap: var(--spacing-1);
   font-size: var(--font-size-base);
   padding: 2px 0;
+  color: var(--v2-text);
 }
 
 .successLabel {
-  color: var(--color-text-muted);
+  color: var(--v2-text-muted);
   min-width: 130px;
 }
 
@@ -134,18 +182,25 @@
   word-break: break-all;
 }
 
+/* No longer carries its own margin-top -- it's a flex child of .actions, which
+   already provides the spacing above the whole row; a per-item margin here would
+   misalign it against .uploadButton sitting beside it (a leftover from before
+   both buttons shared this row -- fixed as part of rewriting this file, not a
+   separate change). */
 .resetButton {
-  margin-top: var(--spacing-3);
-  border: 1px solid var(--color-border);
-  background: var(--color-surface);
-  border-radius: var(--radius);
+  border: 1px solid var(--v2-border-strong);
+  background: var(--v2-surface);
+  color: var(--v2-text);
+  border-radius: var(--v2-radius);
   padding: var(--spacing-2) var(--spacing-3);
   font-size: var(--font-size-base);
-  transition: background-color var(--transition-fast);
+  backdrop-filter: blur(var(--v2-blur));
+  -webkit-backdrop-filter: blur(var(--v2-blur));
+  transition: border-color var(--v2-transition);
 }
 
 .resetButton:hover {
-  background: var(--color-bg);
+  border-color: var(--v2-cyan);
 }
 
 @media (max-width: 480px) {
@@ -158,7 +213,9 @@
     flex-direction: column;
   }
 
-  .uploadButton {
+  .uploadButton,
+  .resetButton {
     width: 100%;
+    text-align: center;
   }
 }

@@ -21,6 +21,12 @@ const EVALUATION_STATUS_TONE = {
  * Originally private to ApplicationsPage; promoted here once InterviewsPage needed
  * the identical render logic for a second, genuinely real call site (not a
  * speculative extraction -- see FRONTEND_HANDOFF.md §20).
+ *
+ * V2 design system, Phase 2 (see FRONTEND_HANDOFF.md): grepped and confirmed this
+ * component's only three consumers (ApplicationsPage, InterviewsPage,
+ * ReportDetailPage) are all migrated together in the same pass that touches this
+ * file -- so, like StatTile in Phase 1, this is a direct redesign in place, not an
+ * opt-in variant; there is no remaining light-theme call site to preserve.
  */
 export default function AssessmentPanel({ assessment }) {
   const {
@@ -39,7 +45,7 @@ export default function AssessmentPanel({ assessment }) {
     <div className={styles.assessment}>
       <div className={styles.assessmentHeader}>
         <span className={styles.assessmentLabel}>Interview Assessment</span>
-        <StatusBadge tone={EVALUATION_STATUS_TONE[evaluation_status] ?? "neutral"}>
+        <StatusBadge variant="glass" tone={EVALUATION_STATUS_TONE[evaluation_status] ?? "neutral"}>
           {EVALUATION_STATUS_LABELS[evaluation_status] ?? evaluation_status}
         </StatusBadge>
         {inconclusive && (

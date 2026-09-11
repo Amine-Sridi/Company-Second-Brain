@@ -1,45 +1,94 @@
+/* V2 design system, Phase 2 slice 3 (see FRONTEND_HANDOFF.md). Same dark-panel
+   treatment as ApplicationsPage.module.css et al.; see that file's own comment
+   for why this is safe and why the panel block is currently duplicated per page.
+   This page's own migration was prioritized specifically because its rows link
+   directly into CandidateDetailPage, already V2/dark since Phase 23 -- leaving
+   this page V1/light would have kept that drill-down seam open. */
+
 .page {
+  position: relative;
   max-width: 760px;
+  padding: var(--spacing-4);
+  border-radius: var(--v2-radius-lg);
+  border: 1px solid var(--v2-border);
+  background: var(--v2-bg);
+  box-shadow: var(--v2-shadow-elevated);
+  color: var(--v2-text);
+  overflow: hidden;
+}
+
+.page::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  background-image:
+    radial-gradient(560px 360px at 10% 0%, var(--v2-cyan-bg), transparent 60%),
+    linear-gradient(rgba(255, 255, 255, 0.025) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(255, 255, 255, 0.025) 1px, transparent 1px);
+  background-size:
+    auto,
+    36px 36px,
+    36px 36px;
+}
+
+.page::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  opacity: 0.05;
+  mix-blend-mode: overlay;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='200' height='200'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='2' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
+}
+
+.page > * {
+  position: relative;
 }
 
 .uploadLink {
   flex-shrink: 0;
   align-self: flex-start;
-  border: 1px solid var(--color-border);
-  background: var(--color-surface);
-  border-radius: var(--radius);
+  border: 1px solid var(--v2-border-strong);
+  background: var(--v2-surface);
+  color: var(--v2-text);
+  border-radius: var(--v2-radius);
   padding: var(--spacing-2) var(--spacing-3);
   font-size: var(--font-size-base);
   font-weight: 500;
   text-decoration: none;
   white-space: nowrap;
-  transition: border-color var(--transition-fast), color var(--transition-fast);
+  backdrop-filter: blur(var(--v2-blur));
+  -webkit-backdrop-filter: blur(var(--v2-blur));
+  transition: border-color var(--v2-transition), color var(--v2-transition);
 }
 
 .uploadLink:hover {
-  border-color: var(--color-primary);
-  color: var(--color-primary);
+  border-color: var(--v2-cyan);
+  color: var(--v2-cyan);
 }
 
 .status {
-  color: var(--color-text-muted);
+  color: var(--v2-text-muted);
   font-size: var(--font-size-base);
 }
 
 .error {
-  background: var(--color-danger-bg);
-  color: var(--color-danger);
+  background: var(--v2-danger-bg);
+  color: var(--v2-danger);
   padding: var(--spacing-2) var(--spacing-3);
-  border-radius: var(--radius);
+  border-radius: var(--v2-radius);
   font-size: var(--font-size-base);
+  border: 1px solid rgba(251, 113, 133, 0.3);
 }
 
 .tableWrapper {
   overflow-x: auto;
-  background: var(--color-surface);
-  border: 1px solid var(--color-border);
-  border-radius: var(--radius);
-  box-shadow: var(--shadow-sm);
+  background: var(--v2-surface);
+  border: 1px solid var(--v2-border);
+  border-radius: var(--v2-radius);
+  backdrop-filter: blur(var(--v2-blur));
+  -webkit-backdrop-filter: blur(var(--v2-blur));
 }
 
 .table {
@@ -52,18 +101,19 @@
 .table th {
   text-align: left;
   padding: var(--spacing-2) var(--spacing-3);
-  color: var(--color-text-muted);
+  color: var(--v2-text-muted);
   font-weight: 600;
   font-size: var(--font-size-xs);
   text-transform: uppercase;
   letter-spacing: 0.02em;
-  border-bottom: 1px solid var(--color-border);
+  border-bottom: 1px solid var(--v2-border);
 }
 
 .table td {
   padding: var(--spacing-2) var(--spacing-3);
-  border-bottom: 1px solid var(--color-border);
+  border-bottom: 1px solid var(--v2-border);
   vertical-align: middle;
+  color: var(--v2-text);
 }
 
 .table tr:last-child td {
@@ -72,11 +122,11 @@
 
 .row {
   cursor: pointer;
-  transition: background-color var(--transition-fast);
+  transition: background-color var(--v2-transition);
 }
 
 .row:hover {
-  background: var(--color-hover-bg);
+  background: var(--v2-surface-strong);
 }
 
 .candidateName {
@@ -84,12 +134,12 @@
 }
 
 .noEmail {
-  color: var(--color-text-muted);
+  color: var(--v2-text-faint);
   font-style: italic;
 }
 
 .dateCell {
-  color: var(--color-text-muted);
+  color: var(--v2-text-faint);
   white-space: nowrap;
 }
 

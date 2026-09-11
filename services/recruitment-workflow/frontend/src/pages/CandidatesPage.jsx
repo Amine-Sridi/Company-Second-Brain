@@ -49,6 +49,7 @@ export default function CandidatesPage() {
             Upload Resume
           </Link>
         }
+        variant="glass"
       />
 
       {loading && <p className={styles.status}>Loading candidates…</p>}
@@ -61,6 +62,7 @@ export default function CandidatesPage() {
 
       {!loading && !error && candidates.length === 0 && (
         <EmptyState
+          variant="glass"
           title="No candidates yet"
           description="Upload a resume to add the first candidate to the pool."
         />

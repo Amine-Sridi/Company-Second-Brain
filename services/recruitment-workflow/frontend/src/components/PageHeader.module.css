@@ -20,6 +20,11 @@
   font-size: var(--font-size-base);
 }
 
+/* V2 design system, Phase 2 -- opt-in dark-surface variant, see PageHeader.jsx. */
+.glass .subtitle {
+  color: var(--v2-text-muted);
+}
+
 .actions {
   display: flex;
   align-items: center;

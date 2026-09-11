@@ -1,45 +1,95 @@
+/* V2 design system, Phase 2 slice 2 (see FRONTEND_HANDOFF.md). Same dark-panel
+   treatment as ApplicationsPage.module.css et al.; see that file's own comment
+   for why this is safe and why the panel block is currently duplicated per page.
+   This page's own migration was prioritized specifically because "View
+   Applications" links directly into ApplicationsPage, already V2/dark since
+   Phase 22 -- leaving this page V1/light would have kept that drill-down seam
+   open. */
+
 .page {
+  position: relative;
   max-width: 960px;
+  padding: var(--spacing-4);
+  border-radius: var(--v2-radius-lg);
+  border: 1px solid var(--v2-border);
+  background: var(--v2-bg);
+  box-shadow: var(--v2-shadow-elevated);
+  color: var(--v2-text);
+  overflow: hidden;
+}
+
+.page::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  background-image:
+    radial-gradient(560px 360px at 10% 0%, var(--v2-cyan-bg), transparent 60%),
+    linear-gradient(rgba(255, 255, 255, 0.025) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(255, 255, 255, 0.025) 1px, transparent 1px);
+  background-size:
+    auto,
+    36px 36px,
+    36px 36px;
+}
+
+.page::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  opacity: 0.05;
+  mix-blend-mode: overlay;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='200' height='200'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='2' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
+}
+
+.page > * {
+  position: relative;
 }
 
 .applicationsLink {
   flex-shrink: 0;
   align-self: flex-start;
-  border: 1px solid var(--color-border);
-  background: var(--color-surface);
-  border-radius: var(--radius);
+  border: 1px solid var(--v2-border-strong);
+  background: var(--v2-surface);
+  color: var(--v2-text);
+  border-radius: var(--v2-radius);
   padding: var(--spacing-2) var(--spacing-3);
   font-size: var(--font-size-base);
   font-weight: 500;
   text-decoration: none;
   white-space: nowrap;
-  transition: border-color var(--transition-fast), color var(--transition-fast);
+  backdrop-filter: blur(var(--v2-blur));
+  -webkit-backdrop-filter: blur(var(--v2-blur));
+  transition: border-color var(--v2-transition), color var(--v2-transition);
 }
 
 .applicationsLink:hover {
-  border-color: var(--color-primary);
-  color: var(--color-primary);
+  border-color: var(--v2-cyan);
+  color: var(--v2-cyan);
 }
 
 .status {
-  color: var(--color-text-muted);
+  color: var(--v2-text-muted);
   font-size: var(--font-size-base);
 }
 
 .error {
-  background: var(--color-danger-bg);
-  color: var(--color-danger);
+  background: var(--v2-danger-bg);
+  color: var(--v2-danger);
   padding: var(--spacing-2) var(--spacing-3);
-  border-radius: var(--radius);
+  border-radius: var(--v2-radius);
   font-size: var(--font-size-base);
+  border: 1px solid rgba(251, 113, 133, 0.3);
 }
 
 .tableWrapper {
   overflow-x: auto;
-  background: var(--color-surface);
-  border: 1px solid var(--color-border);
-  border-radius: var(--radius);
-  box-shadow: var(--shadow-sm);
+  background: var(--v2-surface);
+  border: 1px solid var(--v2-border);
+  border-radius: var(--v2-radius);
+  backdrop-filter: blur(var(--v2-blur));
+  -webkit-backdrop-filter: blur(var(--v2-blur));
 }
 
 .table {
@@ -52,18 +102,19 @@
 .table th {
   text-align: left;
   padding: var(--spacing-2) var(--spacing-3);
-  color: var(--color-text-muted);
+  color: var(--v2-text-muted);
   font-weight: 600;
   font-size: var(--font-size-xs);
   text-transform: uppercase;
   letter-spacing: 0.02em;
-  border-bottom: 1px solid var(--color-border);
+  border-bottom: 1px solid var(--v2-border);
 }
 
 .table td {
   padding: var(--spacing-2) var(--spacing-3);
-  border-bottom: 1px solid var(--color-border);
+  border-bottom: 1px solid var(--v2-border);
   vertical-align: middle;
+  color: var(--v2-text);
 }
 
 .table tr:last-child td {
@@ -72,52 +123,53 @@
 
 .row {
   cursor: pointer;
-  transition: background-color var(--transition-fast);
+  transition: background-color var(--v2-transition);
 }
 
 .row:hover {
-  background: var(--color-hover-bg);
+  background: var(--v2-surface-strong);
 }
 
 .candidateName {
   font-weight: 500;
-  color: var(--color-text);
+  color: var(--v2-text);
   text-decoration: none;
 }
 
 .candidateName:hover {
-  color: var(--color-primary);
+  color: var(--v2-cyan);
   text-decoration: underline;
 }
 
 .identityWarning {
-  color: var(--color-text-muted);
+  color: var(--v2-text-faint);
   font-size: var(--font-size-xs);
 }
 
 .selectButton {
-  background: var(--color-primary);
-  color: #ffffff;
+  background: linear-gradient(120deg, var(--v2-cyan), var(--v2-violet));
+  color: var(--v2-bg-inset);
   border: none;
-  border-radius: var(--radius);
+  border-radius: var(--v2-radius);
   padding: var(--spacing-1) var(--spacing-3);
   font-size: var(--font-size-sm);
-  font-weight: 600;
+  font-weight: 700;
   white-space: nowrap;
-  transition: background-color var(--transition-fast);
+  transition: transform var(--v2-transition);
 }
 
 .selectButton:hover:not(:disabled) {
-  background: var(--color-primary-hover);
+  transform: translateY(-1px);
 }
 
 .selectButton:disabled {
   opacity: 0.5;
   cursor: not-allowed;
+  transform: none;
 }
 
 .selectedLabel {
-  color: var(--color-success);
+  color: var(--v2-success);
   font-size: var(--font-size-sm);
   font-weight: 600;
   white-space: nowrap;
@@ -132,26 +184,29 @@
 .scoreBarTrack {
   width: 100px;
   height: 8px;
-  background: var(--color-bg);
-  border: 1px solid var(--color-border);
+  background: var(--v2-neutral-bg);
+  border: 1px solid var(--v2-border);
   border-radius: var(--radius-pill);
   overflow: hidden;
 }
 
 .scoreBarFill {
   height: 100%;
-  background: var(--color-primary);
+  background: linear-gradient(90deg, var(--v2-cyan), var(--v2-violet));
 }
 
 .scoreBarLabel {
   font-size: var(--font-size-sm);
   font-weight: 600;
   min-width: 34px;
+  color: var(--v2-text);
+  font-variant-numeric: tabular-nums;
 }
 
 .detail {
-  background: var(--color-bg);
-  border-radius: var(--radius);
+  background: var(--v2-surface);
+  border: 1px solid var(--v2-border);
+  border-radius: var(--v2-radius);
   padding: var(--spacing-3);
   display: flex;
   flex-direction: column;
@@ -170,10 +225,13 @@
   justify-content: space-between;
   font-size: var(--font-size-sm);
   padding: 2px 0;
+  color: var(--v2-text);
+  font-variant-numeric: tabular-nums;
 }
 
 .scoreDetailRow span:first-child {
-  color: var(--color-text-muted);
+  color: var(--v2-text-muted);
+  font-variant-numeric: initial;
 }
 
 .chipGroup {
@@ -186,7 +244,7 @@
   font-size: var(--font-size-xs);
   text-transform: uppercase;
   letter-spacing: 0.02em;
-  color: var(--color-text-muted);
+  color: var(--v2-text-muted);
   font-weight: 600;
 }
 
@@ -197,23 +255,23 @@
 }
 
 .chipMatched {
-  background: var(--color-success-bg);
-  color: var(--color-success);
+  background: var(--v2-success-bg);
+  color: var(--v2-success);
   border-radius: var(--radius-pill);
   padding: 2px 10px;
   font-size: var(--font-size-xs);
 }
 
 .chipMissing {
-  background: var(--color-danger-bg);
-  color: var(--color-danger);
+  background: var(--v2-danger-bg);
+  color: var(--v2-danger);
   border-radius: var(--radius-pill);
   padding: 2px 10px;
   font-size: var(--font-size-xs);
 }
 
 .explanation {
-  border-top: 1px solid var(--color-border);
+  border-top: 1px solid var(--v2-border);
   padding-top: var(--spacing-2);
 }
 
@@ -221,7 +279,7 @@
   font-size: var(--font-size-xs);
   text-transform: uppercase;
   letter-spacing: 0.02em;
-  color: var(--color-text-muted);
+  color: var(--v2-text-muted);
   font-weight: 600;
 }
 
@@ -229,6 +287,7 @@
   margin: var(--spacing-1) 0 0;
   font-size: var(--font-size-base);
   line-height: 1.5;
+  color: var(--v2-text);
 }
 
 @media (max-width: 480px) {

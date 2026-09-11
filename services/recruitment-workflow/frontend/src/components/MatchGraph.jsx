@@ -128,16 +128,24 @@ function buildStylesheet() {
   // Cytoscape can't read CSS custom properties itself (it draws to canvas, not the
   // DOM) -- read the real values out of variables.css once so node/edge colors stay
   // the app's actual design tokens instead of a second, drifting set of hex literals.
+  //
+  // V2 design system, final slice (see FRONTEND_HANDOFF.md): reads --v2-* tokens
+  // directly rather than taking a theme/variant param, because both of this
+  // component's real call sites (GraphPage and CandidateDetailPage's ego graph)
+  // are migrated to V2 together in this same pass -- there is no remaining V1
+  // consumer left needing the old --color-* values, so a toggle would be
+  // unused-branch complexity, not a real requirement. If a future V1 consumer
+  // ever appears, that's the point to add one back, not before.
   const style = getComputedStyle(document.documentElement);
   const color = {
-    primary: readToken(style, "--color-primary", "#2f5fdb"),
-    accent: readToken(style, "--color-accent", "#6b3fc4"),
-    success: readToken(style, "--color-success", "#1f7a45"),
-    danger: readToken(style, "--color-danger", "#c0392b"),
-    warning: readToken(style, "--color-warning", "#9a6b0a"),
-    surface: readToken(style, "--color-surface", "#ffffff"),
-    text: readToken(style, "--color-text", "#1f2430"),
-    textMuted: readToken(style, "--color-text-muted", "#6b7280"),
+    primary: readToken(style, "--v2-cyan", "#3fd8e8"),
+    accent: readToken(style, "--v2-violet", "#a78bfa"),
+    success: readToken(style, "--v2-success", "#4ade80"),
+    danger: readToken(style, "--v2-danger", "#fb7185"),
+    warning: readToken(style, "--v2-warning", "#fbbf24"),
+    surface: readToken(style, "--v2-bg-elevated", "#10131e"),
+    text: readToken(style, "--v2-text", "#eef0f7"),
+    textMuted: readToken(style, "--v2-text-muted", "#9297ab"),
     fontSans: readToken(style, "--font-sans", "sans-serif"),
   };
 
@@ -467,7 +475,7 @@ const MatchGraph = forwardRef(function MatchGraph(
                             className={styles.searchResultButton}
                             onClick={() => handleSelectSearchResult(result.id)}
                           >
-                            <StatusBadge tone={result.kind === "job" ? "primary" : "accent"}>
+                            <StatusBadge variant="glass" tone={result.kind === "job" ? "primary" : "accent"}>
                               {result.kind === "job" ? "Job" : "Candidate"}
                             </StatusBadge>
                             <span className={styles.searchResultLabel}>{result.label}</span>
@@ -572,7 +580,7 @@ function DetailPanel({ selection, sizeClass }) {
     const isJob = selection.kind === "job";
     return (
       <div className={`${styles.panel} ${sizeClass}`}>
-        <StatusBadge tone={isJob ? "primary" : "accent"}>{isJob ? "Job" : "Candidate"}</StatusBadge>
+        <StatusBadge variant="glass" tone={isJob ? "primary" : "accent"}>{isJob ? "Job" : "Candidate"}</StatusBadge>
         <h2 className={styles.panelTitle}>{selection.label}</h2>
         <Link to={isJob ? `/jobs/${selection.refId}` : `/candidates/${selection.refId}`} className={styles.openLink}>
           Open {isJob ? "job" : "candidate"} →
@@ -586,7 +594,7 @@ function DetailPanel({ selection, sizeClass }) {
             <div key={edge.matchId} className={styles.connectionRow}>
               <span className={styles.connectionName}>{edge.otherLabel}</span>
               <span className={styles.connectionScore}>{Math.round(edge.finalScore * 100)}%</span>
-              <StatusBadge tone={edge.qualified ? "success" : "neutral"}>
+              <StatusBadge variant="glass" tone={edge.qualified ? "success" : "neutral"}>
                 {edge.qualified ? "Qualified" : "Not qualified"}
               </StatusBadge>
             </div>
@@ -599,7 +607,7 @@ function DetailPanel({ selection, sizeClass }) {
   // selection.type === "edge"
   return (
     <div className={`${styles.panel} ${sizeClass}`}>
-      <StatusBadge tone={selection.qualified ? "success" : "danger"}>
+      <StatusBadge variant="glass" tone={selection.qualified ? "success" : "danger"}>
         {selection.qualified ? "Qualified match" : "Disqualified match"}
       </StatusBadge>
 

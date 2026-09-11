@@ -101,7 +101,7 @@ export default function ApplicationsPage() {
 
   return (
     <div className={styles.page}>
-      <PageHeader title={job ? `Applications — ${job.title}` : "Applications"} />
+      <PageHeader title={job ? `Applications — ${job.title}` : "Applications"} variant="glass" />
 
       {loading && <p className={styles.status}>Loading applications…</p>}
 
@@ -113,6 +113,7 @@ export default function ApplicationsPage() {
 
       {!loading && !error && applications.length === 0 && (
         <EmptyState
+          variant="glass"
           title="No applications yet"
           description="Select a candidate from the ranking table to get started."
         />
@@ -244,7 +245,7 @@ function ApplicationRow({ application, onUpdated }) {
           )}
         </td>
         <td>
-          <StatusBadge tone={STATUS_TONE[application.status] ?? "neutral"}>
+          <StatusBadge variant="glass" tone={STATUS_TONE[application.status] ?? "neutral"}>
             {STATUS_LABELS[application.status] ?? application.status}
           </StatusBadge>
         </td>

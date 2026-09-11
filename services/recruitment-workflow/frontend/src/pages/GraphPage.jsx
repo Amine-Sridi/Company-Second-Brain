@@ -75,6 +75,7 @@ export default function GraphPage() {
             Reset view
           </button>
         }
+        variant="glass"
       />
 
       {loading && <p className={styles.status}>Loading graph…</p>}
@@ -87,6 +88,7 @@ export default function GraphPage() {
 
       {!loading && !error && rawGraph && rawGraph.edges.length === 0 && (
         <EmptyState
+          variant="glass"
           title="Nothing to graph yet"
           description="Submit a job description and match candidates to see connections here."
         />
