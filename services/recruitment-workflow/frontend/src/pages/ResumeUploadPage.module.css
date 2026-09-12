@@ -68,6 +68,19 @@
   opacity: 0.6;
 }
 
+.dropZoneIcon {
+  width: 28px;
+  height: 28px;
+  margin-bottom: var(--spacing-2);
+  color: var(--v2-text-faint);
+  transition: color var(--v2-transition);
+}
+
+.dropZone:hover .dropZoneIcon,
+.dropZoneActive .dropZoneIcon {
+  color: var(--v2-cyan);
+}
+
 .dropZoneHint {
   margin: var(--spacing-1) 0 0;
   color: var(--v2-text-muted);

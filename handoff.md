@@ -2327,6 +2327,186 @@ implementation — see the bootstrap instructions.
     plus a full live-verification block), and §24 (`[NEXT]` rewritten to: "Final frontend E2E +
     demo-readiness audit").
 
+- **Final production/demo readiness audit — whole system**: **DONE**. This was
+  `FRONTEND_HANDOFF.md`'s own long-postponed `[NEXT]` (queued since a much
+  earlier session, deliberately deferred through the entire V2 frontend
+  redesign — see that file's own §24 history), run now that the frontend side
+  has confirmed the whole redesign stable across three independent
+  real-browser verification passes. Scope was explicitly whole-system, so the
+  findings and one fix below belong here, not in `FRONTEND_HANDOFF.md`, per
+  this project's own "cross-service facts go in `handoff.md`" rule (§23 of
+  that file).
+  - **Infrastructure**: all 5 containers (`postgres`, `resume-intelligence`,
+    `second-brain`, `recruitment-workflow`, `voicehr`) healthy; all 3 Postgres
+    schemas (`resume_intel`, `second_brain`, `recruitment`) reachable via
+    `psql`, pgvector `0.8.6` installed; confirmed live, not assumed, that each
+    service role (`resume_intel_role`/`second_brain_role`/`recruitment_role`)
+    has grants on only its own schema — no cross-schema access exists at the
+    database level, matching CLAUDE.md's rule exactly.
+  - **Real fix applied — missing restart policies**: `infra/docker-compose.yml`
+    had `restart: unless-stopped` on `postgres` only; the four application
+    services had none, meaning a crashed container during a live demo would
+    not come back without a manual `docker compose up`. Added
+    `restart: unless-stopped` to `resume-intelligence`, `second-brain`,
+    `recruitment-workflow`, and `voicehr` — a one-line-per-service config
+    change, no code touched. Applying it forced a real recreate of all four
+    app containers (`docker compose up -d` picked up the config diff), which
+    incidentally became a real, live re-verification of VoiceHR's SQLite
+    persistence fix (see the entry above): a previously-completed interview
+    report (`GET /v1/interviews/{application_id}/report`, real recruiter JWT)
+    was fetched successfully immediately after the recreate, with its
+    transcript and recording still present — the exact failure mode that fix
+    was written to close, now re-confirmed live rather than just documented.
+    All 4 services healthy again within ~10s; `recruitment-workflow`'s own
+    suite re-run post-recreate, still **69/69 passed**.
+  - **Test suites, current state across all four services**: Resume
+    Intelligence **86 passed**; Recruitment Workflow **69 passed**; VoiceHR
+    **140 passed** (must run from the host — its Docker image deliberately has
+    no `pytest`, a lean-production-image choice, not a regression: confirmed
+    by checking `requirements.txt`/`Dockerfile`, neither installs it); Second
+    Brain has **no test suite** (`services/second-brain/tests/` does not
+    exist) — a pre-existing, already-documented gap (see the Resume
+    Intelligence → Second Brain integration entry above, which verified that
+    integration live instead), not something this audit's own "no refactor
+    unless demo-blocking" scope authorized adding.
+  - **Data integrity, checked live against the real database**: every
+    `candidate_id` in `resume_intel.candidates` has a matching row in
+    `second_brain.candidate_knowledge` and vice versa, **with one confirmed
+    exception**: candidate `0a699701-fb39-4c5a-9a3f-cd706f678b2f` exists only
+    in `second_brain.candidate_knowledge` — this is the exact test-data
+    hygiene condition the Phase 10 frontend audit already found and the
+    frontend already handles gracefully (a `404` on `GET /v1/candidates/{id}/
+    identity`, rendered as "(name unavailable)"), re-confirmed still present,
+    not a new defect. **Still-live and demo-relevant**: this candidate
+    currently shows as `qualified: true` (85%) against job "Persistence Test
+    Engineer" (`b9fe4866-...`) — inviting *this specific* candidate during a
+    live demo will `422` at the contact-lookup gate in
+    `invite_application` (`main.py`) exactly as designed, but a presenter
+    who doesn't know this in advance could be caught off guard mid-demo.
+    `recruitment.match_results` rows inspected directly: every immutability
+    field CLAUDE.md requires is present and populated (`candidate_snapshot`,
+    `job_description_id`+`version`, `scoring_config_id`+`version`,
+    `embedding_model_version`, `threshold_snapshot`, both scores, component
+    scores, `matched_requirements`/`missing_requirements`, `qualified`,
+    `hard_gate_passed`). **One real observation, not a defect**:
+    `recruitment_role` holds `UPDATE`/`DELETE` grants on `match_results` at
+    the database level (a blanket per-schema grant, same as every other table
+    that role needs to mutate) — `MatchResult` immutability is therefore a
+    **code-level invariant** (no route ever issues an `UPDATE`/`DELETE`
+    against that table — confirmed by grep across `main.py`/`db.py`), not a
+    database-enforced one. A reasonable tradeoff at this project's scale, and
+    not something this audit's scope authorized changing (a `REVOKE` or
+    trigger is a real schema change, not a config tweak), but worth knowing
+    if a jury asks "what stops someone from editing a MatchResult" — the
+    honest answer is "application code discipline, verified by test
+    coverage," not a hard database constraint. `recruitment.applications` has
+    a real `UNIQUE (job_id, candidate_id)` constraint (backs the already-
+    tested "already selected" `409` behavior) and a real
+    `UNIQUE (match_result_id)` constraint.
+  - **AI/runtime risk — Gemini quota**: `GEMINI_API_KEY` is now set (real key,
+    not empty) in all four services' `.env` files, `GEMINI_MODEL=
+    gemini-3.6-flash` throughout, matching every prior session's fix. Gemini's
+    free tier enforces a hard daily cap (`quotaValue: 20` requests/day for
+    `gemini-3.6-flash`, confirmed by a real `429` hit in an earlier session —
+    see the Resume Intelligence entries above). This audit deliberately made
+    **zero new Gemini calls**: the live browser walkthrough reused a job/
+    candidate/application already exercised in prior frontend sessions, so
+    every explanation/JD-structuring value it touched was already cached
+    server-side, not freshly generated. The three genuinely quota-consuming
+    paths in this system, for the record: (1) `POST /v1/resumes` (resume
+    upload → one Gemini extraction call), (2) `POST /v1/jobs` (job creation →
+    one JD-structuring call + one embedding call, different quota bucket via
+    `gemini-embedding-001`), and (3) `GET /v1/jobs/{id}/matches` on a job
+    whose matches have never been read before (→ up to one explanation call
+    *per matched candidate*, lazily generated and cached from then on — the
+    single most quota-hungry path in the system on a cold job). Every other
+    demo action (login, dashboard, candidate/job/application/report detail,
+    accept/reject, the 2D/3D graph) reads only already-persisted data and
+    costs zero quota.
+  - **Live end-to-end walkthrough, real browser** (Playwright against
+    Chromium already cached on this machine from the frontend sessions' own
+    verification work — see `FRONTEND_HANDOFF.md`'s Phase 27 entry for how):
+    real login → Dashboard → Candidates → Candidate Detail (survived a hard
+    refresh) → Jobs → Job Detail (real persisted `MatchResult` rows, real
+    scores) → Applications → Report Detail (real transcript, real recording
+    resolving via a same-origin `blob:` URL — confirmed the audio proxy never
+    exposes a direct VoiceHR URL to the browser) → Reports list → Interviews
+    list → Knowledge Graph 2D (search + qualified-filter both functioned) →
+    3D → back to 2D → logout (redirected to `/login`) → confirmed a protected
+    route redirects to login when unauthenticated → re-login → mobile
+    (390px) sanity on Dashboard and the Graph page. **Zero new console
+    errors** — the only ones seen were the same two already-documented,
+    already-handled conditions (the candidate-identity `404` above, and a
+    pre-existing benign Cytoscape "custom wheel sensitivity" advisory
+    warning, unrelated to this session).
+  - **Security boundaries, confirmed by direct inspection, not assumed from
+    memory**: no `CORSMiddleware` anywhere in `recruitment-workflow/main.py`
+    — the browser only ever talks same-origin to RWS (the frontend is built
+    into the same container and served by the same FastAPI app, per Phase
+    9's production-serving plan above), so no cross-origin policy is needed
+    and none exists; VoiceHR's report-ready admin email
+    (`services/voicehr/backend/services/mailer.py`, gated on
+    `settings.resend_api_key and settings.admin_email`) is correctly
+    unreachable right now (`RESEND_API_KEY`/`ADMIN_EMAIL` are both empty in
+    `services/voicehr/.env`) — confirmed this is a side notification only,
+    never on the interview/report critical path (the RWS webhook
+    notification is the real completion signal, entirely independent of
+    email); **no email is ever sent to the candidate with their interview
+    link either** — `POST /api/invite` only returns the link in its JSON
+    response, and RWS's own `invite_application` never persists or re-exposes
+    it to the frontend (confirmed by reading the handler — the return value
+    of `voicehr_client.invite_candidate` is never captured). This means a
+    presenter who clicks "Invite" live during the demo has **no in-product
+    way to retrieve the resulting interview link** — see `FRONTEND_HANDOFF.md`'s
+    reference to this readiness audit's report for the recommended demo-day
+    workaround (use an already-completed interview/report for that leg of
+    the demo, not a fresh live invite).
+  - **Secrets/config — flagged, not rotated (per this task's explicit
+    instruction)**: every service already uses the established
+    `changeme-*-key` placeholder convention for inter-service API
+    keys/HMAC secrets/admin password, documented and accepted since earlier
+    sessions. **One item found this session, not previously called out
+    explicitly**: every service's `DATABASE_URL` embeds its Postgres role
+    password as the literal string `changeme`
+    (`postgresql+psycopg://<role>:changeme@postgres:5432/...`), and
+    `infra/docker-compose.yml` publishes Postgres on `0.0.0.0:5432` (the host
+    network interface, not just the internal Docker network) — fine for a
+    local/offline demo on a single machine, but **must be changed before this
+    stack is ever run on a shared or public network**: rotate the three role
+    passwords (and `POSTGRES_PASSWORD`) in `infra/.env`, and/or stop
+    publishing `5432` to the host at all if nothing outside the Docker
+    network genuinely needs direct Postgres access.
+  - **Failure/recovery — what a presenter should actually do, not a system to
+    build**: if Gemini's daily quota is hit mid-demo, `POST /v1/resumes`/
+    `POST /v1/jobs` return a clean `502` with a real error detail (already
+    verified behavior, no crash, no partial/fake data written) — the honest
+    move is to say so and pivot to already-persisted data for the rest of the
+    demo, not to retry repeatedly. If any one backend service is
+    unreachable, RWS's own dependent endpoints return `502` with a named
+    upstream (never a stack trace) — same move: acknowledge and continue with
+    whatever doesn't depend on that service. If an application's interview is
+    already `completed`/`interviewed`, re-inviting is blocked by RWS's own
+    `409` (not invitable) — don't try to invite a second time on that row,
+    view its existing report instead. A candidate without a Resume
+    Intelligence identity record (see the data-integrity finding above)
+    correctly `404`s/`422`s on identity/invite — pick a different candidate
+    row if this happens live, don't treat it as the app being broken. A
+    browser refresh on any detail route (`/candidates/:id`, `/jobs/:id`,
+    `/reports/:id`, etc.) was confirmed live to re-fetch and render correctly
+    from a cold reload — safe to do live if needed.
+  - **Verdict: DEMO READY.** No `CRITICAL` or `HIGH` defect was found. See
+    `FRONTEND_HANDOFF.md`'s own record of this audit for the full
+    classified findings list, the exact 4-6 minute demo sequence, the
+    live-AI-vs-persisted-data breakdown, the pre-demo checklist, and likely
+    jury Q&A — kept there rather than duplicated here since the audit was
+    conversational/report-shaped output, not a new implementation phase, and
+    that file already tracks this project's demo-readiness narrative.
+  - **Not done this pass, deliberately**: no feature work, no UI redesign, no
+    schema migration, no secret rotation (flagged only, per this task's
+    explicit instruction), no fix for the `match_results` grant/immutability
+    observation (a real schema change, out of this audit's "no refactor
+    unless demo-blocking" scope), no Second Brain test suite added.
+
 ## Exact Next Steps
 
 **VoiceHR SQLite persistence hardening is done** — see the entry above for the full session
@@ -2339,21 +2519,26 @@ identified — `GET /v1/graph/candidates-jobs` — is done** (see the two entrie
 scoring/qualification rules were untouched throughout; the endpoint only reads already-persisted
 `MatchResult`/`Job` rows.
 
-**[NEXT] Knowledge graph React page.** Build the recruiter-facing graph view the design audit
-proposed, consuming the now-live `GET /v1/graph/candidates-jobs` endpoint. Concrete guidance carried
-over from the design audit so this doesn't need to be re-derived: (1) library — Cytoscape.js +
-`react-cytoscapejs` (not react-force-graph/three.js, not raw D3-force); (2) placement — a new
-dedicated `/graph` route, not the dashboard or the `CandidateDetailPage` placeholder; (3) data —
-one call to `GET /v1/graph/candidates-jobs` for job nodes + edges, merged client-side with the
-already-existing `GET /v1/candidates` call to get candidate display names (the graph endpoint
-deliberately has no `candidates[]` array — see the entry above for why); (4) rendering — 2D force
-layout, edge thickness/opacity scaled by `final_score`, a clear qualified (`qualified: true`) vs.
-disqualified visual distinction (color/style, not filtering — disqualified edges must stay visible,
-they're part of the audit trail), click-to-highlight a node's connected edges, hover for score/
-requirement detail, zoom/rotate/reset controls, and click-through links into the existing job and
-candidate detail pages; (5) qualification/hard-gate status is rendered exactly as returned, never
-recomputed or re-derived client-side. Out of scope for this step: any new backend endpoint, any
-change to scoring/matching, any skill-node layer (deferred per the design audit).
+**Knowledge graph React page is done — this note was stale until this session.** The frontend
+built exactly what was proposed above, then went considerably further across many subsequent
+frontend-only sessions never logged here (by this project's own convention — see `FRONTEND_HANDOFF.md`
+§23 — frontend-only work is tracked there, not duplicated into this file): a full 2D Cytoscape
+graph at `/graph` (legend filtering, minimum-score filter, search, click-to-highlight, a
+per-candidate ego graph embedded in `CandidateDetailPage`), an entire V2 dark-theme visual
+redesign across all eleven production screens, and — most recently — an explicit, optional,
+lazy-loaded 3D immersive presentation mode for the same graph (`3d-force-graph`, real-browser
+tuned and validated). `FRONTEND_HANDOFF.md` is authoritative for the full phase-by-phase history;
+do not assume this file's silence on any of it means it didn't happen.
+
+**[NEXT] — none outstanding on the backend/cross-service side.** The final production/demo
+readiness audit (see the entry immediately above) found no `CRITICAL`/`HIGH` defect anywhere in
+the system, applied the one real, low-risk fix it found (missing container restart policies), and
+reached a **DEMO READY** verdict. There is no backend feature work, migration, or fix currently
+queued in this file. The only work still tracked anywhere is frontend-only cleanup
+(`FRONTEND_HANDOFF.md`'s own `[NEXT]`: a `--v2-*` → `--color-*` token-fold + documentation pass,
+no visual or behavioral change) — check that file, not this one, before starting anything next.
+If a future session finds a genuine new backend/cross-service gap, add it here as a new numbered
+item below, in the same spirit as the pre-existing open design questions that follow.
 
 The items below predate this session's work and remain genuine open design questions, not gaps
 surfaced by this session.

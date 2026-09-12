@@ -8,6 +8,20 @@ import styles from "./ResumeUploadPage.module.css";
 const ACCEPTED_EXTENSIONS = ".pdf,.docx,.jpg,.jpeg,.png";
 const ACCEPTED_LABEL = "PDF, DOCX, JPG, JPEG, or PNG";
 
+// Phase 29 (see FRONTEND_HANDOFF.md): a real-browser audit found this drop
+// zone read as a bland, text-only box compared to the rest of the app's
+// visual polish -- same hand-authored inline-SVG style Sidebar.jsx's own nav
+// icons already use, not a new icon font/library dependency.
+function IconUploadGlyph(props) {
+  return (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" {...props}>
+      <path d="M12 15V4" strokeLinecap="round" />
+      <path d="M7 8.5 12 3.5 17 8.5" strokeLinecap="round" strokeLinejoin="round" />
+      <path d="M4 15.5v3A2.5 2.5 0 0 0 6.5 21h11a2.5 2.5 0 0 0 2.5-2.5v-3" strokeLinecap="round" />
+    </svg>
+  );
+}
+
 export default function ResumeUploadPage() {
   const [file, setFile] = useState(null);
   const [status, setStatus] = useState("idle"); // idle | uploading | success | error
@@ -125,7 +139,11 @@ export default function ResumeUploadPage() {
 
   return (
     <div className={styles.page}>
-      <PageHeader title="Upload Resume" subtitle="Add a candidate's resume to the talent pool." />
+      <PageHeader
+        title="Upload Resume"
+        subtitle="Add a candidate's resume to the talent pool."
+        variant="glass"
+      />
 
       <div
         className={[
@@ -143,6 +161,7 @@ export default function ResumeUploadPage() {
         tabIndex={0}
         aria-disabled={busy}
       >
+        <IconUploadGlyph className={styles.dropZoneIcon} />
         <p>Click to choose a file, or drag one here</p>
         <p className={styles.dropZoneHint}>Supported formats: {ACCEPTED_LABEL}</p>
         <input

@@ -1090,18 +1090,171 @@ not skip it.
   `buildGraphElements()`/click-highlight/layout touched — only the token names
   `buildStylesheet()` reads and 4 `StatusBadge` props — see §20/§21/§24)*
 
+- [x] **Phase 26 — 3D Knowledge Graph presentation mode (`MatchGraph3D`)** *(the
+  user explicitly reversed the "Optional 3D presentation mode" NO-GO recorded
+  between Phase 19 and 20 — see the note in §24 documenting that reversal — by
+  naming the specific library that resolves the original blocker:
+  `3d-force-graph` used directly, not `react-force-graph`, which is what the
+  original disposable prototype actually measured and rejected for its AR/VR
+  dependency weight and a git+SSH transitive dependency. `3d-force-graph`'s own
+  real dependency tree (`npm view 3d-force-graph dependencies`) has neither —
+  confirmed before installing, not assumed. 2D (`MatchGraph`/Cytoscape) is
+  untouched as the default/analytical view; 3D is an explicit, lazy-loaded,
+  opt-in `2D | 3D` switch on `/graph` only — `CandidateDetailPage`'s ego graph
+  keeps 2D-only, unchanged, out of this task's scope. New files:
+  `components/MatchGraph3D.jsx` + `.module.css` (the immersive Three.js scene,
+  isolated so no Three.js import reaches `MatchGraph.jsx`),
+  `components/GraphDetailPanel.jsx` (the click/selection detail experience,
+  extracted from `MatchGraph.jsx` so both renderers share one implementation
+  instead of two drifting copies), `components/GraphControls.jsx` (the legend/
+  score-filter/search bar, extracted from `MatchGraph.jsx` and lifted to
+  `GraphPage` so that shared state survives a 2D↔3D switch instead of resetting
+  — the "small refactor" this task's own spec anticipated might be needed).
+  `MatchGraph.jsx` gained one new pure export, `buildGraph3DElements()`, reusing
+  the exact same id-prefixing/degree-precomputation logic as the existing
+  `buildGraphElements()` so both renderers derive nodes/edges from one place.
+  No backend change, no new score/qualification computation, no new API call —
+  see §20/§21/§24 for the full verification record and the honest
+  browser-verification gap.)*
+
+- [x] **Phase 27 — 3D graph visual tuning + real-browser validation** *(this
+  session found that Playwright's Chromium browser, already cached on this
+  machine from unrelated prior use, could actually be launched here —
+  `playwright-core` installed into an isolated scratchpad directory, never
+  added to the project itself, driving the already-cached
+  `chromium-1228` binary directly by `executablePath`. This overturns every
+  earlier phase's standing "no browser available" disclosure **for this one
+  session** — real screenshots of the actual rendered WebGL scene were taken
+  and inspected, not just code/API reasoning. See §20/§21 for exactly what was
+  seen and what was fixed as a direct, evidenced result: the initial
+  `zoomToFit` padding and fog density were both too aggressive for this small
+  dataset, washing every node/link out to near-invisibility at the default
+  framing (confirmed via three near-identical screenshots — initial load,
+  "Fit graph," and remount-after-switch — all showing the same dim, distant
+  cluster); node radii were too small to read clearly once actually visible;
+  and the glow-shell rendered as a dull dark ring rather than a glow, because
+  its default alpha blending darkens against a dark background instead of
+  brightening it. All four were corrected with targeted, conservative numeric/
+  material changes — no architecture change, no new dependency, no backend
+  touch, 2D untouched. A second real-browser pass after the fix confirmed the
+  improvement directly (screenshots compared side by side, not assumed) and
+  also incidentally proved several interaction paths end-to-end for the first
+  time with real data on screen: click-to-select population of the shared
+  `GraphDetailPanel` with real match percentages/qualified badges, the
+  qualified/disqualified filter toggle correctly hiding/showing only its edge
+  category without disturbing node positions, and search-triggered camera
+  focus landing on the correct node with its real connections listed. Not
+  every interaction in this task's own checklist could be exercised this way
+  (a scripted browser can click coordinates and read text, but can't judge
+  whether an animation "feels smooth" or hand-verify a real mouse-drag orbit)
+  — see §21 for exactly what remains a human-only judgment call.)*
+
+- [x] **Phase 28 — V2 design system / shell / Dashboard: real-browser audit +
+  targeted fixes** *(the `[NEXT]` text handed to this session was "V2 frontend
+  visual redesign — design system + shell + dashboard" — but Phase 21 had
+  already built exactly that, and its own §20 entry disclosed it was never
+  seen in a real browser. Rather than redesign already-working components on
+  stylistic preference, this session used the same real cached-Chromium
+  technique Phase 27 introduced to actually look at `variables.css`'s
+  `--v2-*` system, `Sidebar`/`TopBar`/`Layout`, and `DashboardPage` rendered
+  live, compare them against the intended direction, and fix only what a real
+  screenshot proved was actually wrong. Verdict: the visual language itself
+  (dark cinematic bento layout, cyan/violet accents, glass panels, restrained
+  motion, a graph-teaser glyph whose colors already match the 3D graph's own
+  job=cyan/candidate=violet convention) is genuinely strong and was **not**
+  rewritten. Three real, screenshot-confirmed defects were found and fixed
+  with small, targeted changes — see §20 for the full before/after record:
+  a light void below the Dashboard panel whenever the viewport is taller than
+  its content (fixed via a scoped body-background toggle in
+  `DashboardPage.jsx`'s own mount lifecycle, reverted on unmount — confirmed
+  live that navigating away still renders the next page's light background
+  correctly, no leak); a mismatched blue `:focus-visible` ring (the shared
+  `global.css` rule, tuned for light pages) appearing on the dark Sidebar/
+  TopBar chrome (fixed with a self-contained `--v2-cyan` override in each
+  component's own `.module.css`, the same "self-contained, can't leak to
+  light pages" pattern Phase 21 already established); and a classic CSS
+  grid/flex "min-width: auto" shrink-blowout causing real horizontal overflow
+  and clipped (not ellipsis-truncated) text on the Dashboard's bento grid at
+  phone width (fixed with `min-width: 0` at the two points in the shrink
+  chain that needed it). No backend change, no new dependency, no routing
+  change, no fake metric, no other page touched.)*
+
+- [x] **Phase 29 — Real-browser visual audit of all nine remaining operational
+  pages, benchmarked against Dashboard/3D Graph** *(the `[NEXT]` text handed
+  to this session was "V2 visual migration — operational pages," but this
+  session was explicitly told to ignore that wording until verifying repo
+  history — `grep -rn "var(--color-" src/pages/*.module.css` confirmed every
+  page except `LoginPage` was already token-clean, meaning Phases 22-25 had
+  already finished the literal migration. So this session's real work was the
+  audit Phase 28 modeled: load every page in the real cached-Chromium browser
+  (Candidates, Candidate Detail, Upload, Jobs, Job Detail, Applications,
+  VoiceHR/Interviews, Reports, Report Detail — desktop and mobile, 18
+  screenshots), classify each against Dashboard/the 3D graph, and touch only
+  what a real screenshot proved was actually weak. Seven of nine pages
+  classified **already V2-quality** (Candidates, Jobs, Job Detail,
+  Applications, Interviews, Reports, Report Detail) and were **not**
+  touched — solid tables, working hover states, consistent badge/link colors,
+  no rewrite applied on stylistic preference. Two classified **minor polish
+  needed** (Candidate Detail: zero cyan/violet accent anywhere, reading as
+  visually disconnected from the rest of the app; Resume Upload: a bland
+  text-only drop zone, plus one real bug — its default-state `PageHeader` was
+  missing `variant="glass"`, entirely unlike its own success-state
+  `PageHeader` two states later in the same file, so its subtitle rendered in
+  the light-theme muted gray against a dark panel).
+  **The single highest-value finding was systemic, not page-specific**: the
+  "light void below the dark panel" bug Phase 28 fixed for `DashboardPage`
+  alone turned out to be a property of every page using the shared "V2 page
+  panel" pattern, not something specific to Dashboard — confirmed by the very
+  first screenshot taken this session (`CandidatesPage`, unmodified since
+  Phase 24, showing the identical gap). Since Phase 21's original reason for
+  never touching `Layout.module.css`'s `.content` no longer holds (every page
+  reachable through the shell now paints its own dark panel; `LoginPage`
+  isn't rendered through this shell at all), this session fixed it once at
+  the root instead of repeating Phase 28's per-page workaround, and removed
+  that now-redundant `DashboardPage.jsx` `useEffect` as part of the same
+  change. See §20/§21 for the full before/after record, including the two
+  fresh cyan/violet accent touches added to `CandidateDetailPage` and the
+  upload-icon glyph added to `ResumeUploadPage`'s drop zone. No backend
+  change, no new dependency, no routing change, no fake data.)*
+
+- [x] **Phase 30 — Final production/demo readiness audit (whole system)** *(run
+  from the repo root, full findings/verdict/demo-sequence recorded in
+  `handoff.md` per this project's own "cross-service facts go there" rule —
+  not restated in full here. Frontend-relevant summary: a real-browser,
+  real-data end-to-end walkthrough — login → Dashboard → Candidates →
+  Candidate Detail (survived a hard refresh) → Jobs → Job Detail →
+  Applications → Report Detail (audio resolved via a same-origin `blob:` URL)
+  → Reports → Interviews → Knowledge Graph 2D (search + filter) → 3D → back
+  to 2D → logout → protected-route redirect → re-login → mobile sanity —
+  completed with **zero new console errors** and no broken cross-link,
+  confirming Phases 21-29's V2 redesign and 2D/3D graph work hold up under a
+  full, deliberately unscripted click-through, not just the per-phase checks
+  that built them. No frontend code was changed by this audit; the one real
+  fix it found (missing container `restart` policies) was infrastructure,
+  recorded in `handoff.md`. Overall system verdict: **DEMO READY**, no
+  `CRITICAL`/`HIGH` defect found.)*
+
 **The frontend now has every screen named in the original admin-dashboard redesign
 proposal, the candidate-detail cross-linking hub, the whole-dataset knowledge graph
-with interactive filtering/search, a per-candidate ego graph reusing the same
-engine, a visually-polished layout-stable version of both, no remaining
-dead-end/missing cross-links from the final UX audit, and the V2 dark "command
-center" visual direction applied to every one of the eleven production screens:
-the app shell, `DashboardPage` (Phase 21), Applications/Interviews/Reports/Report
-Detail (Phase 22), Job Detail/Candidate Detail (Phase 23), Jobs List/Candidates/
-Resume Upload (Phase 24), and now the Knowledge Graph (Phase 25).** The
-dark/light visual seam that every phase since 22 tracked opening and closing is
-now fully closed — **no page anywhere in the app still renders the original V1
-light theme.** All twenty-five phases done. §24 names the next bounded task.
+with interactive filtering/search — now presentable in either a default 2D
+analytical view or an explicit, optional, real-browser-tuned 3D immersive view
+(Phases 26-27) — a per-candidate ego graph reusing the same 2D engine, a
+visually-polished layout-stable version of all of it, no remaining dead-end/
+missing cross-links from the final UX audit, and the V2 dark "command center"
+visual direction applied to every one of the eleven production screens, **every
+one of which has now been checked in a real browser at least once** (Phase 28
+for the shell/Dashboard, Phase 29 for the other nine, Phase 30 for a final
+full-system click-through): the app shell, `DashboardPage` (Phase 21,
+audited+fixed Phase 28), Applications/Interviews/Reports/Report Detail (Phase
+22, audited Phase 29 — no change needed), Job Detail/Candidate Detail (Phase
+23, audited Phase 29 — Candidate Detail polished), Jobs List/Candidates/Resume
+Upload (Phase 24, audited Phase 29 — Resume Upload polished), and the
+Knowledge Graph (Phase 25, audited Phase 29 — no change needed).** The
+dark/light visual seam that every phase since 22 tracked opening and closing
+is fully closed, **and the separate "light void below every panel" defect
+Phase 28/29 found is now fixed once, at the shell level, for every page at
+once.** No page anywhere in the app still renders the original V1 light
+theme. All thirty phases done. §24 names the next bounded task.
 
 Future sessions: update the checkboxes and the relevant page/section status above as
 each phase lands. Do not duplicate this checklist elsewhere or restate history that's
@@ -3142,6 +3295,613 @@ in §24.
   per bento panel) — still not extracted, now explicitly the token-fold task's
   job (see §24), not a new deferral.
 
+**Phase 26 (3D Knowledge Graph presentation mode)**: **DONE, with an explicit
+manual-browser-verification gap** (see §21). Reverses the "Optional 3D
+presentation mode — NO-GO for now" decision recorded between Phase 19 and 20
+(§24 still preserves that original note, now annotated as superseded) — the
+user's own instruction named the specific fix for the reason it was rejected:
+use `3d-force-graph` directly instead of `react-force-graph`.
+
+- **Dependency check, before writing any code**: `npm view 3d-force-graph
+  dependencies` → `{ accessor-fn, kapsule, three, three-forcegraph,
+  three-render-objects }` — no AR/VR package, no git+SSH transitive dependency
+  (the two specific problems the original prototype found in
+  `react-force-graph`). Installed `3d-force-graph@^1.80.0` and `three@^0.180.0`
+  (added as an explicit direct dependency, not left implicit, so npm hoists one
+  single copy of `three` — required for `nodeThreeObject`'s custom `THREE.Mesh`
+  instances to be recognized by 3d-force-graph's own internal `instanceof
+  THREE.Object3D` checks; confirmed only one `node_modules/three` directory
+  exists after install). `npm audit` after install showed 4 pre-existing
+  vulnerabilities (`esbuild`/`vite` dev-server, `react-router`) — none
+  attributable to the two new packages, which appear nowhere in the audit
+  output.
+- **A real, install-time API surface check, not assumed from memory**: read
+  the installed package's own `.d.ts` files directly
+  (`node_modules/3d-force-graph/dist/3d-force-graph.d.ts` and
+  `node_modules/three-forcegraph`'s) before writing `MatchGraph3D.jsx`. This
+  caught one real mistake before it shipped: v1.x's actual constructor is
+  `new ForceGraph3D(domElement)` — not the older Kapsule-style
+  `ForceGraph3D()(domElement)` double-call some pre-1.0 tutorials still show —
+  confirmed against the installed package's own README usage example, not a
+  changelog assumption. Also directly confirmed (not assumed) against the
+  bundled `d3-force-3d@3.0.6` source: `forceManyBody().strength()` and
+  `forceLink().distance()` both accept a per-node/per-link accessor function
+  (not just a constant), and `forceCenter().strength()` exists in this bundled
+  version — all three are used by this component's own force-tuning (see
+  below), and a wrong assumption here would have thrown at runtime in a
+  browser with no build-time signal at all.
+- **Architecture, per this task's own instructions**:
+  - `components/MatchGraph3D.jsx` (new) — the entire Three.js/3d-force-graph
+    scene, reached only via `React.lazy()` from `GraphPage.jsx`. No Three.js
+    import exists anywhere in `MatchGraph.jsx`.
+  - `components/GraphDetailPanel.jsx` (new) — `MatchGraph.jsx`'s previously
+    inline `DetailPanel`/`RequirementChips` extracted verbatim (byte-for-byte
+    same JSX/logic, same `MatchGraph.module.css` classes) so both the 2D and
+    3D renderer share one detail-panel implementation. It renders a plain
+    `{type: "node"|"edge", ...}` object — it has never touched Cytoscape
+    itself — so 3D's own selection builders (`buildNode3DSelection`/
+    `buildEdge3DSelection` in `MatchGraph3D.jsx`) just need to produce the same
+    shape from plain force-graph node/link objects instead of Cytoscape
+    elements.
+  - `components/GraphControls.jsx` (new) — the legend/score-filter/search bar,
+    extracted from `MatchGraph.jsx` (previously gated behind
+    `showLegend`/`showScoreFilter`/`showSearch` props only `GraphPage` ever
+    set — `CandidateDetailPage`'s ego graph never did, so removing them from
+    `MatchGraph.jsx` changes nothing for that call site) and lifted to
+    `GraphPage`, which now owns `hiddenCategories`/`minScore`/`searchTerm`
+    state directly. This is the "small extraction from GraphPage" the task's
+    own spec allowed for — without it, switching from 2D to 3D would unmount
+    the 2D `MatchGraph` (and its internal filter state with it), silently
+    resetting "qualified only"/the score floor/search on every view switch.
+  - `MatchGraph.jsx` changes: removed the legend/filter/search props, state,
+    and JSX (moved above); `hiddenCategories`/`minScore` are now controlled
+    props with safe defaults (`{qualified: false, disqualified: false}` / `0`)
+    so `CandidateDetailPage`'s ego-graph call site needs zero changes; the
+    imperative handle gained `focusNode(nodeId)` (renamed from the old
+    internal `handleSelectSearchResult`, same logic) alongside the existing
+    `resetView()`, so `GraphPage`'s search box can drive either renderer
+    identically; added the new pure export `buildGraph3DElements()`, which
+    reshapes `buildGraphElements()`'s own output into 3d-force-graph's
+    `{nodes, links}` shape — same id-prefixing (`job:`/`candidate:`), same
+    precomputed `degree`, same field names on edges — so the two renderers can
+    never drift into different data semantics. `buildGraphElements()`,
+    `buildNodeSelection()`/`buildEdgeSelection()`, `buildStylesheet()`, and
+    every Cytoscape click/highlight/layout handler are byte-for-byte
+    unchanged.
+  - `GraphPage.jsx`: added `viewMode` state (`"2d"` default), the `2D | 3D`
+    segmented switch in the header actions, lifted filter/search state (above),
+    and `const MatchGraph3D = lazy(() => import("../components/
+    MatchGraph3D.jsx"))` wrapped in `<Suspense>` — only mounted when
+    `viewMode === "3d"`. Both renderers are given the `key="2d"`/`key="3d"`
+    React key so switching between them is a real unmount/mount (not a prop
+    update), which is what makes `MatchGraph3D`'s own cleanup effect
+    (`Graph._destructor()`) actually run when leaving 3D, and guarantees 3D's
+    `useEffect`-based scene setup always starts fresh rather than trying to
+    reuse a stale WebGL context.
+- **3D scene design** (`MatchGraph3D.jsx`), reusing real design tokens read via
+  the same `getComputedStyle()` pattern `MatchGraph.jsx`'s `buildStylesheet()`
+  already established (not a second, hardcoded palette):
+  - Candidate nodes: small `THREE.SphereGeometry` spheres (`--v2-violet`). Job
+    nodes: larger, visually distinct `THREE.IcosahedronGeometry` (`--v2-cyan`)
+    — deliberately a different geometry, not just a bigger sphere, so job vs.
+    candidate reads at a glance. Both use `MeshPhongMaterial` with an
+    `emissive` channel plus a second, larger, transparent
+    `MeshBasicMaterial` shell behind each mesh as a cheap glow/bloom stand-in
+    — no post-processing pipeline added, per the task's own constraint.
+  - `Graph.scene().fog = new THREE.FogExp2(...)` (atmospheric depth) and two
+    plain lights (`AmbientLight`, `PointLight`) added directly via `Graph.
+    scene()` — all stock three.js primitives already present as a
+    3d-force-graph dependency, nothing extra installed for this.
+  - Qualified links render brighter/more saturated (`--v2-success` at higher
+    alpha) with 2 flowing `linkDirectionalParticles`; disqualified links render
+    muted/red-tinted (`--v2-danger` at low alpha), no particles. Link width and
+    both links' base opacity are driven by the persisted `final_score` via the
+    same `mapRange()` helper used for node radius — never recomputed, only
+    reshaped for the accessor `3d-force-graph` expects.
+  - Force tuning for the small real dataset (a handful of jobs, a few dozen
+    edges): `d3Force('charge')` gives job nodes far stronger repulsion
+    (`-260`) than candidates (`-90`) so jobs spread out and act as anchors;
+    `d3Force('link').distance()` pulls a candidate closer to a job the higher
+    their `final_score`; `cooldownTicks(220)` gives the small graph a bounded
+    settle time, after which `onEngineStop` auto-frames the camera
+    (`zoomToFit`) to whatever composition resulted. This is a first,
+    reasoned-but-unverified pass — see the `[NEXT]` in §24 for the actual
+    visual tuning this needs once someone can see it render.
+  - Hover uses the library's built-in `nodeLabel`/`linkLabel` tooltip plus a
+    cursor swap; click focuses the camera via the library's own documented
+    "move camera toward a node" recipe (`cameraPosition` with a
+    distance-ratio offset) and dims everything outside the clicked node's
+    neighborhood by reassigning `nodeThreeObject`/`linkColor` with the current
+    focus set baked in; clicking the background clears it. Search (via the
+    shared `GraphControls`) calls the exact same `focusNode(id)` path a click
+    does, through the component's own imperative handle.
+  - Filtering (`hiddenCategories`/`minScore`) re-derives a filtered `links`
+    array and calls `.graphData({nodes, links})` again rather than relying on
+    the library's `linkVisibility` accessor — chosen because `3d-force-graph`
+    merges incoming data by node `id` across `.graphData()` calls and keeps
+    each surviving node's current `x/y/z` (confirmed from the underlying
+    `three-forcegraph` update-diffing behavior, though — like every dynamic
+    interaction in this phase — the *visible smoothness* of that merge still
+    needs eyes-on confirmation, not just architectural confidence); the node
+    array itself is never filtered, so this can't move nodes around, only
+    toggle which edges draw.
+  - `prefers-reduced-motion`: checked once via `window.matchMedia(...)` at
+    mount; when set, every `cameraPosition`/`zoomToFit` call uses a `0`ms
+    transition instead of the normal ~600-1000ms, per the task's own
+    accessibility requirement.
+  - WebGL failure fallback: the entire scene-setup effect is wrapped in
+    `try/catch`; a thrown error sets a `status: "error"` state that renders a
+    plain "3D preview isn't available in this browser" message with a button
+    back to 2D, instead of a blank pane.
+- **Verification — what was actually possible in this environment, stated
+  plainly rather than implied**:
+  - `npm run build` (local): 905 modules, 0 errors. Main bundle
+    `index-*.js` **826.21 kB / 265.14 kB gzip** — a ~3 kB increase over Phase
+    25's 823.50 kB, from the new small components/JSX/CSS, **not** from
+    Three.js. `MatchGraph3D-*.js` landed in its own chunk: **1,251.16 kB /
+    337.69 kB gzip** — this is where `three`/`3d-force-graph` actually live.
+  - **Lazy-load proof, inspected directly in the built output** (not assumed
+    from `React.lazy()` alone): `dist/index.html` references only the main
+    bundle — no `<link rel="modulepreload">` for the 3D chunk. The main
+    bundle's own source contains exactly one reference to it:
+    `import("./MatchGraph3D-<hash>.js")` — a real dynamic `import()` call
+    site, only reachable once `GraphPage` actually renders the 3D branch.
+    `grep -c "THREE.Scene\|IcosahedronGeometry\|ForceGraph3D"` against the
+    **main bundle alone** returned `0` — confirmed zero Three.js/3d-force-graph
+    code reaches the normal bundle.
+  - **Docker**: real `docker compose build recruitment-workflow` (multi-stage
+    build runs the same `vite build` inside the container — identical output
+    sizes/hashes to the local build) + `up -d --no-deps --force-recreate`.
+  - Full RWS backend suite, inside the freshly recreated container: **69/69
+    passed** (no backend file touched by this phase at all).
+  - **Live route check**: `/`, `/candidates`, `/upload`, `/jobs`,
+    `/interviews`, `/reports`, `/graph`, `/health` all returned real `200`s
+    against production port 8003 post-rebuild.
+  - **Served-bundle checks against the real running container** (not the local
+    `dist/` copy): fetched the real served main bundle and the real served 3D
+    chunk directly over HTTP — both `200`, sizes matching the local build
+    exactly; confirmed the same "3D chunk only reachable via one dynamic
+    `import()` in the main bundle, zero Three.js symbols in the main bundle"
+    result against what the container actually serves, not just what Vite
+    produced locally. Grepped the served main bundle for
+    `resume-intelligence`/`second-brain`/API-key-shaped strings — none found,
+    consistent with every prior phase's same check.
+  - **Live data correctness** (real recruiter login against the real running
+    stack, same dataset every phase since 25 has used): `GET
+    /v1/graph/candidates-jobs` and `GET /v1/candidates` both `200`, 4 jobs, 26
+    edges, 7 candidates, 17 qualified / 9 disqualified. Container logs clean —
+    no errors, no PII, only expected access-log lines.
+  - **Headless structural re-verification of the new data adapter** (not the
+    3D rendering itself, which needs a real browser — see §21): a Node script
+    against the real bundled data above confirmed `buildGraph3DElements()`
+    produces exactly 11 plain nodes (4 jobs + 7 candidates) and 26 plain links
+    with no Cytoscape `{data:}` wrapper; the qualified/disqualified split
+    matches the real 17/9; every link's `source`/`target` id resolves to a
+    real node in the same array (no dangling reference); every node's
+    precomputed `degree` matches its real edge count; and the `mapRange()`
+    helper used for node radius/link width clamps and interpolates correctly
+    at its domain boundaries and midpoint. **11/11 checks passed.**
+  - `git status --porcelain` after the pass showed exactly the expected files:
+    4 new (`MatchGraph3D.jsx`/`.module.css`, `GraphControls.jsx`,
+    `GraphDetailPanel.jsx`), `MatchGraph.jsx`/`GraphPage.jsx`/
+    `GraphPage.module.css` modified, `package.json`/`package-lock.json`
+    modified (the two new dependencies) — no backend file, no other page.
+  - **What was explicitly NOT verified, and cannot be from this environment**:
+    the actual WebGL scene rendering, orbit/zoom camera controls, the
+    click-to-focus camera animation, hover tooltips, the highlight/dim visual
+    effect, the fog/glow/lighting appearance, filter/search actually updating
+    the visible scene, the 2D↔3D switch's visual transition, and the WebGL
+    failure fallback's actual trigger conditions. `3d-force-graph` requires a
+    real `window`/WebGL context and cannot run in Node — there is no headless
+    path for this the way Cytoscape has one. See §21/§24's explicit
+    manual-verification checklist; do not treat the checks above as a
+    substitute for it.
+
+**Phase 27 (3D graph visual tuning + real-browser validation)**: **DONE** —
+and, unusually for this project's frontend history, with a **real browser
+actually used**, not just build/data-level reasoning. Recorded here in detail
+because it changes what future sessions can trust about this feature.
+
+- **How real browser access happened**: this machine already had Playwright's
+  Chromium binary cached at `AppData/Local/ms-playwright/chromium-1228` from
+  unrelated prior use (confirmed with a plain `find` before assuming
+  anything). `playwright-core@1.63.0` (the lightweight driver package, no
+  bundled browser download) was installed into an **isolated scratchpad
+  directory** (`npm init -y` + `npm install`, entirely outside
+  `services/recruitment-workflow/frontend/`) and pointed at that cached
+  binary via `executablePath` — **the project's own `package.json` was never
+  touched for this**, this is a verification tool, not a product dependency.
+  Headless Chromium's default configuration on this machine already exposes
+  real GPU-backed WebGL (`ANGLE (Intel, Intel(R) UHD Graphics ...) Direct3D11`
+  — confirmed via a `canvas.getContext('webgl')` + `WEBGL_debug_renderer_info`
+  probe before writing the real test) — no `--use-gl`/`--ignore-gpu-blocklist`
+  flags were needed, and one specific combination of those flags actually
+  broke screenshot capture outright (`Page.captureScreenshot` protocol error)
+  during an early attempt, so they were deliberately left off.
+- **What the script did**: logged in via the real `POST /v1/auth/login` API,
+  injected the resulting JWT into `sessionStorage` under the real key
+  (`rws_jwt`, per `src/auth/token.js`) the same way the app itself reads it,
+  navigated to `/graph` against the real running container, then drove the
+  page exactly as a recruiter would: switch to 3D, wait for the force
+  simulation to settle, screenshot; hover and click the canvas; click legend/
+  filter/search/camera controls; switch back to 2D and re-enter 3D. Console
+  and page-error listeners were attached for the whole run.
+- **Round 1 (before any tuning change) — real problems found, not assumed**:
+  - The initial post-settle composition, the "Fit graph" button's result, and
+    a fresh remount after switching back to 3D **all produced the same
+    result**: a tiny, dim, barely-distinguishable cluster near the bottom of
+    an otherwise empty dark canvas. Nodes were visible only as faint gray-teal
+    smudges — none of the intended cyan/violet color, no readable size
+    distinction between job and candidate nodes.
+  - A comparison screenshot of the unchanged 2D view (same data, same design
+    tokens) showed vivid, saturated colors — proving the token *values* were
+    never the problem, only how the 3D scene presented them at its default
+    camera distance.
+  - An incidental camera move (triggered while probing for a clickable node)
+    landed much closer to the cluster and, at that closer distance, the
+    color/shape/link design actually looked reasonable — this was the key
+    clue that the real defect was **framing distance + fog interacting
+    badly**, not the color/material choices themselves.
+  - At that same closer distance, the glow-shell effect was visible clearly
+    enough to see it was wrong in a different way: each node showed a dull,
+    slightly-lighter-than-background **dark ring**, not a glow — the
+    telltale look of a translucent shell alpha-blended over a very dark
+    background (which can only ever move a pixel *toward* the shell's flat
+    color, never brighten it), not a genuine light-emitting effect.
+- **Fixes applied, each directly tied to one of the observations above** (all
+  in `MatchGraph3D.jsx`, `buildNodeObject`/the scene-setup effect only —
+  code comments at each site cross-reference this phase for future sessions):
+  - `Graph.scene().fog` density: `0.0055` → `0.0016`. This alone was expected
+    to be the single biggest fix, since three near-identical "washed out"
+    screenshots all shared the same distant default framing.
+  - `zoomToFit` padding, centralized into one new `ZOOM_FIT_PADDING` constant
+    and applied consistently to the initial auto-fit, "Reset camera," and
+    "Fit graph" (previously each passed its own literal `70`): `70` → `26`,
+    bringing the default camera meaningfully closer on this dataset's actual
+    size.
+  - Node radii: jobs `7-12` → `9-15`, candidates `3.2-5.6` → `4.5-7.5`.
+  - Ambient/point light intensity: `0.65`/`0.5` → `0.85`/`0.75` (the
+    `MeshPhongMaterial` nodes use needs real light to shade its diffuse
+    component; emissive alone wasn't enough at the corrected distance).
+  - Glow shell: switched from the default alpha blend to
+    `THREE.AdditiveBlending` (brightens the pixels behind it instead of just
+    alpha-compositing a dark translucent color), size ratio `radius * 2` →
+    `radius * 1.6`, opacity `0.16` → `0.28` (default) / `0.03` → `0.05`
+    (dimmed) — tuned to read as a soft halo, deliberately not pushed further
+    given this task's own explicit "avoid excessive glow" constraint.
+- **Round 2 (after the fixes) — re-verified with the same real-browser script
+  against a real rebuilt Docker container, screenshots compared directly, not
+  assumed improved**:
+  - The initial composition now clearly shows 4 distinct bright-cyan job
+    icosahedra of visibly different sizes (degree-based), 7 smaller violet
+    candidate spheres, green (qualified) and red (disqualified) links with
+    visible flowing particles on qualified links, and a soft cyan/violet glow
+    around each node — the whole graph fits the frame as one intentional,
+    readable composition, not a washed-out smudge.
+  - **Click-to-select, confirmed working end to end with real data on
+    screen**: clicking a job node populated the shared `GraphDetailPanel`
+    with its real title, an "Open job →" link, "7 CONNECTIONS," and 7 rows of
+    real persisted `final_score` percentages and qualified/not-qualified
+    badges (e.g. `75% Not qualified`) — proving `MatchGraph3D`'s own
+    `buildNode3DSelection` produces a shape `GraphDetailPanel` renders
+    correctly, with real data, not just a structurally-plausible shape.
+  - **The highlight/dim neighborhood effect is visibly correct**: nodes/links
+    outside the clicked node's neighborhood clearly dim relative to the
+    focused cluster in the same screenshot.
+  - **The qualified/disqualified filter toggle, re-tested live**: toggling
+    "Qualified match" off in the legend left only red (disqualified) links
+    visible on screen, with node positions visibly unchanged from the
+    unfiltered screenshot — real visual confirmation (not just architectural
+    inference) that the `.graphData()` re-filter approach doesn't jump the
+    layout.
+  - **Search-triggered camera focus, confirmed working end to end**:
+    searching and selecting a job moved the camera to frame it with its real
+    5 qualified connections and percentages shown in the panel.
+  - **2D↔3D switching and remount, confirmed clean**: the 2D screenshot taken
+    after returning from 3D was pixel-identical in structure to 2D's own
+    baseline screenshot (same data, same colors, same layout) — no visual
+    regression; re-entering 3D afterward produced the same clean composition
+    with no console/page errors on either transition.
+  - **Console/page-error listener across the entire scripted run**: zero page
+    errors; the only console output was one pre-existing Cytoscape
+    "custom wheel sensitivity" advisory warning (present before this task,
+    unrelated to 3D, harmless) — no WebGL/Three.js error, no React error, no
+    uncaught exception.
+- **Standard build/Docker verification, same as every phase**: `npm run
+  build` (905 modules, 0 errors; bundle sizes effectively unchanged —
+  `index-*.js` still 826.21 kB / `MatchGraph3D-*.js` still ~1,251 kB, since
+  this pass only changed numeric constants and one blending mode, not
+  imports); the served main bundle still contains exactly one
+  `import("./MatchGraph3D-<hash>.js")` dynamic import and zero Three.js
+  symbols, confirming lazy-loading is still intact after the tuning changes;
+  real `docker compose build` + `up -d --no-deps --force-recreate`; full RWS
+  suite **69/69 passed**; `/graph` route `200`. No backend file touched, no
+  new API call added (confirmed by diffing `MatchGraph3D.jsx` for any new
+  `fetch`/`api/` reference — none).
+- **What this phase still could NOT verify, honestly**: whether the camera
+  motion/orbit *feels* smooth (a scripted click can measure "did the camera
+  move to roughly the right place," not "does this feel good to a human
+  hand on a mouse"); real mouse-drag orbit/pan interaction (the script only
+  ever moved the mouse to fixed coordinates and clicked, never performed a
+  drag); WebGL performance under real sustained interaction; the
+  `prefers-reduced-motion` branch (not exercised — would need a browser
+  context launched with that media feature forced); and the WebGL-failure
+  fallback UI (still never triggered by a real failure, only reasoned about
+  via its `try/catch`). See §21 for the precise, narrowed-down remaining
+  checklist — it is considerably shorter than before this phase, but not
+  empty.
+- Screenshots from both rounds were saved to this session's scratchpad
+  directory only (`.../scratchpad/pwverify/*.png`) — not committed to the
+  repository and not embedded in this document; a future session without
+  the same cached Chromium binary should not assume they still exist.
+
+**Phase 28 (V2 design system / shell / Dashboard: real-browser audit + targeted
+fixes)**: **DONE**. Same real cached-Chromium technique as Phase 27, this time
+pointed at `/` (Dashboard), `Sidebar`, `TopBar`, and a page-to-page navigation,
+across desktop/tablet/phone viewports, before touching any code.
+
+- **Why an audit first, not a rewrite**: the `[NEXT]` text for this session
+  asked for a "V2 frontend visual redesign — design system + shell +
+  dashboard," but Phase 21 (see its own §19/§20 entries) already built exactly
+  that — a dark cinematic bento dashboard, glass `Sidebar`/`TopBar`, a
+  restrained cyan/violet accent pair, subtle grid/aurora/noise texture, and
+  `motion`-driven entrance/hover/count-up animations, all gated behind
+  `prefers-reduced-motion`. Phase 21's own verification, however, was
+  explicitly build/data-level only ("no browser is available in this
+  environment" — its exact words). This session had a real browser (the same
+  cached Playwright Chromium Phase 27 found), so the honest first step was to
+  actually look, not assume Phase 21's code-level confidence was equivalent to
+  visual confirmation, and not rebuild something that turned out to be
+  already good.
+- **What the audit found matched the intended direction well**: the bento
+  layout, gradient hero text, glass stat tiles with alternating cyan/violet
+  accent lines, the pipeline distribution bar, and the graph-teaser card all
+  rendered as intended — genuinely reading as a "premium AI command center,"
+  not a generic template. One specific consistency point was checked directly
+  and confirmed already correct: the graph-teaser glyph's color mapping
+  (violet = candidate, cyan = job) already matches the 3D graph's own
+  convention from Phase 26/27 — no fix needed there. Hover states on the
+  quick-action buttons and the graph-teaser card were confirmed subtle and
+  working via direct screenshot comparison.
+- **Three real, screenshot-confirmed defects were found and fixed**:
+  1. **A light void below the Dashboard panel whenever the viewport is taller
+     than the page's own content.** `DashboardPage.module.css`'s `.page` is a
+     dark panel sitting inside `Layout.module.css`'s still-light `.content`
+     wrapper (deliberately untouched since Phase 21 — see §21's historical
+     seam note); with no explicit height on either, a tall viewport simply
+     showed `body`'s own light background in the gap below the panel — a
+     screenshot at 1440×900 showed roughly a third of the viewport as plain
+     light void beneath the dark content. **Fix**: `DashboardPage.jsx` now
+     toggles `document.body.style.backgroundColor` to `var(--v2-bg)` in a
+     `useEffect` on mount, restoring whatever value was there before on
+     unmount. This is scoped entirely to Dashboard's own mount lifecycle —
+     `Layout.module.css` and every other page's own styling are untouched.
+     **Verified live, not just reasoned**: a screenshot taken immediately
+     after navigating away to `/candidates` showed that page's normal light
+     background rendering correctly, confirming the toggle reverts cleanly
+     and doesn't leak into other (still-light) pages.
+  2. **A mismatched blue keyboard-focus ring on the dark chrome.**
+     `global.css`'s shared `:focus-visible` rule uses `--color-primary` (a
+     light-theme blue, `#2f5fdb`) — correct for every still-light page, but a
+     screenshot of a keyboard-focused Sidebar nav link showed this blue ring
+     looking visibly out of place against the dark `--v2-*` chrome, undercutting
+     the "coherent visual relationship" this session was asked to check for.
+     **Fix**: added a `:focus-visible` override using `--v2-cyan` directly
+     inside `Sidebar.module.css` (on `.link`) and `TopBar.module.css` (on
+     `.logoutButton`) — the same "self-contained, `--v2-*`-only, cannot affect
+     any light page" pattern Phase 21 already established for every rule in
+     both files. `global.css` itself was not touched, so no light page's own
+     focus ring changed.
+  3. **A real mobile horizontal-overflow bug on the Dashboard's bento grid.**
+     A phone-width (390px) screenshot showed the pipeline distribution bar,
+     activity-list dates, and the graph-teaser's description text all clipped
+     abruptly at the right edge of the viewport, instead of the ellipsis
+     truncation `.activityLabel` was already styled for
+     (`overflow: hidden; text-overflow: ellipsis; white-space: nowrap`) — the
+     classic CSS "a `1fr` grid track's implicit `min-width` is `auto`, not
+     `0`" shrink-blowout, compounded by `.activityLabel` itself missing
+     `min-width: 0` (a flex item's own implicit `min-width: auto` prevents
+     `text-overflow: ellipsis` from ever engaging, independent of the grid
+     issue). **Fix**: added `.bento > * { min-width: 0; }` (one rule,
+     covering every grid item regardless of which file defines its class) and
+     `min-width: 0` on `.activityLabel` directly, both in
+     `DashboardPage.module.css` only.
+- **Round 2, real-browser re-verification after the fixes, same script,
+  rebuilt Docker container**:
+  - Desktop (1440×900): the dark panel now reaches the bottom of the
+    viewport with no light gap, confirmed by direct screenshot comparison
+    against the "before" round.
+  - The activity list's longer labels now visibly ellipsis-truncate
+    (e.g. "Job posted: Senior Ba…") instead of silently overflowing their own
+    row without visual consequence at this width — this is the fix
+    *working as designed*, not a regression: the truncation behavior was
+    always coded, just silently unable to engage before `min-width: 0` was
+    added.
+  - Phone (390px): every element — KPI tiles, the distribution bar, activity
+    rows, the graph-teaser's full two-line description — now stays fully
+    within the viewport with correct ellipsis truncation where labels are
+    long; the "Knowledge Graph" description that was cut mid-word before now
+    wraps cleanly across two lines in full.
+  - Keyboard focus on the "Knowledge Graph" nav link now shows a cyan ring
+    that reads as part of the same design language as the rest of the chrome.
+  - Tablet (768px) and the page-transition (Dashboard → Candidates,
+    mid-transition and settled) screenshots were re-checked and are
+    unaffected by any of the three fixes, as expected — confirmed, not
+    assumed.
+  - Console/page-error listener across the entire scripted run, both rounds:
+    zero errors, zero warnings, in either round.
+- **Standard build/Docker verification, same as every phase**: `npm run
+  build` (905 modules, 0 errors; main bundle `826.38 kB` / 3D chunk unchanged
+  at `~1,251 kB` — this pass changed only a handful of CSS rules and one
+  small `useEffect`, no new import); real `docker compose build` +
+  `up -d --no-deps --force-recreate`; full RWS suite **69/69 passed**; `/`
+  route `200`. The served main bundle's dynamic `import("./MatchGraph3D-
+  <hash>.js")` (Phase 26/27's lazy-loading) was re-confirmed intact and
+  unaffected by this pass. No backend file touched, no new API call (checked
+  by diffing every changed file for `fetch`/`api/`/`axios` references — none
+  beyond what already existed).
+- `git status --porcelain` after the pass showed exactly the expected files:
+  `pages/DashboardPage.jsx` + `DashboardPage.module.css`,
+  `components/Sidebar.module.css` + `TopBar.module.css` — no other page, no
+  `Layout.jsx`/`.module.css`, no `variables.css`/`global.css`, no router, no
+  API module, no backend file.
+- **What this phase deliberately did not do**: rewrite or redesign any part
+  of the shell/dashboard that the audit found already working (per this
+  task's own explicit "do not redo working components for stylistic
+  preference alone"); touch `variables.css`'s `--v2-*`/`--color-*` token
+  split (that remains the still-postponed token-fold task, §24); add any new
+  gradient, glow, or motion beyond what Phase 21 already had; or extend this
+  audit to any of the still-light operational pages (`CandidatesPage`,
+  `JobsListPage`, etc.) — those pages' own light/dark seam is real, disclosed,
+  and is exactly what "V2 visual migration — operational pages" (this
+  phase's own `[NEXT]`, see §24) is for, not something to fix incidentally
+  here.
+
+**Phase 29 (real-browser visual audit of the nine remaining operational
+pages)**: **DONE**. Same real cached-Chromium technique as Phases 27/28, this
+time systematically across every page this handoff's own history had marked
+"V2-migrated" but never actually screenshotted.
+
+- **Ignoring the literal `[NEXT]` wording, as instructed, and checking repo
+  history first**: `grep -rn "var(--color-" services/recruitment-workflow/
+  frontend/src/pages/*.module.css` returned zero matches for all nine target
+  pages (only `LoginPage.module.css`, out of scope, still had any) —
+  confirming directly, not by trusting this document's own prose, that
+  Phases 22-25's token migration really is complete. This meant the honest
+  scope of "V2 visual migration — operational pages" was a *visual audit*,
+  the same category of work Phase 28 had just modeled for Dashboard, not a
+  fresh migration.
+- **Audit method**: one Playwright script logged in once, then navigated to
+  all nine pages (`/candidates`, `/candidates/:id`, `/upload`, `/jobs`,
+  `/jobs/:id`, `/jobs/:id/applications`, `/interviews`, `/reports`,
+  `/reports/:id`) at both a desktop (1440×900) and phone (390×844) viewport,
+  taking a full-page screenshot of each — 18 screenshots total, reviewed
+  directly, before any code change.
+- **Classification** (per this task's own three-tier scheme):
+  - **Already V2-quality, untouched**: `CandidatesPage`, `JobsListPage`,
+    `JobDetailPage`, `ApplicationsPage`, `InterviewsPage`, `ReportsPage`,
+    `ReportDetailPage`. All seven showed solid, consistent tables, working
+    row-hover states, correctly color-coded status/qualified badges, cyan
+    links, and gradient score bars/buttons matching Dashboard's own
+    cyan-violet gradient exactly (`selectButton`'s
+    `linear-gradient(120deg, var(--v2-cyan), var(--v2-violet))` — checked
+    directly against the source, not assumed from a screenshot's apparent
+    color, since a short button can make a diagonal two-color gradient read
+    as a single flatter blue at a glance). No mobile overflow found on any of
+    the seven (their tables already use the established
+    `.tableWrapper { overflow-x: auto }` + `min-width` pattern from Phase 15,
+    which correctly becomes a horizontal-scroll region rather than
+    overflowing the page — an intentional, pre-existing, consistent pattern
+    across every tabular page in the app, not something this phase touched).
+  - **Minor polish needed, fixed**: `CandidateDetailPage` and
+    `ResumeUploadPage` — see below.
+  - **Meaningful redesign needed**: none. No page warranted it.
+- **The one systemic (not page-specific) defect, found and fixed once**:
+  the very first screenshot this phase took (`CandidatesPage`, desktop) showed
+  the identical "light void below the dark panel" defect Phase 28 had found
+  and fixed *only for `DashboardPage`* — proving it was never a
+  Dashboard-specific bug, it was a property of the shared "V2 page panel"
+  pattern every one of these pages uses, just never noticed before because no
+  prior phase had a real browser to see it in. Root cause (see
+  `Layout.module.css`'s own updated comment): `.content` had never been given
+  either a background or a height, because Phase 21's original justification
+  for leaving it alone — most pages still rendered plain text directly onto
+  it, no dark panel of their own yet — stopped being true once Phase 25
+  finished migrating every page to its own dark panel. **Fix**: `.content`
+  in `Layout.module.css` now gets `flex: 1 1 auto; min-height: 0; background:
+  var(--v2-bg-inset);` — the `flex`/`min-height` pair makes it actually reach
+  the bottom of `.main`'s height (a plain block box without them just sizes
+  to its own content, which was the actual root cause, not merely a missing
+  background color), and the background then has something to paint. This
+  single change fixes the defect on **every** page reached through the shell
+  at once, not just the nine audited this phase — confirmed live on
+  `DashboardPage`, `GraphPage` (both 2D and re-checked after this change),
+  and all nine audited pages, desktop and mobile, with zero regression.
+  `DashboardPage.jsx`'s own Phase 28 `useEffect` body-background toggle
+  (a correct but page-scoped workaround at the time) was removed as part of
+  this same change — it is now fully superseded by the shell-level fix and
+  would otherwise be redundant, dead complexity.
+- **`CandidateDetailPage` (minor polish)**: the audit's clearest finding —
+  this page used zero cyan/violet accent color anywhere, an all-gray palette
+  that read as visually disconnected from Dashboard, the 3D graph, and every
+  other migrated page. Fixed with two small, restrained additions, not a
+  redesign: (1) each of the page's three sections (`Professional knowledge`,
+  `Applications`, `Knowledge Graph`) gained a 2px top accent line, alternating
+  cyan/violet — the exact same device `StatTile` already uses on Dashboard,
+  applied via `:nth-of-type(odd)`/`:nth-of-type(even)` rather than a new prop;
+  (2) `years_of_experience`'s value now renders like a StatTile value (larger,
+  bold, cyan) instead of plain body text, and the `job_titles` chip list (a
+  handful of entries) now renders with a violet tint, while the (potentially
+  dozens-long) `skills` chip list stays neutral gray — deliberately not
+  tinting every skill chip too, since that would read as busy/loud on a
+  candidate with a large skill list, the opposite of "restrained."
+- **`ResumeUploadPage` (minor polish + one real bug)**: the audit found the
+  drop zone read as a bland, text-only box next to the rest of the app's
+  polish. Fixed by adding a small hand-authored inline-SVG upload-arrow icon
+  above the drop-zone text (same style convention as `Sidebar.jsx`'s own nav
+  icons — no icon font/library added), tinted `--v2-text-faint` at rest and
+  `--v2-cyan` on hover/drag-active, matching the drop zone's own existing
+  hover-state color change. Separately, the audit found a **real, if subtle,
+  bug**: this page's default-state `<PageHeader>` call was missing
+  `variant="glass"` — its own success-state `<PageHeader>` two states later in
+  the same file already had it, an inconsistency within one file. Without it,
+  `PageHeader`'s subtitle rendered in `--color-text-muted` (a light-theme
+  gray, `#6b7280`) against this page's dark panel instead of the intended
+  `--v2-text-muted` — lower contrast than every other migrated page's
+  subtitle. **Fix**: added the missing `variant="glass"`, matching the
+  pattern already correct everywhere else in this same file.
+- **Verification — real browser, both rounds**:
+  - Round 1 (before) and round 2 (after), same 18-screenshot script, real
+    rebuilt Docker container both times. Round 2 confirmed: the dark
+    background now reaches the bottom of the viewport on every page checked
+    (Candidates, Candidate Detail, Upload, Job Detail, Reports, the 2D
+    `GraphPage`, and re-confirmed on Dashboard); `CandidateDetailPage` now
+    shows alternating cyan/violet top accents, a cyan "0.3" years-of-experience
+    value, and violet job-title chips, with skill chips correctly left
+    unchanged (still neutral gray); `ResumeUploadPage` now shows an upload
+    icon and a properly `--v2-text-muted`-colored subtitle; every page
+    re-checked at phone width (390px) showed no overflow or regression from
+    the shell-level `.content` change.
+  - **Console/page-error listener across the entire scripted run, both
+    rounds**: the only errors seen, identically in both rounds (proving
+    they predate this phase, not introduced by it), were two `404`s per
+    viewport on `GET /v1/candidates/{id}/identity` — traced directly (not
+    assumed) to the exact same test-data hygiene condition §21 already
+    documents from the Phase 10 audit (a candidate present in Second Brain's
+    scoring index with no matching Resume Intelligence contact record); the
+    frontend's own existing, correct handling of that condition is what's
+    visible in `JobDetailPage`'s "Candidate 0a699701… (name unavailable)"
+    row. Not a regression, not a new limitation, not touched by this phase.
+  - **Standard build/Docker verification**: `npm run build` (905 modules, 0
+    errors; main bundle `826.78 kB` gzip `265.35 kB`, 3D chunk unchanged at
+    `~1,251 kB` — this pass changed CSS and a handful of small JSX pieces
+    only, no new import); real `docker compose build` +
+    `up -d --no-deps --force-recreate`; full RWS suite **69/69 passed**; all
+    eight routes checked (`/`, `/candidates`, `/upload`, `/jobs`,
+    `/interviews`, `/reports`, `/graph`, `/health`) returned real `200`s
+    against the rebuilt container. The served main bundle's dynamic
+    `import("./MatchGraph3D-<hash>.js")` (Phase 26/27's lazy-loading) was
+    re-confirmed intact. No backend file touched, no new API call (checked by
+    diffing every changed file for `fetch`/`api/`/`axios` references — none
+    beyond what already existed).
+- `git status --porcelain` after the pass showed exactly the expected files:
+  `pages/Layout.module.css` (the shell-level fix), `pages/DashboardPage.jsx`
+  (the now-superseded `useEffect` removed — this brought the file back to
+  byte-identical with the last commit, since nothing else in it changed this
+  phase, hence it doesn't even show as modified), `pages/
+  CandidateDetailPage.jsx` + `.module.css`, `pages/ResumeUploadPage.jsx` +
+  `.module.css` — no other page, no router, no API module, no backend file.
+- **What this phase deliberately did not do**: touch any of the seven pages
+  classified already-V2-quality; redesign `CandidateDetailPage`'s or
+  `ResumeUploadPage`'s actual layout/structure (only color/icon accents were
+  added — every section, field, table, and empty state is exactly where and
+  what it was); add a custom audio player to `ReportDetailPage` (the native
+  `<audio controls>` element was considered and deliberately left alone — a
+  custom player is real, disproportionate complexity/risk for a cosmetic
+  gain the task's own "boring over clever" project convention doesn't
+  support); or fold `--v2-*`/`--color-*` (still the separately-queued
+  token-fold task, §24).
+
 ---
 
 ## 21. Known limitations / deliberately deferred
@@ -3308,6 +4068,53 @@ in §24.
   future session judges a real display font is worth that risk, that's a
   reasonable call to revisit — it wasn't an oversight here, it was weighed and
   declined for this pass.
+- **The "Optional 3D presentation mode — NO-GO for now" decision recorded
+  between Phase 19 and 20 (still preserved verbatim in §24 for history) is
+  superseded by Phase 26.** That decision was specifically about
+  `react-force-graph`'s AR/VR dependency weight and git+SSH transitive
+  dependency, plus the small dataset — the user's own Phase 26 instruction
+  resolved the first two by naming `3d-force-graph` directly instead (a
+  materially different, clean dependency tree — confirmed, not assumed, in
+  §20's Phase 26 entry) and accepted the small-dataset tradeoff explicitly by
+  asking for a *tuned, curated* composition rather than large-graph defaults.
+  Do not cite the old NO-GO note as still-current guidance.
+- **Phase 26's browser-verification gap was substantially, but not entirely,
+  closed by Phase 27 — read this note before either of the other two.** Phase
+  27 found that Playwright's Chromium browser was already cached on this
+  machine and used it directly (real GPU-backed WebGL, not a mock) to drive
+  `/graph`'s 3D mode and screenshot the result — see §20's Phase 27 entry for
+  the full before/after record. **Confirmed by an actual rendered screenshot,
+  not just code reasoning**: the WebGL scene renders with correct job/
+  candidate color and size distinction, the glow-shell reads as a soft halo
+  (after a fix — the original version read as a dull dark ring, a real defect
+  this pass caught and corrected), qualified links render brighter/greener
+  and disqualified links render muted/red, click-to-select populates the
+  shared `GraphDetailPanel` with real persisted match data, the highlight/dim
+  neighborhood effect is visibly correct, the qualified/disqualified filter
+  toggle visibly changes the scene without disturbing node positions,
+  search-triggered camera focus lands on the right node with real data
+  shown, the `2D ↔ 3D` switch and a remount both produce a clean scene with
+  zero console/page errors, and the overall composition (after this pass's
+  fog/zoomToFit/radius/light tuning) reads as an intentional graph with jobs
+  as visual anchors, not a washed-out cloud.
+  **Still not verified by anything more than code/API reasoning** (a
+  scripted browser can click a fixed coordinate and read rendered text, but
+  cannot judge a "feel," perform a real mouse-drag orbit, or force a browser
+  media-feature preference): whether the click-to-focus camera animation and
+  general orbit/pan/zoom controls *feel* smooth and pleasant under a real
+  human hand on a mouse/trackpad (only "did the camera arrive roughly where
+  intended" was checked); WebGL performance under sustained real interaction
+  (panning, rapid clicking, resizing) rather than a handful of scripted,
+  paused actions; the `prefers-reduced-motion` code path (the scripted run
+  never launched a browser context with that media feature forced); the
+  WebGL-failure fallback UI actually appearing under a real failure condition
+  (still only exercised via its `try/catch` existing, never a real GPU/driver
+  failure); and real hover-tooltip legibility/positioning at a human's normal
+  viewing distance and font-rendering (a screenshot was taken during a
+  scripted hover, but reading it critically as a human still hasn't happened
+  the way it would in an actual demo run-through). Treat this narrowed list,
+  not the original Phase 26 list, as the remaining gap — it is real but
+  considerably smaller than before.
 
 ---
 
@@ -3357,27 +4164,36 @@ Before starting frontend work:
 
 ## 24. [NEXT]
 
-**Phases 1–25 are all done** — every screen from the original admin-dashboard
+**Phases 1–30 are all done** — every screen from the original admin-dashboard
 redesign proposal, the candidate-detail cross-linking hub, the whole-dataset
 knowledge graph at `/graph` (interactive legend filtering, a minimum-score filter,
-candidate/job search), the candidate-detail ego graph reusing the same `MatchGraph`
-engine, a visually-polished layout-stable version of both, no remaining dead-end/
-missing cross-links between any of the eleven production screens, and the dark
-"AI recruitment command center" (V2) visual direction now applied to **every one
-of the eleven production screens**: the persistent shell, `DashboardPage` (Phase
-21), Applications/Interviews/Reports/Report Detail (Phase 22), Job Detail/
-Candidate Detail (Phase 23), Jobs List/Candidates/Resume Upload (Phase 24), and
-the Knowledge Graph / `MatchGraph` (Phase 25 — the final slice). **No page
-anywhere in the app still renders the original V1 light theme** (the one
-exception is `LoginPage`, a pre-auth screen that was never in scope for this
-redesign). Full detail for each phase is in §19/§20, not restated here.
+candidate/job search — now presentable in a default 2D analytical view or an
+explicit, optional, lazy-loaded, **real-browser-tuned-and-validated** 3D immersive
+view, Phases 26-27), the candidate-detail ego graph reusing the same 2D
+`MatchGraph` engine, a visually-polished layout-stable version of both, no
+remaining dead-end/missing cross-links between any of the eleven production
+screens, and the dark "AI recruitment command center" (V2) visual direction
+applied to **every one of the eleven production screens — every one of which
+has now been checked in a real browser at least once** (Phase 28 for the
+shell/Dashboard, Phase 29 for the other nine, including a shell-level fix that
+corrected a defect present on all of them, not just Dashboard): the persistent
+shell, `DashboardPage` (Phase 21, audited+fixed Phase 28), Applications/
+Interviews/Reports/Report Detail (Phase 22, audited Phase 29), Job Detail/
+Candidate Detail (Phase 23, audited Phase 29 — Candidate Detail polished), Jobs
+List/Candidates/Resume Upload (Phase 24, audited Phase 29 — Resume Upload
+polished), and the Knowledge Graph / `MatchGraph` (Phase 25, audited Phase 29).
+**No page anywhere in the app still renders the original V1 light theme** (the
+one exception is `LoginPage`, a pre-auth screen that was never in scope for
+that redesign). Full detail for each phase is in §19/§20, not restated here.
 
 **Two chat-response-only audits happened between Phase 19 and Phase 20, neither
 touched code or this file at the time** (both explicitly scoped that way), and are
-recorded here since their conclusions still matter:
+recorded here since one conclusion is now superseded and the other still matters:
 
-- **Optional 3D presentation mode — decision**: **NO-GO for now.** A real disposable
-  prototype (outside the repo, never integrated) measured `react-force-graph`'s
+- **Optional 3D presentation mode — original decision**: **NO-GO for now** *(superseded
+  by Phase 26 — kept verbatim below for history, do not treat as current guidance;
+  see §21's own note on exactly what changed).* A real disposable prototype
+  (outside the repo, never integrated) measured `react-force-graph`'s
   `ForceGraph3D` at a real **+512 kB gzipped** (confirmed lazy-loadable, so a normal
   2D visit wouldn't pay it), but also found the library **cannot run at all outside
   a real browser** (`window is not defined` at import time in plain Node) — unlike
@@ -3385,8 +4201,20 @@ recorded here since their conclusions still matter:
   all. Combined with the current dataset (4 jobs, a handful of candidates) being
   too small for 3D to show anything 2D doesn't already show clearly, and a live
   demo being the wrong place to introduce a first WebGL dependency, the conclusion
-  was to keep 2D as the only mode. Not revisited unless a future session has a
-  specific reason to.
+  was to keep 2D as the only mode.
+  **What changed in Phase 26**: the user's own instruction named the specific fix
+  for the *dependency* half of this concern — use `3d-force-graph` directly, not
+  `react-force-graph` — which resolved the AR/VR-weight and git+SSH-dependency
+  problems this note was actually about (confirmed via a real `npm view
+  3d-force-graph dependencies` check before installing anything, not assumed);
+  the "cannot run headlessly" fact is still true (it's a WebGL library, that's
+  inherent) and is exactly why Phase 26 carries the honest, disclosed
+  manual-verification gap this section's own `[NEXT]` below exists to close; and
+  the small-dataset concern was addressed head-on by this task's own explicit
+  request for a *tuned, curated* composition (job nodes as strong anchors,
+  candidates clustering around them) rather than generic large-graph force
+  defaults — whether that tuning actually reads well is exactly what still needs
+  eyes on it, see `[NEXT]`.
 - **Final unified admin-dashboard UX audit**: reviewed all eleven production
   screens end-to-end. Overall verdict was "solid and demo-ready as-is" — no
   structural or navigational confusion found. It named four concrete, cheap
@@ -3400,18 +4228,65 @@ recorded here since their conclusions still matter:
 
 **A note on sequencing**: Phase 20's own `[NEXT]` was "Final production/demo
 readiness audit — whole system, no feature work" (its full scope is preserved
-below, unchanged) — the user then explicitly redirected to the V2 redesign
-instead (Phase 21). That readiness audit is **postponed, not cancelled**: it
-should still run once the V2 migration reaches a stable point (either fully
+below for the historical record) — the user then explicitly redirected to the
+V2 redesign instead (Phase 21). **That readiness audit has now run, as Phase
+30** (see `handoff.md` for its full findings/verdict — this project's
+"cross-service facts go there" rule applies, since the audit's scope was
+whole-system, not frontend-only): verdict **DEMO READY**, no `CRITICAL`/`HIGH`
+defect found, one real infra fix applied (missing container restart
+policies). The block below is preserved as a historical record of what Phase
+20 originally asked for, not as still-pending work — it should still run once
+the V2 migration reaches a stable point (either fully
 migrated, or a deliberate decision to demo the mixed dark/light state as-is), not
 be silently dropped.
 
-**[NEXT] `--v2-*` → `--color-*` token fold (cleanup, no visual change).** Every
-production page is now on V2 (Phase 25 just closed the last seam) and
-`LoginPage` is deliberately out of scope, so the additive-dual-token-set
-scaffolding that made incremental migration safe has now done its job and
-should be folded away rather than carried indefinitely. Concrete guidance,
-carried over so it doesn't need re-deriving:
+**[NEXT] — derived from actual repo state, not copied from an old `[NEXT]`
+(see below for why).** Three consecutive sessions now (Phases 27, 28, 29) have
+each been handed `[NEXT]` wording that named work already finished by the time
+the session actually inspected the repo — a real pattern, not a coincidence,
+worth naming plainly so a future session doesn't repeat it a fourth time:
+**trust a live `grep`/real-browser check over this document's own prose every
+time, on every task, not only when explicitly told to.**
+
+**The actual, current, verified state of the frontend**: every one of the
+eleven production screens is on the V2 dark design system, every one has now
+been seen rendering in a real browser at least once (Phases 27-29), the one
+cross-cutting rendering defect found (the shell-level light-void bug) is fixed
+for all of them at once, and the two pages found needing polish
+(`CandidateDetailPage`, `ResumeUploadPage`) have been fixed and re-verified.
+There is no remaining V2 migration or V2 visual-quality work waiting to be
+discovered — the next three sessions' worth of "audit further" would very
+likely just keep confirming this. Two tasks were already queued behind the
+visual-redesign work, from Phase 20 and Phase 25 respectively (full scope
+preserved below); given the *actual* current state, here is the honest
+priority order between them, decided now rather than left for a future
+session to guess at:
+
+**The readiness audit named above has now run, as Phase 30** (full findings in
+`handoff.md`, per this project's own "cross-service facts go there" rule —
+the audit's scope was whole-system, not frontend-only). Verdict: **DEMO
+READY**, no `CRITICAL`/`HIGH` defect found anywhere in the system; the one
+real fix it applied (missing container `restart` policies) was
+infrastructure, not frontend. Nothing in this repo's frontend code changed as
+a result of that audit — the real-browser walkthrough it ran confirmed
+Phases 21-30's work holds up, it didn't find anything here to fix.
+
+**[NEXT] Token-fold / documentation cleanup only.** This is now the only
+remaining queued frontend task — the `--v2-*` → `--color-*` fold below, full
+scope preserved so it doesn't need re-deriving. No feature work, no visual
+redesign, no new audit: every page is confirmed V2 and confirmed working by
+three independent real-browser passes (Phases 27-29) plus the whole-system
+readiness audit (Phase 30) — this task is pure internal cleanup + doc
+tidying, not a place to find or invent new scope.
+
+---
+
+**`--v2-*` → `--color-*` token fold (cleanup, no visual change).** Every production page is now on V2 (Phase 25 closed the last
+seam, Phases 27-29 real-browser-confirmed it) and `LoginPage` is deliberately
+out of scope, so the additive-dual-token-set scaffolding that made incremental
+migration safe has now done its job and should be folded away rather than
+carried indefinitely. Concrete guidance, carried over so it doesn't need
+re-deriving:
 
 - **The fold itself**: in `variables.css`, delete the old light `--color-*`
   values and rename/merge the `--v2-*` block into `--color-*` (or, if a literal
@@ -3454,15 +4329,18 @@ carried over so it doesn't need re-deriving:
   pages if possible, confirm the build's CSS bundle size doesn't shift
   unexpectedly, and re-run the full live-route + live-data checks every prior
   phase has used.
-- **Once this fold lands, the *actual* next task is the readiness audit
-  preserved below** — don't let it get lost; it's been postponed since Phase
-  20, and this fold is the last piece of V2 migration cleanup blocking it.
+- **This is now the only queued frontend task** — the readiness audit that
+  used to sit ahead of it in the queue (see §24's own history above) ran as
+  Phase 30 and passed (**DEMO READY**, `handoff.md` has the full record). This
+  fold can proceed now — nothing else is blocking it.
 
 ---
 
-*(Preserved for when the readiness audit above is actually run — do not delete
-this until that task starts.)* **Final production/demo readiness audit — whole
-system, no feature work.** With every planned feature done, this task is a last
+*(Preserved for historical reference — this task is DONE, as Phase 30; see
+§19/§20 and `handoff.md` for the full record. Kept here only so a future
+session can see exactly what was asked and confirm none of it was missed.)*
+**Final production/demo readiness audit — whole system, no feature work.**
+With every planned feature done, this task is a last
 end-to-end pass across the *whole* system — both backends and the frontend
 together — treating it as "would this survive a live 4–6 minute demo and a
 jury's questions right now," not as a place to design anything new. Concretely:

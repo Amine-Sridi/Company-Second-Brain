@@ -10,8 +10,23 @@
   min-width: 0;
 }
 
+/* Dark background + flex:1 added in Phase 29 (see FRONTEND_HANDOFF.md). Phase 1
+   deliberately left this un-styled because most pages still rendered plain
+   text directly onto it (no dark panel of their own yet) -- repointing it then
+   would have made that text illegible. As of Phase 25 every page reachable
+   through this shell paints its own dark "page panel" (LoginPage is the one
+   exception, and it isn't rendered inside this Layout at all), so that
+   condition no longer holds: a real-browser audit (Phase 29) confirmed every
+   page showed a plain light gap below its panel whenever the viewport was
+   taller than the panel's own content. `flex: 1` makes this element actually
+   reach the bottom of `.main`'s height (a plain block box without it just
+   sizes to its own content, same root cause as the gap); the background then
+   has something to paint. */
 .content {
+  flex: 1 1 auto;
+  min-height: 0;
   padding: var(--spacing-4);
+  background: var(--v2-bg-inset);
 }
 
 @media (max-width: 768px) {

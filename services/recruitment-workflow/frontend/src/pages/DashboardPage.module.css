@@ -190,6 +190,17 @@
   align-items: stretch;
 }
 
+/* A `1fr` grid track's implicit min-width is `auto`, not `0` -- confirmed live
+   in a real browser (Phase 28) that at phone width this let a bento cell's own
+   non-shrinking content (see .activityLabel below) force the whole grid, and
+   with it the page panel and body, wider than the viewport, clipping text at
+   the screen edge instead of the ellipsis truncation those cells already
+   style for. This is the standard fix, applied once here rather than
+   repeated per grid-item class. */
+.bento > * {
+  min-width: 0;
+}
+
 .pipelinePanel {
   grid-column: span 2;
 }
@@ -302,6 +313,7 @@
 }
 
 .activityLabel {
+  min-width: 0;
   font-size: var(--font-size-sm);
   color: var(--v2-text);
   overflow: hidden;

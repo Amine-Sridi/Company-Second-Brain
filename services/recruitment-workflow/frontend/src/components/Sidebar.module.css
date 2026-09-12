@@ -93,6 +93,16 @@
   color: var(--v2-text);
 }
 
+/* global.css's shared :focus-visible ring uses --color-primary (a light-theme
+   blue) -- confirmed live in a real browser (Phase 28) that this reads as a
+   mismatched, out-of-place ring against this component's dark --v2-* chrome.
+   Self-contained override, same reasoning as every other --v2-* rule in this
+   file: it cannot affect any still-light page's own focus ring. */
+.link:focus-visible {
+  outline: 2px solid var(--v2-cyan);
+  outline-offset: 2px;
+}
+
 .linkActive {
   color: var(--v2-text);
   font-weight: 600;

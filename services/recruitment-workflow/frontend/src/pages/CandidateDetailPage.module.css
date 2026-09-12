@@ -70,13 +70,39 @@
   gap: var(--spacing-4);
 }
 
+/* Phase 29 (see FRONTEND_HANDOFF.md): a real-browser audit found this page had
+   no cyan/violet accent anywhere -- every other migrated page/Dashboard uses
+   the pair somewhere, so this page's all-gray palette read as visually
+   disconnected from the rest of the app. A restrained top accent line (the
+   same device StatTile already uses on Dashboard), alternated per section,
+   ties it back in without adding any new color, gradient direction, or glow
+   intensity beyond what's already established elsewhere. */
 .section {
+  position: relative;
   background: var(--v2-surface);
   border: 1px solid var(--v2-border);
   border-radius: var(--v2-radius);
   backdrop-filter: blur(var(--v2-blur));
   -webkit-backdrop-filter: blur(var(--v2-blur));
   padding: var(--spacing-3);
+  overflow: hidden;
+}
+
+.section::before {
+  content: "";
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 2px;
+}
+
+.content .section:nth-of-type(odd)::before {
+  background: linear-gradient(90deg, var(--v2-cyan), transparent 85%);
+}
+
+.content .section:nth-of-type(even)::before {
+  background: linear-gradient(90deg, var(--v2-violet), transparent 85%);
 }
 
 .sectionTitle {
@@ -114,6 +140,18 @@
   color: var(--v2-text);
 }
 
+/* Years of experience is this section's one headline number -- styled like
+   StatTile's own value (Dashboard) instead of plain body text, the same
+   "restrained accent, not a rewrite" reasoning as .section::before above. */
+.fieldValueAccent {
+  margin: 0;
+  font-size: 1.5rem;
+  font-weight: 700;
+  letter-spacing: -0.01em;
+  color: var(--v2-cyan);
+  font-variant-numeric: tabular-nums;
+}
+
 .chips {
   display: flex;
   flex-wrap: wrap;
@@ -126,6 +164,19 @@
   border-radius: var(--radius-pill);
   padding: 2px 10px;
   font-size: var(--font-size-xs);
+}
+
+/* Job titles are the smaller, more load-bearing of the two chip lists (a
+   handful of titles vs. potentially dozens of skills) -- a light violet tint
+   distinguishes them as a category without tinting every skill chip too,
+   which would read as busy/loud on a candidate with a large skill list. */
+.chipAccent {
+  background: var(--v2-violet-bg);
+  color: var(--v2-violet);
+  border-radius: var(--radius-pill);
+  padding: 2px 10px;
+  font-size: var(--font-size-xs);
+  font-weight: 600;
 }
 
 .tableWrapper {

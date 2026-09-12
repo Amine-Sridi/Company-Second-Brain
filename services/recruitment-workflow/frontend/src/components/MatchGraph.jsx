@@ -1,8 +1,13 @@
 import { forwardRef, useCallback, useEffect, useImperativeHandle, useMemo, useRef, useState } from "react";
-import { Link } from "react-router-dom";
 import CytoscapeComponent from "react-cytoscapejs";
-import StatusBadge from "./StatusBadge.jsx";
+import GraphDetailPanel from "./GraphDetailPanel.jsx";
 import styles from "./MatchGraph.module.css";
+
+// Shared default for the score/qualified-toggle filters when a caller doesn't
+// control them (only CandidateDetailPage's ego graph -- GraphPage always
+// passes its own, lifted up to GraphControls -- see FRONTEND_HANDOFF.md's 3D
+// graph phase for why this moved out of this component's own state).
+const DEFAULT_HIDDEN_CATEGORIES = { qualified: false, disqualified: false };
 
 // Namespacing node ids: candidate_id and job_id are both UUIDs from different tables,
 // so a bare id could theoretically collide across the two -- and a click handler needs
@@ -118,6 +123,27 @@ export function buildGraphElements(rawGraph, candidateNames) {
   }));
 
   return { elements: [...allNodes, ...edges], candidateCount: candidateNodes.length };
+}
+
+/**
+ * Same data/id semantics as buildGraphElements() above (job:/candidate: id
+ * prefixes, degree precomputation, byte-for-byte identical field names on
+ * edges), reshaped into the plain `{nodes, links}` object 3d-force-graph's
+ * `.graphData()` expects instead of Cytoscape's `{data: {...}}` element
+ * wrapper. Kept alongside buildGraphElements (not duplicated inside
+ * MatchGraph3D.jsx) so both renderers derive nodes/edges from exactly one
+ * place -- this function itself never imports Cytoscape, Three.js, or
+ * 3d-force-graph, so it doesn't pull either rendering library into the
+ * other's bundle.
+ *
+ * @param {{ jobs: Array<{job_id: string, title: string}>, edges: Array<object> }|null} rawGraph
+ * @param {Map<string, string>|null} candidateNames
+ */
+export function buildGraph3DElements(rawGraph, candidateNames) {
+  const { elements } = buildGraphElements(rawGraph, candidateNames);
+  const nodes = elements.filter((el) => el.data.kind).map((el) => ({ ...el.data }));
+  const links = elements.filter((el) => !el.data.kind).map((el) => ({ ...el.data }));
+  return { nodes, links };
 }
 
 function readToken(style, name, fallback) {
@@ -289,38 +315,28 @@ function buildEdgeSelection(edge) {
  * arbitrary height prop, so each variant's own mobile-breakpoint shrink stays a
  * plain CSS media query instead of fighting inline-style specificity.
  *
- * `showScoreFilter`/`showSearch` add the full graph's interactive controls (legend
- * click-to-toggle is always available whenever `showLegend` is on -- there's no
- * separate flag for it, the legend IS the control per this feature's own spec).
- * Both default to `false` so the ego graph embed (which passes neither) is
- * completely unaffected -- these controls exist only where GraphPage opts in.
+ * `hiddenCategories`/`minScore` are controlled filter props -- owned by GraphPage
+ * (via its own GraphControls, so the same filter state survives a 2D/3D switch)
+ * for the full graph, and left at their do-nothing defaults for the ego graph
+ * embed, which passes neither. The legend/score-slider/search UI itself no
+ * longer lives in this component at all (moved to components/GraphControls.jsx)
+ * -- only GraphPage ever rendered those controls, so removing them here doesn't
+ * change the ego graph embed's behavior at all.
  */
 const MatchGraph = forwardRef(function MatchGraph(
   {
     rawGraph,
     candidateNames,
     layout,
-    showLegend = false,
     showResetButton = false,
-    showScoreFilter = false,
-    showSearch = false,
+    hiddenCategories = DEFAULT_HIDDEN_CATEGORIES,
+    minScore = 0,
     size = "full",
   },
   ref
 ) {
   const [selection, setSelection] = useState(null);
   const cyRef = useRef(null);
-
-  // Display-only filter state -- never sent anywhere, never touches a persisted
-  // MatchResult field. `hiddenCategories` toggles whole qualified/disqualified
-  // groups (the legend IS this control, per this task's own spec); `minScore` (a
-  // 0-100 percent, matching how scores are shown everywhere else in this app)
-  // hides edges below that persisted `final_score`. Both apply as a Cytoscape class
-  // toggle in the effect below -- `qualified`/`final_score` themselves are never
-  // read back, recomputed, or reassigned by either control.
-  const [hiddenCategories, setHiddenCategories] = useState({ qualified: false, disqualified: false });
-  const [minScore, setMinScore] = useState(0);
-  const [searchTerm, setSearchTerm] = useState("");
 
   const { elements } = useMemo(() => buildGraphElements(rawGraph, candidateNames), [rawGraph, candidateNames]);
   const stylesheet = useMemo(() => buildStylesheet(), []);
@@ -342,23 +358,6 @@ const MatchGraph = forwardRef(function MatchGraph(
     });
   }, [hiddenCategories, minScore, elements]);
 
-  const handleToggleCategory = useCallback((category) => {
-    setHiddenCategories((prev) => ({ ...prev, [category]: !prev[category] }));
-  }, []);
-
-  // Search matches against the same `label` already carried on every node (job
-  // title / candidate display name) -- no new data, no new call, just a client-side
-  // substring filter over what buildGraphElements already produced.
-  const searchResults = useMemo(() => {
-    if (!showSearch) return [];
-    const term = searchTerm.trim().toLowerCase();
-    if (!term) return [];
-    return elements
-      .filter((el) => el.data.kind && el.data.label.toLowerCase().includes(term))
-      .slice(0, 8)
-      .map((el) => ({ id: el.data.id, label: el.data.label, kind: el.data.kind }));
-  }, [elements, searchTerm, showSearch]);
-
   const applyHighlight = useCallback((cy, focusElement) => {
     cy.elements().removeClass("faded highlighted");
     const neighborhood = focusElement.closedNeighborhood();
@@ -366,11 +365,13 @@ const MatchGraph = forwardRef(function MatchGraph(
     neighborhood.addClass("highlighted");
   }, []);
 
-  // Selecting a search result reuses the exact same highlight/selection path a
-  // click on that node already takes -- not a second, parallel implementation --
-  // then additionally fits the view to that node's neighborhood ("center the
-  // selected node", the one thing a plain click doesn't already do).
-  const handleSelectSearchResult = useCallback(
+  // Focusing a node from GraphPage's search box (GraphControls) reuses the exact
+  // same highlight/selection path a click on that node already takes -- not a
+  // second, parallel implementation -- then additionally fits the view to that
+  // node's neighborhood ("center the selected node", the one thing a plain click
+  // doesn't already do). Exposed via the imperative handle below so GraphPage can
+  // call it identically regardless of whether 2D or 3D is currently mounted.
+  const focusNode = useCallback(
     (nodeId) => {
       const cy = cyRef.current;
       if (!cy) return;
@@ -379,7 +380,6 @@ const MatchGraph = forwardRef(function MatchGraph(
       applyHighlight(cy, node);
       setSelection(buildNodeSelection(node));
       cy.fit(node.closedNeighborhood(), 50);
-      setSearchTerm("");
     },
     [applyHighlight]
   );
@@ -396,10 +396,9 @@ const MatchGraph = forwardRef(function MatchGraph(
     cy.elements().removeClass("faded highlighted");
     cy.fit(undefined, 30);
     setSelection(null);
-    setSearchTerm("");
   }, []);
 
-  useImperativeHandle(ref, () => ({ resetView }), [resetView]);
+  useImperativeHandle(ref, () => ({ resetView, focusNode }), [resetView, focusNode]);
 
   // react-cytoscapejs invokes the `cy` prop on every prop update, not just the first
   // mount -- but componentDidMount only ever constructs one real Cytoscape instance
@@ -436,61 +435,6 @@ const MatchGraph = forwardRef(function MatchGraph(
   return (
     <div className={styles.layout}>
       <div className={`${styles.card} ${sizeClass}`}>
-        {showLegend && <Legend hiddenCategories={hiddenCategories} onToggleCategory={handleToggleCategory} />}
-        {(showScoreFilter || showSearch) && (
-          <div className={styles.filterRow}>
-            {showScoreFilter && (
-              <label className={styles.scoreFilter}>
-                <span className={styles.scoreFilterLabel}>Min score: {minScore}%+</span>
-                <input
-                  type="range"
-                  min={0}
-                  max={100}
-                  step={5}
-                  value={minScore}
-                  onChange={(event) => setMinScore(Number(event.target.value))}
-                  className={styles.scoreFilterInput}
-                />
-              </label>
-            )}
-            {showSearch && (
-              <div className={styles.searchBox}>
-                <input
-                  type="text"
-                  className={styles.searchInput}
-                  placeholder="Search candidates or jobs…"
-                  value={searchTerm}
-                  onChange={(event) => setSearchTerm(event.target.value)}
-                  onKeyDown={(event) => {
-                    if (event.key === "Escape") setSearchTerm("");
-                  }}
-                />
-                {searchTerm.trim() && (
-                  <ul className={styles.searchResults}>
-                    {searchResults.length > 0 ? (
-                      searchResults.map((result) => (
-                        <li key={result.id}>
-                          <button
-                            type="button"
-                            className={styles.searchResultButton}
-                            onClick={() => handleSelectSearchResult(result.id)}
-                          >
-                            <StatusBadge variant="glass" tone={result.kind === "job" ? "primary" : "accent"}>
-                              {result.kind === "job" ? "Job" : "Candidate"}
-                            </StatusBadge>
-                            <span className={styles.searchResultLabel}>{result.label}</span>
-                          </button>
-                        </li>
-                      ))
-                    ) : (
-                      <li className={styles.searchNoResults}>No matches</li>
-                    )}
-                  </ul>
-                )}
-              </div>
-            )}
-          </div>
-        )}
         {showResetButton && (
           <div className={styles.toolbar}>
             <button type="button" className={styles.resetButton} onClick={resetView}>
@@ -509,150 +453,9 @@ const MatchGraph = forwardRef(function MatchGraph(
           />
         </div>
       </div>
-      <DetailPanel selection={selection} sizeClass={sizeClass} />
+      <GraphDetailPanel selection={selection} sizeClass={sizeClass} />
     </div>
   );
 });
 
 export default MatchGraph;
-
-// ---------------------------------------------------------------------------
-// Presentational helpers
-// ---------------------------------------------------------------------------
-
-/**
- * The Job/Candidate swatches stay plain labels (no filter exists for node kind).
- * The Qualified/Disqualified swatches are themselves the toggle control this task
- * asked for -- no separate checkboxes anywhere else -- clicking one hides that
- * whole edge category via MatchGraph's `hiddenCategories` state/effect above.
- */
-function Legend({ hiddenCategories, onToggleCategory }) {
-  return (
-    <div className={styles.legend}>
-      <span className={styles.legendItem}>
-        <span className={`${styles.legendSwatch} ${styles.legendJob}`} /> Job
-      </span>
-      <span className={styles.legendItem}>
-        <span className={`${styles.legendSwatch} ${styles.legendCandidate}`} /> Candidate
-      </span>
-      <LegendToggle
-        active={!hiddenCategories.qualified}
-        onClick={() => onToggleCategory("qualified")}
-        lineClassName={styles.legendQualified}
-        label="Qualified match"
-      />
-      <LegendToggle
-        active={!hiddenCategories.disqualified}
-        onClick={() => onToggleCategory("disqualified")}
-        lineClassName={styles.legendDisqualified}
-        label="Disqualified match"
-      />
-    </div>
-  );
-}
-
-function LegendToggle({ active, onClick, lineClassName, label }) {
-  return (
-    <button
-      type="button"
-      className={`${styles.legendItem} ${styles.legendToggle} ${active ? "" : styles.legendToggleOff}`}
-      onClick={onClick}
-      aria-pressed={active}
-      title={active ? `Click to hide ${label.toLowerCase()}es` : `Click to show ${label.toLowerCase()}es`}
-    >
-      <span className={`${styles.legendLine} ${lineClassName}`} /> {label}
-    </button>
-  );
-}
-
-function DetailPanel({ selection, sizeClass }) {
-  if (!selection) {
-    return (
-      <div className={`${styles.panel} ${sizeClass}`}>
-        <p className={styles.panelEmpty}>
-          Click a candidate, a job, or a connection line to see its details here.
-        </p>
-      </div>
-    );
-  }
-
-  if (selection.type === "node") {
-    const isJob = selection.kind === "job";
-    return (
-      <div className={`${styles.panel} ${sizeClass}`}>
-        <StatusBadge variant="glass" tone={isJob ? "primary" : "accent"}>{isJob ? "Job" : "Candidate"}</StatusBadge>
-        <h2 className={styles.panelTitle}>{selection.label}</h2>
-        <Link to={isJob ? `/jobs/${selection.refId}` : `/candidates/${selection.refId}`} className={styles.openLink}>
-          Open {isJob ? "job" : "candidate"} →
-        </Link>
-
-        <div className={styles.connectionList}>
-          <span className={styles.connectionListLabel}>
-            {selection.connectedEdges.length} connection{selection.connectedEdges.length === 1 ? "" : "s"}
-          </span>
-          {selection.connectedEdges.map((edge) => (
-            <div key={edge.matchId} className={styles.connectionRow}>
-              <span className={styles.connectionName}>{edge.otherLabel}</span>
-              <span className={styles.connectionScore}>{Math.round(edge.finalScore * 100)}%</span>
-              <StatusBadge variant="glass" tone={edge.qualified ? "success" : "neutral"}>
-                {edge.qualified ? "Qualified" : "Not qualified"}
-              </StatusBadge>
-            </div>
-          ))}
-        </div>
-      </div>
-    );
-  }
-
-  // selection.type === "edge"
-  return (
-    <div className={`${styles.panel} ${sizeClass}`}>
-      <StatusBadge variant="glass" tone={selection.qualified ? "success" : "danger"}>
-        {selection.qualified ? "Qualified match" : "Disqualified match"}
-      </StatusBadge>
-
-      <div className={styles.edgeParties}>
-        <div>
-          <span className={styles.panelLabel}>Candidate</span>
-          <Link to={`/candidates/${selection.candidateId}`} className={styles.panelValueLink}>
-            {selection.candidateLabel}
-          </Link>
-        </div>
-        <div>
-          <span className={styles.panelLabel}>Job</span>
-          <Link to={`/jobs/${selection.jobId}`} className={styles.panelValueLink}>
-            {selection.jobLabel}
-          </Link>
-        </div>
-      </div>
-
-      <div className={styles.scoreRow}>
-        <span className={styles.panelLabel}>Final score</span>
-        <span className={styles.panelValue}>{Math.round(selection.finalScore * 100)}%</span>
-      </div>
-      <div className={styles.scoreRow}>
-        <span className={styles.panelLabel}>Hard gate</span>
-        <span className={styles.panelValue}>{selection.hardGatePassed ? "Passed" : "Failed"}</span>
-      </div>
-
-      <RequirementChips label="Matched requirements" items={selection.matchedRequirements} tone="matched" />
-      <RequirementChips label="Missing requirements" items={selection.missingRequirements} tone="missing" />
-    </div>
-  );
-}
-
-function RequirementChips({ label, items, tone }) {
-  if (!items || items.length === 0) return null;
-  return (
-    <div className={styles.chipGroup}>
-      <span className={styles.chipGroupLabel}>{label}</span>
-      <div className={styles.chips}>
-        {items.map((item) => (
-          <span key={item} className={tone === "matched" ? styles.chipMatched : styles.chipMissing}>
-            {item}
-          </span>
-        ))}
-      </div>
-    </div>
-  );
-}

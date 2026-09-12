@@ -27,6 +27,7 @@ services:
       context: ..
       dockerfile: services/resume-intelligence/Dockerfile
     container_name: csb-resume-intelligence
+    restart: unless-stopped
     env_file:
       - ../services/resume-intelligence/.env
     depends_on:
@@ -46,6 +47,7 @@ services:
       context: ..
       dockerfile: services/second-brain/Dockerfile
     container_name: csb-second-brain
+    restart: unless-stopped
     env_file:
       - ../services/second-brain/.env
     depends_on:
@@ -65,6 +67,7 @@ services:
       context: ..
       dockerfile: services/recruitment-workflow/Dockerfile
     container_name: csb-recruitment-workflow
+    restart: unless-stopped
     env_file:
       - ../services/recruitment-workflow/.env
     depends_on:
@@ -83,6 +86,7 @@ services:
     build:
       context: ../services/voicehr
     container_name: csb-voicehr
+    restart: unless-stopped
     env_file:
       - ../services/voicehr/.env
     volumes:

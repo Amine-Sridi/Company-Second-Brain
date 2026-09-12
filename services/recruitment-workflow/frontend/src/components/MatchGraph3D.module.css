@@ -1,0 +1,50 @@
+/* MatchGraph3D-specific chrome only. The outer card/panel/layout classes come
+   from MatchGraph.module.css (shared with the 2D view) -- this file adds only
+   what's unique to the immersive 3D scene: the WebGL canvas host, the compact
+   floating toolbar, and the loading/error overlay message. */
+
+.card {
+  position: relative;
+}
+
+.toolbar {
+  position: absolute;
+  z-index: 4;
+  top: var(--spacing-2);
+  right: var(--spacing-2);
+  display: flex;
+  gap: var(--spacing-2);
+  flex-wrap: wrap;
+}
+
+.sceneWrapper {
+  position: relative;
+  flex: 1 1 auto;
+  min-height: 0;
+}
+
+.scene {
+  position: absolute;
+  inset: 0;
+  cursor: grab;
+}
+
+.scene:active {
+  cursor: grabbing;
+}
+
+.overlayMessage {
+  position: absolute;
+  inset: 0;
+  z-index: 3;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: var(--spacing-3);
+  text-align: center;
+  padding: var(--spacing-4);
+  color: var(--v2-text-muted);
+  font-size: var(--font-size-base);
+  background: var(--v2-bg-elevated);
+}

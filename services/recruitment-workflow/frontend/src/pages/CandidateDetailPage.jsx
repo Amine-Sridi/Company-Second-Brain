@@ -146,7 +146,7 @@ export default function CandidateDetailPage() {
             <div className={styles.knowledgeGrid}>
               <div>
                 <span className={styles.fieldLabel}>Years of experience</span>
-                <p className={styles.fieldValue}>
+                <p className={styles.fieldValueAccent}>
                   {knowledge.years_of_experience != null ? knowledge.years_of_experience : "—"}
                 </p>
               </div>
@@ -155,7 +155,7 @@ export default function CandidateDetailPage() {
                 {knowledge.job_titles.length > 0 ? (
                   <div className={styles.chips}>
                     {knowledge.job_titles.map((title) => (
-                      <span key={title} className={styles.chip}>
+                      <span key={title} className={styles.chipAccent}>
                         {title}
                       </span>
                     ))}

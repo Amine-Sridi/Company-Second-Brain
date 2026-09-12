@@ -45,6 +45,47 @@
   position: relative;
 }
 
+.headerActions {
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-2);
+  flex-wrap: wrap;
+}
+
+/* The 2D | 3D presentation-mode switch. 2D is always the default (see
+   GraphPage.jsx) -- this is a plain segmented toggle, not a settings menu, so
+   the choice stays a one-click, always-visible affordance. */
+.viewSwitch {
+  display: inline-flex;
+  background: var(--v2-surface);
+  border: 1px solid var(--v2-border-strong);
+  border-radius: var(--v2-radius);
+  padding: 2px;
+  backdrop-filter: blur(var(--v2-blur));
+  -webkit-backdrop-filter: blur(var(--v2-blur));
+}
+
+.viewSwitchButton {
+  background: none;
+  border: none;
+  border-radius: calc(var(--v2-radius) - 2px);
+  padding: var(--spacing-1) var(--spacing-3);
+  font-size: var(--font-size-sm);
+  font-weight: 600;
+  color: var(--v2-text-muted);
+  cursor: pointer;
+  transition: background var(--v2-transition), color var(--v2-transition);
+}
+
+.viewSwitchButton:hover {
+  color: var(--v2-text);
+}
+
+.viewSwitchActive {
+  background: var(--v2-cyan-bg);
+  color: var(--v2-cyan);
+}
+
 .resetButton {
   flex-shrink: 0;
   background: var(--v2-surface);
