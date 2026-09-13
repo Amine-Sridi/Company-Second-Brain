@@ -77,11 +77,29 @@ async def test_local_completion_path_notifies_rws_when_external_reference_id_set
     assert call_kwargs["interview_status"] == "completed"
     assert call_kwargs["assessment"]["overall_score"] == 72
     assert call_kwargs["assessment"]["inconclusive"] is False
+    # The job-specific language eligibility gate (RWS: language_gate.py) compares this
+    # against a job's required_language -- it must be the interview's own conducted
+    # language (interviews.language), not something the evaluator invents.
+    assert call_kwargs["assessment"]["language"] == "en"
 
     row = db.execute("SELECT * FROM interviews WHERE token = ?", (token,)).fetchone()
     assert row["status"] == "completed"
     assert row["webhook_delivery_id"] is not None
     assert row["webhook_delivered_at"] is not None
+
+
+@pytest.mark.asyncio
+async def test_local_completion_path_reports_the_interviews_own_language(
+    client, db, mock_evaluate, mock_send_email, mock_notify_rws
+):
+    """A French interview must report language="fr" in the outbound assessment, not a
+    hardcoded default -- confirms the value is threaded from the interview row, not
+    the evaluator's own (language-agnostic) scoring output."""
+    token = create_interview(db, token="test-token", status="active", language="fr", external_reference_id="app-42")
+
+    await process_interview(token, _TRANSCRIPT, "storage/recordings/x.webm", 600, "completed")
+
+    assert mock_notify_rws.call_args.kwargs["assessment"]["language"] == "fr"
 
 
 @pytest.mark.asyncio

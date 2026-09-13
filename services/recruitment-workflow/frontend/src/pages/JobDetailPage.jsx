@@ -1,12 +1,13 @@
 import { useEffect, useState } from "react";
 import { Link, useParams } from "react-router-dom";
-import { getJobs, getJobMatches } from "../api/jobs.js";
+import { getJobs, getJobMatches, setJobLanguageRequirement } from "../api/jobs.js";
 import { selectMatch } from "../api/applications.js";
 import { ApiError } from "../api/client.js";
 import { useCandidateIdentity } from "../hooks/useCandidateIdentity.js";
 import PageHeader from "../components/PageHeader.jsx";
 import StatusBadge from "../components/StatusBadge.jsx";
 import EmptyState from "../components/EmptyState.jsx";
+import { CEFR_LEVELS, LANGUAGE_LABELS, formatLanguageRequirement } from "../constants/language.js";
 import styles from "./JobDetailPage.module.css";
 
 /**
@@ -71,6 +72,8 @@ export default function JobDetailPage() {
         }
         variant="glass"
       />
+
+      {job && <LanguageRequirementSection job={job} onUpdated={setJob} />}
 
       {loading && <p className={styles.status}>Loading candidates…</p>}
 
@@ -240,6 +243,110 @@ function CandidateRow({ match }) {
         </tr>
       )}
     </>
+  );
+}
+
+/**
+ * Displays (and lets a recruiter configure) this job's optional VoiceHR language
+ * eligibility requirement -- see RWS's language_gate.py. Editing here only ever
+ * calls PATCH /v1/jobs/{id}/language-requirement; it never touches any Application
+ * already selected for this job, each of which keeps its own selection-time
+ * snapshot regardless of what this section is later changed to.
+ */
+function LanguageRequirementSection({ job, onUpdated }) {
+  const [editing, setEditing] = useState(false);
+  const [language, setLanguage] = useState(job.required_language ?? "en");
+  const [cefr, setCefr] = useState(job.min_language_cefr ?? "B2");
+  const [saving, setSaving] = useState(false);
+  const [saveError, setSaveError] = useState(null);
+
+  const requirementLabel = formatLanguageRequirement(job.required_language, job.min_language_cefr);
+
+  async function handleSave() {
+    setSaving(true);
+    setSaveError(null);
+    try {
+      const updated = await setJobLanguageRequirement(job.job_id, {
+        required_language: language,
+        min_language_cefr: cefr,
+      });
+      onUpdated((current) => (current ? { ...current, ...updated } : updated));
+      setEditing(false);
+    } catch (err) {
+      setSaveError(err instanceof ApiError ? err.message : "Failed to update requirement.");
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  async function handleClear() {
+    setSaving(true);
+    setSaveError(null);
+    try {
+      const updated = await setJobLanguageRequirement(job.job_id, {
+        required_language: null,
+        min_language_cefr: null,
+      });
+      onUpdated((current) => (current ? { ...current, ...updated } : updated));
+      setEditing(false);
+    } catch (err) {
+      setSaveError(err instanceof ApiError ? err.message : "Failed to clear requirement.");
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  if (!editing) {
+    return (
+      <div className={styles.languageRequirement}>
+        <span>
+          {requirementLabel ? `Required language: ${requirementLabel}` : "No language requirement configured"}
+        </span>
+        <button type="button" className={styles.languageRequirementEditButton} onClick={() => setEditing(true)}>
+          {requirementLabel ? "Edit" : "Set requirement"}
+        </button>
+      </div>
+    );
+  }
+
+  return (
+    <div className={styles.languageRequirement}>
+      <select value={language} onChange={(event) => setLanguage(event.target.value)} disabled={saving}>
+        {Object.entries(LANGUAGE_LABELS).map(([code, label]) => (
+          <option key={code} value={code}>
+            {label}
+          </option>
+        ))}
+      </select>
+      <select value={cefr} onChange={(event) => setCefr(event.target.value)} disabled={saving}>
+        {CEFR_LEVELS.map((level) => (
+          <option key={level} value={level}>
+            {level}
+          </option>
+        ))}
+      </select>
+      <button type="button" className={styles.languageRequirementEditButton} onClick={handleSave} disabled={saving}>
+        {saving ? "Saving…" : "Save"}
+      </button>
+      {requirementLabel && (
+        <button type="button" className={styles.languageRequirementEditButton} onClick={handleClear} disabled={saving}>
+          Clear
+        </button>
+      )}
+      <button
+        type="button"
+        className={styles.languageRequirementEditButton}
+        onClick={() => setEditing(false)}
+        disabled={saving}
+      >
+        Cancel
+      </button>
+      {saveError && (
+        <div className={styles.error} role="alert">
+          {saveError}
+        </div>
+      )}
+    </div>
   );
 }
 

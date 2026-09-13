@@ -63,7 +63,8 @@ def test_interviews_table_schema(temp_db, monkeypatch):
     expected = {"id", "token", "candidate_name", "candidate_email", "language", "status",
                 "retry_count", "created_at", "expires_at", "started_at", "completed_at",
                 "invite_sent", "external_reference_id", "idempotency_key",
-                "webhook_delivery_id", "webhook_delivered_at"}
+                "webhook_delivery_id", "webhook_delivered_at", "job_title",
+                "invite_email_sent_at", "invite_email_error"}
     assert columns == expected
     conn.close()
 

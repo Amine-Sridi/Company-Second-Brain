@@ -10,7 +10,14 @@ from backend.database import DB_PATH
 
 
 def get_db():
-    conn = sqlite3.connect(DB_PATH)
+    # check_same_thread=False: this sync generator dependency is itself resolved in a
+    # threadpool worker thread (FastAPI's standard handling of sync dependencies), but
+    # POST /api/invite (create_invite) is an async route that awaits email delivery --
+    # its own body runs on the event loop thread, a different one. The connection is
+    # still only ever used sequentially within one request, never concurrently from two
+    # threads at once, which is exactly what this flag is for (the standard fix for
+    # this FastAPI async-route + sync-sqlite3-dependency combination).
+    conn = sqlite3.connect(DB_PATH, check_same_thread=False)
     conn.row_factory = sqlite3.Row
     try:
         yield conn

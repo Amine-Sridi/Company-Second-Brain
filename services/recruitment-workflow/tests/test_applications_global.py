@@ -70,6 +70,8 @@ def _fake_application(*, job_id=None, status="selected", **overrides):
         interview_assessment=None,
         interview_completed_at=None,
         decided_at=None,
+        required_language=None,
+        required_cefr=None,
     )
     defaults.update(overrides)
     return SimpleNamespace(**defaults)
@@ -132,6 +134,7 @@ def test_multiple_applications_across_jobs_carry_correct_job_title_and_order(cli
         "application_id", "job_id", "match_result_id", "candidate_id", "status",
         "selected_at", "invite_attempt_number", "invited_at", "interview_status",
         "interview_assessment", "interview_completed_at", "decided_at", "job_title",
+        "language_gate",
     }
 
 
@@ -177,7 +180,7 @@ def test_job_scoped_applications_endpoint_still_works_and_has_no_job_title(clien
     assert set(body[0].keys()) == {
         "application_id", "job_id", "match_result_id", "candidate_id", "status",
         "selected_at", "invite_attempt_number", "invited_at", "interview_status",
-        "interview_assessment", "interview_completed_at", "decided_at",
+        "interview_assessment", "interview_completed_at", "decided_at", "language_gate",
     }
 
 

@@ -1,13 +1,17 @@
 """
 Integration test configuration for Recruitment Workflow Service.
 
-Copy this file as /app/conftest.py inside the csb-recruitment-workflow container, then
-run tests with: python -m pytest /app/test_recruitment_workflow.py -v
+Copy this file AND db_safety.py as /app/conftest.py + /app/db_safety.py inside the
+csb-recruitment-workflow container, then run tests with:
+    docker exec -e TEST_DATABASE_URL=... csb-recruitment-workflow \
+        python -m pytest /app/test_recruitment_workflow.py -v
+(both files -- this suite's destructive fixture below refuses to run without
+db_safety.py's guard; see its own module docstring for why, and handoff.md for the
+real incident that made this mandatory rather than optional.)
 """
 import hashlib
 import hmac
 import json
-import os
 import sys
 import uuid
 from pathlib import Path
@@ -15,6 +19,11 @@ from pathlib import Path
 import pytest
 from sqlalchemy import create_engine, text
 from sqlalchemy.orm import sessionmaker
+
+# db_safety.py lives alongside this file (tests/integration/ on the host; copied
+# next to conftest.py in the container -- see this module's own docstring above).
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from db_safety import resolve_test_database_url  # noqa: E402
 
 TEST_WEBHOOK_HMAC_SECRET = "test-webhook-secret"
 
@@ -69,13 +78,14 @@ if not _in_container:
             sys.path.insert(0, p)
 
 # ── Database URL ──────────────────────────────────────────────────────────────
-if "DATABASE_URL" not in os.environ:
-    os.environ["DATABASE_URL"] = (
-        "postgresql+psycopg://recruitment_role:changeme@localhost:5432/"
-        "company_second_brain?options=-csearch_path%3Drecruitment"
-    )
-
-_TEST_DB_URL = os.environ["DATABASE_URL"]
+# TEST_DATABASE_URL only -- deliberately no fallback to DATABASE_URL (that fallback,
+# combined with running this suite inside the live csb-recruitment-workflow container
+# where DATABASE_URL is the real demo database, is exactly what caused
+# truncate_recruitment_tables below to wipe every job/application/match_result row
+# once already; see db_safety.py's own docstring and handoff.md). This whole suite's
+# engine is gated on it, not just the truncate fixture, since every test in this file
+# goes through the same test_engine -> db_session chain.
+_TEST_DB_URL = resolve_test_database_url()
 
 _TEST_SERVICE_KEY = "test-service-key"
 
@@ -98,6 +108,11 @@ def truncate_recruitment_tables(test_engine):
     Wipe applications/matches/jobs before the suite runs; keep the seeded scoring_configs
     row and the seeded recruiter (login tests depend on it). All tables with FKs into each
     other must be listed in one TRUNCATE ... CASCADE, or Postgres rejects it.
+
+    Safe by construction, not by care taken here: test_engine is built from
+    _TEST_DB_URL, which is itself only ever resolve_test_database_url()'s return
+    value (see above) -- this fixture has no DATABASE_URL fallback path to
+    accidentally take, because it was never given one.
     """
     with test_engine.connect() as conn:
         conn.execute(
@@ -423,7 +438,7 @@ def mock_voicehr(monkeypatch):
 
     async def _invite_candidate(
         base_url, api_key, idempotency_key, candidate_name, candidate_email,
-        language, external_reference_id,
+        language, external_reference_id, job_title=None,
     ):
         calls.append({
             "idempotency_key": idempotency_key,
@@ -431,6 +446,7 @@ def mock_voicehr(monkeypatch):
             "candidate_email": candidate_email,
             "language": language,
             "external_reference_id": external_reference_id,
+            "job_title": job_title,
         })
         return {
             "interview_link": "http://voicehr.test/interview?token=abc",

@@ -26,17 +26,23 @@ def sign_payload(body: bytes, secret: str) -> str:
     return hmac.new(secret.encode("utf-8"), body, hashlib.sha256).hexdigest()
 
 
-def build_assessment_payload(scores: dict, inconclusive: bool) -> dict:
+def build_assessment_payload(scores: dict, inconclusive: bool, language: str | None = None) -> dict:
     """
     Shapes `scores` (the evaluator's full result dict) down to exactly the fields RWS's
     InterviewAssessment schema accepts -- that schema uses extra="forbid", so sending
     evaluator-only fields (confidence, strengths, dimensions, ...) would be rejected.
+
+    `language` is the interview's own conducted/evaluated language (interviews.language,
+    e.g. "en"/"fr") -- not part of `scores` itself (the evaluator scores whatever
+    transcript it's given; it doesn't know or care which language that was), so it's
+    threaded in separately by the caller (processing.py) from the interview row.
     """
     evaluation_status = scores.get(
         "evaluation_status", "failed" if scores.get("overall_score") is None else "completed"
     )
     return {
         "overall_score": scores.get("overall_score"),
+        "language": language,
         "cefr_level": scores.get("cefr_level"),
         "fluency_score": scores.get("fluency_score"),
         "vocabulary_score": scores.get("vocabulary_score"),
@@ -108,6 +114,7 @@ async def notify_and_record_interview_result(
     external_reference_id: str | None,
     scores: dict,
     inconclusive: bool,
+    language: str | None = None,
 ) -> None:
     """
     Called by backend/services/processing.py once an interview reaches a terminal
@@ -122,7 +129,7 @@ async def notify_and_record_interview_result(
     if not external_reference_id:
         return
 
-    assessment_payload = build_assessment_payload(scores, inconclusive)
+    assessment_payload = build_assessment_payload(scores, inconclusive, language)
     delivery_id = str(uuid.uuid4())
     delivered = await notify_rws_interview_result(
         external_reference_id=external_reference_id,

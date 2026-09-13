@@ -111,13 +111,47 @@ The integration entry point RWS calls to create an interview:
   back verbatim in the eventual completion webhook. `NULL` means the interview was created
   outside the RWS flow and will never trigger that webhook.
 - **`Idempotency-Key` header** (optional): RWS always sends `"{application_id}:{attempt_number}"`.
-  A repeated call with the same key returns the existing interview's link unchanged instead of
-  creating a duplicate — this is what makes a retried invite call (e.g. after RWS never
-  received VoiceHR's response to a call it actually processed) safe to repeat. A genuine
+  A repeated call with the same key reuses the existing interview (same token, same link)
+  instead of creating a duplicate — this is what makes a retried invite call (e.g. after RWS
+  never received VoiceHR's response to a call it actually processed) safe to repeat. A genuine
   re-invitation carries a new attempt number and therefore a new key, correctly creating a new
   interview.
-- **Response**: `link`/`interview_link` (same value, `link` kept for backward compatibility),
-  `expires_at`, and the echoed `external_reference_id`.
+- **`job_title`** (optional): RWS's `Job.title`, used only for the candidate email's greeting
+  below. VoiceHR has no other concept of a job.
+- **Automatically emails the candidate their interview link** as part of this same call, via
+  `deliver_invitation_email()` (`backend/api/routes/interview.py`) — see "Candidate invitation
+  email delivery" below. This is what actually determines success: a delivery failure makes
+  this endpoint itself return a non-2xx response, not the `link`/`expires_at` body below.
+- **Response** (on success): `link`/`interview_link` (same value, `link` kept for backward
+  compatibility), `expires_at`, and the echoed `external_reference_id`.
+
+## Candidate invitation email delivery
+
+`POST /api/invite` sends the candidate their secure interview link automatically, synchronously,
+in the same request — RWS never sees that link and never sends anything itself; VoiceHR owns the
+whole thing because it owns the token, its expiry, and the candidate-only interview surface the
+link points to.
+
+- **Idempotent, not spammy**: `interviews.invite_email_sent_at` (NULL until the first successful
+  send) is what a duplicate `POST /api/invite` on the same `Idempotency-Key` checks before
+  deciding whether to (re)attempt delivery. Already delivered → the duplicate call returns the
+  existing state without resending. Not yet delivered (the previous attempt failed) → delivery is
+  retried on the *same* interview row, never a new one.
+- **Failure is loud, not silent**: `deliver_invitation_email()` raises on any failure (provider
+  rejection, network error/timeout, `RESEND_API_KEY` unset) and that exception becomes this
+  endpoint's own response — RWS's caller (`voicehr_client.invite_candidate`) sees a non-2xx and
+  never marks the application invited (see `handoff.md`). `invite_email_error` is persisted
+  purely as VoiceHR's own internal diagnostic (cleared on the next successful send); it is never
+  included in the email itself or returned to RWS/the browser.
+- **One implementation, two call sites**: the same `deliver_invitation_email()` also backs the
+  explicit resend route, `POST /interview/{token}/invite` (see below) — always attempts delivery
+  regardless of `invite_email_sent_at`, since an explicit resend means "send it again, now."
+- **Content**: candidate name, a role-specific greeting when `job_title` was provided (generic
+  otherwise), the language stated directly in the greeting's own wording (the whole email is
+  already in that language), the secure link, its 7-day expiry, and a short microphone/browser
+  preparation note. Never: application/candidate IDs, API keys, or any resume-matching/scoring/
+  CEFR-threshold information — VoiceHR is never even given a job's required CEFR level in the
+  first place (only `language`), so there is nothing to accidentally disclose there.
 
 ## Automatic VoiceHR → RWS assessment notification
 
@@ -128,8 +162,10 @@ When an interview reaches a terminal outcome, `backend/services/processing.py`'s
 
 - **Payload shaping** (`build_assessment_payload()`): the evaluator's full result dict is
   narrowed to exactly the fields RWS's `InterviewAssessment` schema accepts — `overall_score`,
-  `cefr_level`, the five dimension scores, `inconclusive`, and `evaluation_status`. No audio,
-  no transcript, no strengths/concerns/evidence text ever leaves VoiceHR.
+  `language` (the interview's own conducted language, threaded in from the interview row, not
+  the evaluator itself — feeds RWS's language eligibility gate), `cefr_level`, the five
+  dimension scores, `inconclusive`, and `evaluation_status`. No audio, no transcript, no
+  strengths/concerns/evidence text ever leaves VoiceHR.
 - **Interview status mapping** (`interview_status_for()`): `"failed"` if
   `evaluation_status == "failed"`; else `"inconclusive"` if the assessment's `inconclusive`
   flag is true; else `"completed"`.
@@ -180,12 +216,22 @@ richer one) until that was fixed; see `handoff.md`.
 
 ## Resend email configuration
 
-- `RESEND_API_KEY` — required for any outbound email (both the optional candidate invitation
-  email and the "report ready" notification to `ADMIN_EMAIL`); without it, invitation-email
-  sending returns a 500 and the report notification is silently skipped.
+- `RESEND_API_KEY` — **required** for `POST /api/invite` to succeed at all (see
+  "Candidate invitation email delivery" above) as well as for the separate "report
+  ready" notification to `ADMIN_EMAIL`. Without it, every invite attempt fails with a
+  clean `500` ("Email delivery not configured. Set RESEND_API_KEY in .env.") and the
+  report notification is silently skipped — the invite failure is a hard error by
+  design (fail loud); the report notification is best-effort by design (it is not on
+  the interview/report critical path — the RWS webhook is the real completion
+  signal). Get a real key from the Resend dashboard (`resend.com/api-keys`); never
+  commit one.
 - `RESEND_FROM_ADDRESS` — the email's `From` header, e.g. `"VoiceHR <you@yourdomain.com>"`.
   Defaults to Resend's own unverified-domain sandbox sender (`VoiceHR <onboarding@resend.dev>`)
-  if left unset. This must never be set to the API key itself.
+  if left unset. This must never be set to the API key itself. **Important**: Resend's
+  sandbox sender can only deliver to the email address the Resend account itself is
+  registered under — it cannot send to arbitrary candidate addresses. To actually
+  invite real candidates by email, verify a real sending domain in the Resend
+  dashboard (`resend.com/domains`) and set this to an address on that domain.
 - `ADMIN_EMAIL` — recipient of the "interview report ready" notification.
 - `REPORT_EMAIL_TIMEOUT_SECONDS` — bounded wait for that notification call; a timeout returns
   `False` rather than blocking or crashing the completion pipeline.
@@ -210,18 +256,20 @@ See `.env.example` for the full, authoritative list with defaults. Grouped by co
   the `StaticFiles` mount at `/` (which serves every file under `frontend/`) — the `/admin`
   route's Basic-auth dependency doesn't cover that second path. The page itself carries no
   embedded data; the APIs it calls remain protected.
-- **No UI can currently trigger VoiceHR's own candidate-invitation email**
-  (`POST /api/interview/{token}/invite`, `backend/api/routes/interview.py`). `admin.html`
-  previously had a "generate interview link" form that created interviews *and* offered to
-  email/preview that link — but it called `POST /api/invite` directly from the browser with no
-  `X-Api-Key`, which `require_rws_service_key` has always rejected, and the only way to make it
-  work would be embedding the RWS service key client-side, which this project will not do. That
-  form (and the preview/send buttons it fed a token to) was removed as obsolete/broken during
-  cleanup — RWS is the sole interview creator now — but neither RWS nor any other current
-  caller invokes those two email routes either, so they're currently unreachable dead capability
-  on the backend, not a UI you'd click through. How a real candidate is expected to receive
-  their interview link in this architecture is an open question this cleanup did not answer;
-  flagged here rather than silently patched over with a new feature.
+- **RESOLVED: candidates now receive their interview link automatically**, emailed by
+  `POST /api/invite` itself the moment RWS creates the invitation — see "Candidate invitation
+  email delivery" above. `admin.html`'s own "generate interview link" form (which called
+  `POST /api/invite` directly from the browser with no `X-Api-Key`, which `require_rws_service_key`
+  has always rejected) was removed as obsolete/broken during an earlier cleanup and was not
+  restored — RWS remains the sole interview creator, and there is still no admin-UI path to
+  create or resend an invitation, by design. `POST /interview/{token}/invite`
+  (`backend/api/routes/interview.py`) still exists as an explicit, unauthenticated,
+  always-resends primitive, now backed by the same delivery implementation as the automatic
+  path above, but is not currently called from any frontend.
+- **`RESEND_API_KEY` is not configured in this environment** (checked during the session that
+  added automatic delivery, above). Without it, every `POST /api/invite` call now fails
+  (`500`, `_send_email` raises immediately) — a real, current gap, not a hypothetical one; see
+  `handoff.md`'s Known Limitations for the demo-readiness impact.
 - **VoiceHR's own logging stays plain-text**, with no correlation IDs and no JSON formatting —
   unlike the other three services in this project. Deliberate: VoiceHR's architecture is kept
   unchanged, and `shared/observability.py` isn't importable here (VoiceHR's Docker image

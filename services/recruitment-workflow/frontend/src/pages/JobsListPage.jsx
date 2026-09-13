@@ -4,6 +4,7 @@ import { getJobs, createJob } from "../api/jobs.js";
 import { ApiError } from "../api/client.js";
 import PageHeader from "../components/PageHeader.jsx";
 import EmptyState from "../components/EmptyState.jsx";
+import { CEFR_LEVELS, LANGUAGE_LABELS, formatLanguageRequirement } from "../constants/language.js";
 import styles from "./JobsListPage.module.css";
 
 // Matches the backend's own defaults (schemas.py: JobSubmissionRequest) -- pre-filled,
@@ -24,6 +25,9 @@ export default function JobsListPage() {
   const [showAdvanced, setShowAdvanced] = useState(false);
   const [threshold, setThreshold] = useState(String(DEFAULT_THRESHOLD));
   const [topK, setTopK] = useState(String(DEFAULT_TOP_K));
+  const [requireLanguage, setRequireLanguage] = useState(false);
+  const [requiredLanguage, setRequiredLanguage] = useState("en");
+  const [minLanguageCefr, setMinLanguageCefr] = useState("B2");
   const [creating, setCreating] = useState(false);
   const [createError, setCreateError] = useState(null);
 
@@ -69,6 +73,8 @@ export default function JobsListPage() {
         raw_description: rawDescription.trim(),
         threshold: parsedThreshold,
         top_k: parsedTopK,
+        required_language: requireLanguage ? requiredLanguage : undefined,
+        min_language_cefr: requireLanguage ? minLanguageCefr : undefined,
       });
       navigate(`/jobs/${job.job_id}`);
     } catch (err) {
@@ -153,6 +159,50 @@ export default function JobsListPage() {
                   disabled={creating}
                 />
               </label>
+
+              <label className={styles.languageRequirementToggle}>
+                <input
+                  type="checkbox"
+                  checked={requireLanguage}
+                  onChange={(event) => setRequireLanguage(event.target.checked)}
+                  disabled={creating}
+                />
+                Require a VoiceHR language interview to pass a minimum level
+              </label>
+
+              {requireLanguage && (
+                <div className={styles.field}>
+                  <span>Required language and minimum CEFR level</span>
+                  <div className={styles.languageRequirementRow}>
+                    <select
+                      value={requiredLanguage}
+                      onChange={(event) => setRequiredLanguage(event.target.value)}
+                      disabled={creating}
+                    >
+                      {Object.entries(LANGUAGE_LABELS).map(([code, label]) => (
+                        <option key={code} value={code}>
+                          {label}
+                        </option>
+                      ))}
+                    </select>
+                    <select
+                      value={minLanguageCefr}
+                      onChange={(event) => setMinLanguageCefr(event.target.value)}
+                      disabled={creating}
+                    >
+                      {CEFR_LEVELS.map((level) => (
+                        <option key={level} value={level}>
+                          {level}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                  <p className={styles.languageRequirementHint}>
+                    A candidate can only be accepted once their VoiceHR interview meets this
+                    level in this language. Resume matching and scores are never affected.
+                  </p>
+                </div>
+              )}
             </div>
           )}
 
@@ -200,6 +250,9 @@ export default function JobsListPage() {
                     month: "short",
                     day: "numeric",
                   })}
+                  {formatLanguageRequirement(job.required_language, job.min_language_cefr) && (
+                    <> · Requires {formatLanguageRequirement(job.required_language, job.min_language_cefr)}</>
+                  )}
                 </span>
               </button>
             </li>

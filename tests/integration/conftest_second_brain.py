@@ -1,16 +1,24 @@
 """
 Integration test configuration for Second Brain.
 
-Copy this file as /app/conftest.py inside the csb-second-brain container, then
-run tests with: python -m pytest /app/test_second_brain.py -v
+Copy this file AND db_safety.py as /app/conftest.py + /app/db_safety.py inside the
+csb-second-brain container, then run tests with:
+    docker exec -e TEST_DATABASE_URL=... csb-second-brain \
+        python -m pytest /app/test_second_brain.py -v
+(both files -- this suite's destructive fixture below refuses to run without
+db_safety.py's guard; see its own module docstring and handoff.md.)
 """
-import os
 import sys
 from pathlib import Path
 
 import pytest
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
+
+# db_safety.py lives alongside this file (tests/integration/ on the host; copied
+# next to conftest.py in the container -- see this module's own docstring above).
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from db_safety import resolve_test_database_url  # noqa: E402
 
 
 # ── Path setup (host-side only) ───────────────────────────────────────────────
@@ -24,13 +32,10 @@ if not _in_container:
             sys.path.insert(0, p)
 
 # ── Database URL ──────────────────────────────────────────────────────────────
-if "DATABASE_URL" not in os.environ:
-    os.environ["DATABASE_URL"] = (
-        "postgresql+psycopg://second_brain_role:changeme@localhost:5432/"
-        "company_second_brain?options=-csearch_path%3Dsecond_brain"
-    )
-
-_TEST_DB_URL = os.environ["DATABASE_URL"]
+# TEST_DATABASE_URL only -- no fallback to DATABASE_URL. See
+# conftest_recruitment_workflow.py's own copy of this comment and handoff.md for why
+# this project no longer allows that fallback for any destructive-fixture suite.
+_TEST_DB_URL = resolve_test_database_url()
 
 _TEST_SERVICE_KEY = "test-service-key"
 
@@ -44,7 +49,13 @@ def test_engine():
 
 @pytest.fixture(scope="session", autouse=True)
 def truncate_candidate_knowledge(test_engine):
-    """Wipe any rows committed by previous smoke tests before the suite runs."""
+    """
+    Wipe any rows committed by previous smoke tests before the suite runs.
+
+    Safe by construction: test_engine is built from _TEST_DB_URL, which is only
+    ever resolve_test_database_url()'s return value -- there is no DATABASE_URL
+    fallback path here to accidentally take. See db_safety.py and handoff.md.
+    """
     from sqlalchemy import text
     with test_engine.connect() as conn:
         conn.execute(text("TRUNCATE second_brain.candidate_knowledge"))

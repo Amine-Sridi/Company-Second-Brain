@@ -46,8 +46,14 @@ def client(monkeypatch):
         main.app.dependency_overrides.clear()
 
 
-def _fake_job(title: str, created_at: datetime):
-    return SimpleNamespace(id=uuid.uuid4(), title=title, created_at=created_at)
+def _fake_job(title: str, created_at: datetime, required_language=None, min_language_cefr=None):
+    return SimpleNamespace(
+        id=uuid.uuid4(),
+        title=title,
+        created_at=created_at,
+        required_language=required_language,
+        min_language_cefr=min_language_cefr,
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -106,7 +112,9 @@ def test_multiple_jobs_newest_first_with_match_counts(client, monkeypatch):
     body = resp.json()
     assert [row["title"] for row in body] == ["Newest Job", "Middle Job", "Oldest Job"]
     assert [row["match_count"] for row in body] == [5, 0, 2]
-    assert set(body[0].keys()) == {"job_id", "title", "created_at", "match_count"}
+    assert set(body[0].keys()) == {
+        "job_id", "title", "created_at", "match_count", "required_language", "min_language_cefr",
+    }
 
 
 def test_job_with_no_matches_reports_zero(client, monkeypatch):
@@ -118,6 +126,35 @@ def test_job_with_no_matches_reports_zero(client, monkeypatch):
 
     assert resp.status_code == 200
     assert resp.json()[0]["match_count"] == 0
+
+
+def test_job_with_no_language_requirement_returns_null_pair(client, monkeypatch):
+    job = _fake_job("No Requirement Job", datetime.now(timezone.utc))
+    monkeypatch.setattr(main, "list_jobs_with_match_counts", lambda db: [(job, 0)])
+
+    test_client, recruiter_id = client
+    resp = test_client.get("/v1/jobs", headers={"Authorization": f"Bearer {_recruiter_jwt(recruiter_id)}"})
+
+    assert resp.status_code == 200
+    row = resp.json()[0]
+    assert row["required_language"] is None
+    assert row["min_language_cefr"] is None
+
+
+def test_job_with_language_requirement_returns_both_fields(client, monkeypatch):
+    job = _fake_job(
+        "English B2 Job", datetime.now(timezone.utc),
+        required_language="en", min_language_cefr="B2",
+    )
+    monkeypatch.setattr(main, "list_jobs_with_match_counts", lambda db: [(job, 0)])
+
+    test_client, recruiter_id = client
+    resp = test_client.get("/v1/jobs", headers={"Authorization": f"Bearer {_recruiter_jwt(recruiter_id)}"})
+
+    assert resp.status_code == 200
+    row = resp.json()[0]
+    assert row["required_language"] == "en"
+    assert row["min_language_cefr"] == "B2"
 
 
 def test_response_model_forbids_extra_fields_from_leaking(client, monkeypatch):

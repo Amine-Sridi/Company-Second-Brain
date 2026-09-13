@@ -10,10 +10,11 @@ from backend.core.config import settings
 router = APIRouter()
 
 
-def _build_email_en(name: str, url: str) -> str:
+def _build_email_en(name: str, url: str, job_title: str | None = None) -> str:
+    role_phrase = f" for the {job_title} role" if job_title else ""
     return f"""Hello {name},
 
-You have been invited to complete a spoken English language assessment with VoiceHR.
+You have been invited to complete a spoken English language assessment{role_phrase} with VoiceHR.
 
 WHAT THIS IS
 VoiceHR is an AI-powered language assessment tool. You will have a short spoken conversation with Sarah, an AI interviewer, who will guide you through 4 tasks over roughly 10 to 12 minutes. The goal is to evaluate how fluently and effectively you communicate in English.
@@ -44,10 +45,11 @@ The VoiceHR Team
 """
 
 
-def _build_email_fr(name: str, url: str) -> str:
+def _build_email_fr(name: str, url: str, job_title: str | None = None) -> str:
+    role_phrase = f" pour le poste de {job_title}" if job_title else ""
     return f"""Bonjour {name},
 
-Vous avez été invité(e) à passer une évaluation de langue française avec VoiceHR.
+Vous avez été invité(e) à passer une évaluation de langue française{role_phrase} avec VoiceHR.
 
 DE QUOI S'AGIT-IL ?
 VoiceHR est un outil d'évaluation linguistique basé sur l'intelligence artificielle. Vous aurez une courte conversation parlée avec Sarah, une intervieweuse IA, qui vous guidera à travers 4 tâches en environ 10 à 12 minutes. L'objectif est d'évaluer la fluidité et l'efficacité de votre communication en français.
@@ -78,34 +80,86 @@ L'équipe VoiceHR
 """
 
 
-async def _send_email(to: str, subject: str, body: str):
+async def _send_email(to: str, subject: str, body: str) -> None:
+    """
+    Raises HTTPException on any failure (not configured, provider rejection, network
+    error/timeout) -- never returns a bool, so a caller can never accidentally treat a
+    failure as a soft "false" and continue. This matters now that this function sits
+    on the automatic-invitation-email path (deliver_invitation_email below): a caller
+    that lets this propagate turns it directly into the enclosing request's own
+    non-2xx response, which is what makes RWS never mark an application invited when
+    delivery fails (see main.py: invite_application, in the RWS service).
+    """
     api_key = getattr(settings, "resend_api_key", None)
-    admin_email = getattr(settings, "admin_email", None)
     if not api_key:
         raise HTTPException(status_code=500, detail="Email delivery not configured. Set RESEND_API_KEY in .env.")
+    # Same sender setting mailer.py's send_report_email already uses -- previously this
+    # function built "from" out of admin_email (a recipient setting, not a sender
+    # identity) instead, a latent bug that never fired because nothing called this path
+    # in production; fixed here while wiring it into a real one.
+    from_address = getattr(settings, "resend_from_address", None) or "VoiceHR <onboarding@resend.dev>"
+    timeout_seconds = getattr(settings, "invite_email_timeout_seconds", 8.0)
 
     import httpx
 
-    async with httpx.AsyncClient() as client:
-        response = await client.post(
-            "https://api.resend.com/emails",
-            headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
-            json={
-                "from": f"VoiceHR <{admin_email or 'noreply@voicehr.app'}>",
-                "to": [to],
-                "subject": subject,
-                "text": body,
-            },
-        )
-        if response.status_code not in (200, 201):
-            raise HTTPException(status_code=502, detail=f"Email send failed: {response.text}")
+    try:
+        async with httpx.AsyncClient(timeout=timeout_seconds) as client:
+            response = await client.post(
+                "https://api.resend.com/emails",
+                headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
+                json={
+                    "from": from_address,
+                    "to": [to],
+                    "subject": subject,
+                    "text": body,
+                },
+            )
+    except httpx.HTTPError as exc:
+        raise HTTPException(status_code=502, detail=f"Email send failed: {type(exc).__name__}") from exc
+    if response.status_code not in (200, 201):
+        raise HTTPException(status_code=502, detail=f"Email send failed: {response.text}")
 
 
 def _get_invitation_content(row, token: str):
     interview_url = f"{getattr(settings, 'base_url', 'http://localhost:8000')}/interview?token={token}"
+    job_title = row["job_title"]
     if row["language"] == "fr":
-        return "Votre évaluation linguistique VoiceHR", _build_email_fr(row["candidate_name"], interview_url)
-    return "Your VoiceHR Language Assessment", _build_email_en(row["candidate_name"], interview_url)
+        return "Votre évaluation linguistique VoiceHR", _build_email_fr(row["candidate_name"], interview_url, job_title)
+    return "Your VoiceHR Language Assessment", _build_email_en(row["candidate_name"], interview_url, job_title)
+
+
+async def deliver_invitation_email(conn, row, token: str) -> None:
+    """
+    Sends the candidate's interview invitation email and records the outcome on the
+    interview row -- the one function both POST /api/invite (create_invite, for the
+    automatic first-send-and-retry path) and this module's own explicit resend route
+    below call, so there is exactly one place that knows how to compose and send this
+    email, not two independently-drifting copies.
+
+    Raises HTTPException on failure (never swallows it): the caller's own request then
+    fails with that same non-2xx status, which is what makes automatic delivery
+    failure visible all the way back to RWS (see _send_email's own docstring).
+    invite_email_error is persisted either way -- cleared on success, set to the
+    failure detail otherwise -- purely as internal diagnostic state for VoiceHR's own
+    admin surface; it is never included in the email itself or returned to RWS/the
+    browser.
+    """
+    subject, body = _get_invitation_content(row, token)
+    try:
+        await _send_email(row["candidate_email"], subject, body)
+    except HTTPException as exc:
+        conn.execute(
+            "UPDATE interviews SET invite_email_error = ? WHERE token = ?",
+            (str(exc.detail), token),
+        )
+        conn.commit()
+        raise
+    conn.execute(
+        "UPDATE interviews SET invite_sent = 1, invite_email_sent_at = ?, invite_email_error = NULL "
+        "WHERE token = ?",
+        (datetime.utcnow().isoformat(), token),
+    )
+    conn.commit()
 
 
 @router.get("/interview/{token}/invite/preview")
@@ -124,6 +178,15 @@ def preview_invitation_email(token: str):
 
 @router.post("/interview/{token}/invite")
 async def send_invitation_email(token: str):
+    """
+    Explicit (re)send: always attempts delivery, unlike POST /api/invite's own
+    idempotent first-send-and-retry-on-failure logic (create_invite in invite.py) --
+    whoever calls this route wants a send to happen now, so it never checks
+    invite_email_sent_at first. Not currently reachable from the admin frontend (see
+    README's "Known deliberate limitations" / handoff.md) -- kept as the one explicit
+    resend primitive a future recovery/resend UI can call, per this task's own
+    "do not restore the old removed admin-UI flow" instruction.
+    """
     conn = sqlite3.connect(database.DB_PATH)
     conn.row_factory = sqlite3.Row
     try:
@@ -131,11 +194,7 @@ async def send_invitation_email(token: str):
         if not row:
             raise HTTPException(status_code=404, detail="Interview not found")
 
-        subject, body = _get_invitation_content(row, token)
-
-        await _send_email(row["candidate_email"], subject, body)
-        conn.execute("UPDATE interviews SET invite_sent = 1 WHERE token = ?", (token,))
-        conn.commit()
+        await deliver_invitation_email(conn, row, token)
         return {"status": "sent"}
     finally:
         conn.close()

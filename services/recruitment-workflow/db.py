@@ -88,6 +88,11 @@ class Job(Base):
     )
     title: str = Column(Text, nullable=False)
     threshold: float = Column(Float, nullable=False)
+    # Optional, recruiter-configured second-stage screening criterion (see
+    # language_gate.py) -- both NULL means no requirement (current/legacy behavior).
+    # Paired by a DB CHECK constraint: never one set without the other.
+    required_language: Optional[str] = Column(Text, nullable=True)
+    min_language_cefr: Optional[str] = Column(Text, nullable=True)
     created_at: datetime = Column(
         DateTime(timezone=True), server_default=text("now()"), nullable=False
     )
@@ -248,6 +253,13 @@ class Application(Base):
     )
     candidate_id: uuid.UUID = Column(UUID(as_uuid=True), nullable=False)
     status: str = Column(Text, nullable=False, server_default=text("'selected'"))
+    # Snapshot of the job's language requirement at *selection* time (see
+    # language_gate.py's module docstring for why this must be a snapshot, not a live
+    # read of `jobs`, which is mutable). NULL/NULL means the job had no requirement
+    # when this application was created -- the gate is then `not_required` forever,
+    # regardless of any language requirement added to the job afterwards.
+    required_language: Optional[str] = Column(Text, nullable=True)
+    required_cefr: Optional[str] = Column(Text, nullable=True)
     selected_by: uuid.UUID = Column(
         UUID(as_uuid=True), ForeignKey("recruitment.recruiters.id"), nullable=False
     )
@@ -337,9 +349,16 @@ def create_job_with_description(
     min_years_experience: Optional[float],
     titles: list[str],
     structuring_model: str,
+    required_language: Optional[str] = None,
+    min_language_cefr: Optional[str] = None,
 ) -> tuple[Job, JobDescription]:
     """Create a new Job and its first (version 1) JobDescription in one transaction."""
-    job = Job(title=title, threshold=threshold)
+    job = Job(
+        title=title,
+        threshold=threshold,
+        required_language=required_language,
+        min_language_cefr=min_language_cefr,
+    )
     db.add(job)
     db.flush()  # assign job.id without committing
 
@@ -362,6 +381,30 @@ def create_job_with_description(
 
 def get_job(db: Session, job_id: uuid.UUID) -> Optional[Job]:
     return db.query(Job).filter(Job.id == job_id).first()
+
+
+def set_job_language_requirement(
+    db: Session,
+    job_id: uuid.UUID,
+    required_language: Optional[str],
+    min_language_cefr: Optional[str],
+) -> Optional[Job]:
+    """
+    Configure (or clear, by passing both as None) an existing job's language
+    requirement. Does not touch any already-created Application's own snapshot --
+    see the Application.required_language/required_cefr columns' docstring for why
+    that's deliberate, not an oversight.
+    """
+    result = db.execute(
+        update(Job)
+        .where(Job.id == job_id)
+        .values(required_language=required_language, min_language_cefr=min_language_cefr)
+    )
+    if result.rowcount == 0:
+        db.rollback()
+        return None
+    db.commit()
+    return get_job(db, job_id)
 
 
 def list_jobs_with_match_counts(db: Session) -> list[tuple[Job, int]]:
@@ -562,6 +605,8 @@ def create_application(
     match_result_id: uuid.UUID,
     candidate_id: uuid.UUID,
     selected_by: uuid.UUID,
+    required_language: Optional[str] = None,
+    required_cefr: Optional[str] = None,
 ) -> Application:
     """
     Create a new Application in the 'selected' state. Raises sqlalchemy.exc.IntegrityError
@@ -569,12 +614,19 @@ def create_application(
     this match_result was already used to create an application (match_result_id unique) --
     callers should catch this and translate it to a 409 Conflict rather than a check-then-act
     race, since the uniqueness is enforced atomically by the database, not by application code.
+
+    required_language/required_cefr are the caller's (main.py: select_candidate) snapshot of
+    the job's language requirement *at this exact moment* -- see language_gate.py and the
+    Application model's own docstring for why this must be copied in, not read live from
+    `jobs` on every later request.
     """
     application = Application(
         job_id=job_id,
         match_result_id=match_result_id,
         candidate_id=candidate_id,
         selected_by=selected_by,
+        required_language=required_language,
+        required_cefr=required_cefr,
     )
     db.add(application)
     db.commit()

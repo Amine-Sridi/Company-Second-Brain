@@ -12,6 +12,13 @@ from pydantic import UUID4, BaseModel, ConfigDict, EmailStr, Field, model_valida
 
 _WEIGHT_SUM_TOLERANCE = 1e-6
 
+# Mirrors VoiceHR's own supported interview languages (Literal["en", "fr"] in
+# backend/database.py's CHECK constraint) and language_gate.CEFR_RANK's keys. Kept as
+# plain Literal aliases (not an import from language_gate, which is a pure-logic module
+# with no Pydantic dependency) so this file's own validators stay self-contained.
+LanguageCode = Literal["en", "fr"]
+CefrLevel = Literal["A1", "A2", "B1", "B2", "C1", "C2"]
+
 
 # ---------------------------------------------------------------------------
 # JD structuring (LLM output shape — structure only, never score/qualify)
@@ -30,6 +37,19 @@ class StructuredJobDescription(BaseModel):
 # Job submission
 # ---------------------------------------------------------------------------
 
+def _validate_paired_language_requirement(
+    required_language: Optional[str], min_language_cefr: Optional[str]
+) -> None:
+    """Shared rule for every request shape below that carries this pair: either both
+    are set (a real requirement) or neither is -- never a CEFR floor with no language,
+    or a language with no floor. Mirrors the DB's own paired CHECK constraint
+    (alembic/versions/0006_job_language_requirement.py) as defense in depth."""
+    if (required_language is None) != (min_language_cefr is None):
+        raise ValueError(
+            "required_language and min_language_cefr must be set together, or both left unset"
+        )
+
+
 class JobSubmissionRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -38,6 +58,31 @@ class JobSubmissionRequest(BaseModel):
     threshold: float = Field(default=0.6, ge=0.0, le=1.0)
     top_k: int = Field(default=20, ge=1, le=100)
     scoring_config_version: Optional[int] = Field(default=None, ge=1)
+    # Optional VoiceHR language eligibility requirement (see language_gate.py). Gemini
+    # never sees or sets these -- explicit recruiter input only, same as `threshold`.
+    required_language: Optional[LanguageCode] = None
+    min_language_cefr: Optional[CefrLevel] = None
+
+    @model_validator(mode="after")
+    def _language_requirement_paired(self) -> "JobSubmissionRequest":
+        _validate_paired_language_requirement(self.required_language, self.min_language_cefr)
+        return self
+
+
+class JobLanguageRequirementRequest(BaseModel):
+    """PATCH .../language-requirement body -- configures or clears (both null) an
+    existing job's requirement. Deliberately its own small request shape rather than
+    reusing JobSubmissionRequest: this endpoint only ever touches these two fields."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    required_language: Optional[LanguageCode] = None
+    min_language_cefr: Optional[CefrLevel] = None
+
+    @model_validator(mode="after")
+    def _language_requirement_paired(self) -> "JobLanguageRequirementRequest":
+        _validate_paired_language_requirement(self.required_language, self.min_language_cefr)
+        return self
 
 
 class MatchResultResponse(BaseModel):
@@ -71,13 +116,16 @@ class JobResponse(BaseModel):
     titles: list[str]
     threshold: float
     scoring_config_version: int
+    required_language: Optional[str] = None
+    min_language_cefr: Optional[str] = None
     matches: list[MatchResultResponse]
 
 
 class JobSummaryResponse(BaseModel):
     """Lightweight row for the recruiter-facing GET /v1/jobs list -- deliberately not
     JobResponse: no requirements/threshold/matches, just enough to identify a job and
-    jump into it. match_count is the number of persisted MatchResults for the job."""
+    jump into it (plus the language requirement, which Job Detail/List both display).
+    match_count is the number of persisted MatchResults for the job."""
 
     model_config = ConfigDict(extra="forbid")
 
@@ -85,6 +133,8 @@ class JobSummaryResponse(BaseModel):
     title: str = Field(min_length=1, max_length=200)
     created_at: datetime
     match_count: int = Field(ge=0)
+    required_language: Optional[str] = None
+    min_language_cefr: Optional[str] = None
 
 
 # ---------------------------------------------------------------------------
@@ -170,6 +220,26 @@ class CandidateIdentityResponse(BaseModel):
 # Candidate selection + recruiter decisions (Application state machine)
 # ---------------------------------------------------------------------------
 
+class LanguageGateInfo(BaseModel):
+    """
+    The deterministic VoiceHR language eligibility gate's current state for one
+    application (see language_gate.py) -- computed fresh on every read from
+    Application.required_language/required_cefr (the selection-time snapshot) and
+    Application.interview_assessment's language/cefr_level (VoiceHR's webhook-reported
+    result), never stored as its own column. required_* is null only when this
+    application's job had no requirement configured at selection time (status is then
+    always "not_required"); assessed_* is null until a terminal interview result exists.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    status: Literal["not_required", "pending", "passed", "failed", "needs_review"]
+    required_language: Optional[str] = None
+    required_cefr: Optional[str] = None
+    assessed_language: Optional[str] = None
+    assessed_cefr: Optional[str] = None
+
+
 class ApplicationResponse(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -185,6 +255,7 @@ class ApplicationResponse(BaseModel):
     interview_assessment: Optional[dict]
     interview_completed_at: Optional[datetime]
     decided_at: Optional[datetime]
+    language_gate: LanguageGateInfo
 
 
 class GlobalApplicationResponse(ApplicationResponse):
@@ -238,6 +309,10 @@ class CandidateKnowledgeResponse(BaseModel):
 class InviteApplicationRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
+    # Only used when the application's job has no language requirement snapshotted --
+    # main.py's invite_application overrides this with that snapshot when one exists,
+    # so VoiceHR always interviews in the exact language the gate will later compare
+    # against (see language_gate.py).
     language: Literal["en", "fr"] = "en"
 
 

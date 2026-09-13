@@ -25,11 +25,15 @@ own.
 
 ## Where to look first, every session
 
-1. **`handoff.md`** (repo root) — the single living source of truth for implementation status
-   and the exact next step. It is kept accurate; this file (CLAUDE.md) is not re-synced with
-   progress and should never be treated as a status report.
-2. Each `services/*/README.md` — scope and current state of that specific service.
-3. This file — the rules that don't change step to step.
+1. **`handoff.md`** (repo root) — the single living source of truth for backend/cross-service
+   implementation status, the live API surface, and the exact next step. It is kept accurate;
+   this file (CLAUDE.md) is not re-synced with progress and should never be treated as a status
+   report.
+2. **`FRONTEND_HANDOFF.md`** (repo root) — the same, for the recruiter/admin frontend only
+   (routes, components, the 2D/3D knowledge graph, visual design). Frontend-only work is
+   tracked there, not in `handoff.md`.
+3. Each `services/*/README.md` — scope and current state of that specific service.
+4. This file — the rules that don't change step to step.
 
 ## Non-negotiable architectural decisions
 
@@ -95,22 +99,20 @@ contradiction — and if you do, follow the process in "If you think a decision 
    merely exists. If your environment can't actually run something (no Docker daemon, no
    network, no live Postgres), say so plainly in `handoff.md` rather than assuming success.
    Don't claim a command passed without having actually run it.
-5. Realistic target: ~30–50 meaningful tests for the whole project. Quality over count.
+5. Quality over count for tests — a handful of tests that prove a real invariant (a hard gate,
+   an auth boundary, a PII exclusion) is worth more than many that just re-assert a mock. See
+   `handoff.md`'s current state for the actual test counts per service.
 
 ## Known limitations / things to check before certain steps
 
-- Real ResumeParser and VoiceHR source code is expected to be dropped into
-  `services/resume-intelligence/` and `services/voicehr/` respectively. Check whether it has
-  actually landed before starting any step that extends either — do not assume it's present
-  just because the folder exists.
-- Once VoiceHR's real source is present: do not migrate its SQLite, do not rewrite its
-  interview engine. Only add what integration requires — `external_reference_id` column, the
-  invitation endpoint, and the outbound signed webhook.
-- Once ResumeParser's real source is present: extend its extraction pipeline, don't rewrite
-  it.
-- Check `handoff.md`'s "Known Limitations" section for anything discovered mid-implementation
-  in prior sessions (e.g. commands that were written but never actually executed in a working
-  Docker/Postgres environment, and still need real verification).
+Both Resume Intelligence's and VoiceHR's real source landed long ago and are fully
+integrated — the "check whether it has landed yet" caution that used to live here no longer
+applies. What still applies: VoiceHR's SQLite persistence and interview-conduct engine are
+never migrated or rewritten, only its API surface is extended (this has already happened —
+`external_reference_id`, the invitation endpoint, the outbound signed webhook — but the same
+restraint applies to any future change there too). Check `handoff.md`'s "Known Limitations"
+section for anything real and current discovered during implementation — don't assume this
+file's own silence means there are none.
 
 ## Code style
 

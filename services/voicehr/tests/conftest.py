@@ -68,7 +68,10 @@ def client(monkeypatch, test_db_path, mock_settings):
     from backend.api.deps import get_db
 
     def override_get_db():
-        conn = sqlite3.connect(test_db_path)
+        # check_same_thread=False: matches backend.api.deps.get_db's own real
+        # implementation -- see its comment for why this is needed now that
+        # POST /api/invite is an async route awaiting email delivery.
+        conn = sqlite3.connect(test_db_path, check_same_thread=False)
         conn.row_factory = sqlite3.Row
         try:
             yield conn
@@ -81,6 +84,27 @@ def client(monkeypatch, test_db_path, mock_settings):
         yield c
 
     app.dependency_overrides.clear()
+
+
+@pytest.fixture(autouse=True)
+def mock_email_delivery(monkeypatch):
+    """
+    POST /api/invite sends the candidate's invitation email automatically as part of
+    creating/reusing the interview (see backend/api/routes/invite.py: create_invite ->
+    backend/api/routes/interview.py: deliver_invitation_email -> _send_email). Autouse
+    across this whole suite so every test that calls that endpoint -- most of which
+    predate this feature and assert on invite/DB/idempotency behavior, not on email
+    delivery -- gets a "successful send" without ever touching the network. Tests that
+    specifically exercise delivery failure override this by monkeypatching
+    backend.api.routes.interview._send_email again inside the test body (that second
+    patch simply takes precedence for that test).
+    """
+    import backend.api.routes.interview as interview_module
+
+    async def _fake_send_email_success(to, subject, body):
+        return None
+
+    monkeypatch.setattr(interview_module, "_send_email", _fake_send_email_success)
 
 
 @pytest.fixture

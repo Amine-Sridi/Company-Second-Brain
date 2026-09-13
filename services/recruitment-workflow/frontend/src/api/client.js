@@ -21,7 +21,7 @@ export class ApiError extends Error {
 /**
  * @param {string} path - relative API path, e.g. "/v1/auth/login"
  * @param {object} [options]
- * @param {"GET"|"POST"|"PUT"|"DELETE"} [options.method]
+ * @param {"GET"|"POST"|"PUT"|"PATCH"|"DELETE"} [options.method]
  * @param {object|FormData} [options.body] - a JSON-serializable object, or a FormData
  *   instance for multipart uploads (e.g. resume upload). FormData bodies are passed
  *   through untouched and get no Content-Type header from this wrapper -- the browser

@@ -24,6 +24,12 @@ class Settings(BaseSettings):
     admin_username: str = "admin"
     admin_password: str = "changeme-admin-password"
     report_email_timeout_seconds: float = 180.0
+    # The candidate invitation email is sent synchronously inside POST /api/invite's
+    # own request/response cycle (see api/routes/invite.py), which RWS calls with a
+    # 10s client timeout (shared/http_client.py: DEFAULT_TIMEOUT_SECONDS) -- this must
+    # stay comfortably under that so a slow Resend call fails cleanly instead of RWS
+    # timing out first and reporting an ambiguous transport error.
+    invite_email_timeout_seconds: float = 8.0
     base_url: str = "http://localhost:8000"
 
     # RWS integration (this project only, layered on top of the existing app).

@@ -28,6 +28,7 @@ async def invite_candidate(
     candidate_email: str,
     language: str,
     external_reference_id: str,
+    job_title: str | None = None,
 ) -> dict:
     """
     Returns {"interview_link": str, "expires_at": str, "external_reference_id": str}.
@@ -36,6 +37,13 @@ async def invite_candidate(
     this twice with the same key is safe and returns the same interview -- see
     record_invite_attempt in db.py for why attempt_number is only persisted after this
     call succeeds, which is what makes a retry after a lost response reuse the same key.
+
+    VoiceHR now emails the candidate their interview link automatically as part of this
+    same call, and that delivery is what actually determines success here: a non-200
+    response (raised below as VoiceHRClientError) means either the interview couldn't
+    be created *or* the email failed to send -- either way, main.py's caller must not
+    treat this as a successful invite. job_title is cosmetic only (the candidate
+    email's greeting); VoiceHR has no other use for it.
     """
     try:
         resp = await call_service(
@@ -47,6 +55,7 @@ async def invite_candidate(
                 "candidate_email": candidate_email,
                 "language": language,
                 "external_reference_id": external_reference_id,
+                "job_title": job_title,
             },
             extra_headers={"Idempotency-Key": idempotency_key},
         )

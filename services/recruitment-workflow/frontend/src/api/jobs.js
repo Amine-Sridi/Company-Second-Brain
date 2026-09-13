@@ -15,14 +15,39 @@ export function getJobs() {
  * `explanation` on the returned matches is always null here -- it is only populated by
  * getJobMatches(), generated lazily server-side on first read.
  *
- * @param {{ title: string, raw_description: string, threshold?: number, top_k?: number }} params
+ * required_language/min_language_cefr configure the optional VoiceHR language
+ * eligibility gate (language_gate.py) -- both or neither, never just one; RWS itself
+ * enforces that pairing (422 otherwise). Recruiter-set only: never derived from the
+ * raw description or Gemini's JD structuring.
+ *
+ * @param {{ title: string, raw_description: string, threshold?: number, top_k?: number, required_language?: "en"|"fr", min_language_cefr?: "A1"|"A2"|"B1"|"B2"|"C1"|"C2" }} params
  * @returns {Promise<object>} the full JobResponse (job_id, requirements, matches, ...)
  */
-export function createJob({ title, raw_description, threshold, top_k }) {
+export function createJob({ title, raw_description, threshold, top_k, required_language, min_language_cefr }) {
   const body = { title, raw_description };
   if (threshold !== undefined) body.threshold = threshold;
   if (top_k !== undefined) body.top_k = top_k;
+  if (required_language !== undefined) body.required_language = required_language;
+  if (min_language_cefr !== undefined) body.min_language_cefr = min_language_cefr;
   return request("/v1/jobs", { method: "POST", body });
+}
+
+/**
+ * Configures (or clears, by passing both as null) an existing job's VoiceHR language
+ * eligibility requirement. Never touches any Application already selected for this
+ * job -- each one keeps the requirement snapshot it took at its own selection time
+ * (see handoff.md's language_gate.py notes), so editing a job here can never
+ * silently change an already-reported gate result.
+ *
+ * @param {string} jobId
+ * @param {{ required_language: "en"|"fr"|null, min_language_cefr: "A1"|"A2"|"B1"|"B2"|"C1"|"C2"|null }} requirement
+ * @returns {Promise<object>} JobSummaryResponse
+ */
+export function setJobLanguageRequirement(jobId, { required_language, min_language_cefr }) {
+  return request(`/v1/jobs/${jobId}/language-requirement`, {
+    method: "PATCH",
+    body: { required_language, min_language_cefr },
+  });
 }
 
 /**

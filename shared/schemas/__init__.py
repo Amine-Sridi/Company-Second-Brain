@@ -89,6 +89,11 @@ class InvitationRequest(BaseModel):
     language: Literal["en", "fr"]
     # Opaque RWS-issued token; VoiceHR stores it and includes it in the webhook.
     external_reference_id: str = Field(min_length=1, max_length=100)
+    # RWS's Job.title -- used only for the candidate invitation email's greeting
+    # ("... for the {job_title} role ..."). VoiceHR has no other concept of a job;
+    # never used for matching/scoring/eligibility. Optional so non-RWS callers of
+    # POST /api/invite keep working without it.
+    job_title: Optional[str] = Field(default=None, max_length=200)
 
 
 class InvitationResponse(BaseModel):
@@ -109,6 +114,12 @@ class InterviewAssessment(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     overall_score: Optional[int] = Field(None, ge=0, le=100)
+    # The language VoiceHR actually conducted/evaluated the interview in (its own
+    # `interviews.language` column, echoed back here) -- distinct from a job's
+    # *required* language, which RWS alone owns and snapshots on the Application at
+    # selection time (see recruitment-workflow/language_gate.py). Optional so a
+    # webhook replayed from before this field existed still validates.
+    language: Optional[Literal["en", "fr"]] = None
     cefr_level: Optional[str] = Field(None, max_length=10)
     fluency_score: Optional[int] = Field(None, ge=0, le=100)
     vocabulary_score: Optional[int] = Field(None, ge=0, le=100)

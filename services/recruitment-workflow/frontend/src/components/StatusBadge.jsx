@@ -18,10 +18,12 @@ const TONES = new Set(["neutral", "primary", "accent", "success", "warning", "da
  * specifically so this one shared component doesn't have to wait for every page
  * that uses it to be migrated before Dashboard can use its own look.
  */
-export default function StatusBadge({ tone = "neutral", variant, children }) {
+export default function StatusBadge({ tone = "neutral", variant, title, children }) {
   const resolvedTone = TONES.has(tone) ? tone : "neutral";
   const variantClass = variant === "glass" ? styles.glass : "";
   return (
-    <span className={`${styles.badge} ${styles[resolvedTone]} ${variantClass}`}>{children}</span>
+    <span className={`${styles.badge} ${styles[resolvedTone]} ${variantClass}`} title={title}>
+      {children}
+    </span>
   );
 }

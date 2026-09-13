@@ -74,6 +74,44 @@
   font-size: var(--font-size-base);
 }
 
+.languageRequirement {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--spacing-2);
+  font-size: var(--font-size-sm);
+  color: var(--v2-text-muted);
+}
+
+.languageRequirement select {
+  padding: var(--spacing-1) var(--spacing-2);
+  border: 1px solid var(--v2-border-strong);
+  border-radius: var(--v2-radius);
+  background: var(--v2-bg-inset);
+  font-size: var(--font-size-sm);
+  font-family: inherit;
+  color: var(--v2-text);
+}
+
+.languageRequirementEditButton {
+  border: 1px solid var(--v2-border-strong);
+  background: var(--v2-surface);
+  color: var(--v2-cyan);
+  border-radius: var(--v2-radius);
+  padding: var(--spacing-1) var(--spacing-2);
+  font-size: var(--font-size-sm);
+  font-weight: 500;
+}
+
+.languageRequirementEditButton:hover:not(:disabled) {
+  border-color: var(--v2-cyan);
+}
+
+.languageRequirementEditButton:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
 .error {
   background: var(--v2-danger-bg);
   color: var(--v2-danger);

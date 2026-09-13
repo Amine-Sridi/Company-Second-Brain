@@ -5,7 +5,58 @@ import { getAllApplications } from "../api/applications.js";
 import { ApiError, requestBlob } from "../api/client.js";
 import PageHeader from "../components/PageHeader.jsx";
 import AssessmentPanel from "../components/AssessmentPanel.jsx";
+import StatusBadge from "../components/StatusBadge.jsx";
+import { LANGUAGE_GATE_LABELS, LANGUAGE_GATE_TONE, LANGUAGE_LABELS } from "../constants/language.js";
 import styles from "./ReportDetailPage.module.css";
+
+const LANGUAGE_GATE_RESULT_TEXT = {
+  passed: "Meets requirement",
+  failed: "Below required level",
+  needs_review: "Needs review",
+  pending: "Pending",
+};
+
+/**
+ * "Required: B2 English / VoiceHR: C1 English / Result: Meets requirement" -- RWS's
+ * own verdict (language_gate.py), never recomputed here. Only rendered when this
+ * application's job actually has a requirement (see the not_required guard above),
+ * so a job with no requirement shows nothing extra on an otherwise-unrelated report.
+ *
+ * assessed_cefr and assessed_language are set independently (a webhook missing one
+ * but not the other is exactly what "needs_review" exists to catch -- see
+ * language_gate.py) -- rendering must handle that combination without ever
+ * interpolating a bare `null`/`undefined` into the text a recruiter reads.
+ */
+function LanguageGateSummary({ gate }) {
+  const requiredLabel = LANGUAGE_LABELS[gate.required_language] ?? gate.required_language;
+  const voicehrText = gate.assessed_cefr
+    ? [gate.assessed_cefr, gate.assessed_language ? (LANGUAGE_LABELS[gate.assessed_language] ?? gate.assessed_language) : null]
+        .filter(Boolean)
+        .join(" ")
+    : "No result yet";
+
+  return (
+    <div className={styles.languageGate}>
+      <h2 className={styles.notesTitle}>Language screening</h2>
+      <div className={styles.languageGateRow}>
+        <span>Required</span>
+        <span>
+          {gate.required_cefr} {requiredLabel}
+        </span>
+      </div>
+      <div className={styles.languageGateRow}>
+        <span>VoiceHR</span>
+        <span>{voicehrText}</span>
+      </div>
+      <div className={styles.languageGateRow}>
+        <span>Result</span>
+        <StatusBadge variant="glass" tone={LANGUAGE_GATE_TONE[gate.status] ?? "neutral"}>
+          {LANGUAGE_GATE_RESULT_TEXT[gate.status] ?? LANGUAGE_GATE_LABELS[gate.status] ?? gate.status}
+        </StatusBadge>
+      </div>
+    </div>
+  );
+}
 
 // AssessmentPanel expects InterviewAssessment's flat shape (fluency_score,
 // vocabulary_score, ...) -- VoiceHR's own report nests the same numbers under
@@ -64,17 +115,23 @@ export default function ReportDetailPage() {
   // -- the candidate name/job title just stay plain text instead of a link.
   const [candidateId, setCandidateId] = useState(null);
   const [job, setJob] = useState(null); // { jobId, jobTitle } | null
+  // RWS's own gate verdict for this application (main.py: _language_gate_info) --
+  // fetched from the same GlobalApplicationResponse row as candidateId/job above,
+  // not recomputed here. null while unresolved, or when the lookup below fails.
+  const [languageGate, setLanguageGate] = useState(null);
 
   useEffect(() => {
     loadReport();
     setCandidateId(null);
     setJob(null);
+    setLanguageGate(null);
     getAllApplications()
       .then((applications) => {
         const match = applications.find((application) => application.application_id === applicationId);
         if (match) {
           setCandidateId(match.candidate_id);
           setJob({ jobId: match.job_id, jobTitle: match.job_title });
+          setLanguageGate(match.language_gate ?? null);
         }
       })
       .catch(() => {
@@ -180,6 +237,10 @@ export default function ReportDetailPage() {
           </div>
 
           <AssessmentPanel assessment={toAssessmentShape(report)} />
+
+          {languageGate && languageGate.status !== "not_required" && (
+            <LanguageGateSummary gate={languageGate} />
+          )}
 
           {(report.strengths?.length > 0 || report.concerns?.length > 0) && (
             <div className={styles.notesGrid}>

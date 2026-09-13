@@ -67,7 +67,8 @@ async def process_interview(token: str, transcript: list[dict], audio_path: str 
         # ends -- notify RWS via the shared helper (see rws_client.py) once the
         # local state is already durably committed above.
         await notify_and_record_interview_result(
-            conn, interview_id, row["external_reference_id"], scores, inconclusive
+            conn, interview_id, row["external_reference_id"], scores, inconclusive,
+            language=row["language"],
         )
 
         if scores.get("evaluation_status") == "completed" and settings.resend_api_key and settings.admin_email:

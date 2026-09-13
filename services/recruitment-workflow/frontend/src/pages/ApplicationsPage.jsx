@@ -10,6 +10,7 @@ import StatusBadge from "../components/StatusBadge.jsx";
 import EmptyState from "../components/EmptyState.jsx";
 import AssessmentPanel from "../components/AssessmentPanel.jsx";
 import { STATUS_LABELS, STATUS_TONE } from "../constants/applicationStatus.js";
+import { LANGUAGE_GATE_LABELS, LANGUAGE_GATE_TONE, describeLanguageGate } from "../constants/language.js";
 import styles from "./ApplicationsPage.module.css";
 
 const POLL_INTERVAL_MS = 7000;
@@ -127,6 +128,7 @@ export default function ApplicationsPage() {
                 <th>Candidate</th>
                 <th>Status</th>
                 <th>Interview</th>
+                <th>Language screening</th>
                 <th aria-label="Actions" />
               </tr>
             </thead>
@@ -165,6 +167,12 @@ function ApplicationRow({ application, onUpdated }) {
   const inviteLabel = application.status === "invited" ? "Resend Invite" : "Invite";
   const canDecide = DECIDABLE_STATUSES.has(application.status);
   const hasAssessment = application.interview_assessment != null;
+  // RWS itself is the real authority (a 422 naming the reason is the backstop --
+  // see main.py: accept_application); this only mirrors that rule so the button is
+  // never shown as clickable when the backend would reject it anyway.
+  const gate = application.language_gate ?? { status: "not_required" };
+  const languageGateBlocksAccept = gate.status === "pending" || gate.status === "failed" || gate.status === "needs_review";
+  const canAccept = canDecide && !languageGateBlocksAccept;
   // A decision (accept/reject) and an invite both mutate the same application row --
   // disabling every action while any one is in flight avoids firing two conflicting
   // requests for the same row at once. This is a UX safeguard only; RWS's own
@@ -190,6 +198,7 @@ function ApplicationRow({ application, onUpdated }) {
 
   async function handleDecide(decision) {
     if (rowBusy || !canDecide) return;
+    if (decision === "accept" && !canAccept) return;
     // Reject is the one terminal action worth a light native guard against a
     // misclick -- accept is the "positive" outcome and doesn't warrant the same
     // friction; nothing here adds a custom modal, just the browser's own confirm().
@@ -262,6 +271,19 @@ function ApplicationRow({ application, onUpdated }) {
           )}
         </td>
         <td onClick={(event) => event.stopPropagation()}>
+          {gate.status === "not_required" ? (
+            <span className={styles.interviewStatusEmpty}>—</span>
+          ) : (
+            <StatusBadge
+              variant="glass"
+              tone={LANGUAGE_GATE_TONE[gate.status] ?? "neutral"}
+              title={describeLanguageGate(gate) ?? undefined}
+            >
+              {LANGUAGE_GATE_LABELS[gate.status] ?? gate.status}
+            </StatusBadge>
+          )}
+        </td>
+        <td onClick={(event) => event.stopPropagation()}>
           <div className={styles.actions}>
             {canInvite && (
               <button
@@ -279,7 +301,8 @@ function ApplicationRow({ application, onUpdated }) {
                   type="button"
                   className={styles.acceptButton}
                   onClick={() => handleDecide("accept")}
-                  disabled={rowBusy}
+                  disabled={rowBusy || !canAccept}
+                  title={!canAccept ? describeLanguageGate(gate) ?? undefined : undefined}
                 >
                   {deciding === "accept" ? "Accepting…" : "Accept"}
                 </button>
@@ -310,7 +333,7 @@ function ApplicationRow({ application, onUpdated }) {
 
       {inviteError && (
         <tr>
-          <td colSpan={4}>
+          <td colSpan={5}>
             <div className={styles.error} role="alert">
               {inviteError}
             </div>
@@ -320,7 +343,7 @@ function ApplicationRow({ application, onUpdated }) {
 
       {decideError && (
         <tr>
-          <td colSpan={4}>
+          <td colSpan={5}>
             <div className={styles.error} role="alert">
               {decideError}
             </div>
@@ -330,7 +353,7 @@ function ApplicationRow({ application, onUpdated }) {
 
       {expanded && hasAssessment && (
         <tr>
-          <td colSpan={4}>
+          <td colSpan={5}>
             <AssessmentPanel assessment={application.interview_assessment} />
           </td>
         </tr>

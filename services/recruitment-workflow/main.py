@@ -53,6 +53,7 @@ from db import (
     mark_webhook_event_processed,
     record_interview_result,
     record_invite_attempt,
+    set_job_language_requirement,
     transition_application,
 )
 from explanation import get_or_create_explanation
@@ -68,9 +69,11 @@ from schemas import (
     GraphEdge,
     GraphJobNode,
     InviteApplicationRequest,
+    JobLanguageRequirementRequest,
     JobResponse,
     JobSubmissionRequest,
     JobSummaryResponse,
+    LanguageGateInfo,
     LoginRequest,
     LoginResponse,
     MatchResultResponse,
@@ -78,6 +81,7 @@ from schemas import (
     ScoringConfigResponse,
     StructuredJobDescription,
 )
+from language_gate import BLOCKING_STATUSES, compute_language_gate
 from scoring import CandidateScoringInput, JobRequirements, ScoringWeights, score_candidate
 from shared.llm import LLMProvider, LLMProviderError
 from shared.observability import CorrelationIdMiddleware, configure_json_logging
@@ -314,6 +318,8 @@ def get_jobs(
             title=job.title,
             created_at=job.created_at,
             match_count=match_count,
+            required_language=job.required_language,
+            min_language_cefr=job.min_language_cefr,
         )
         for job, match_count in list_jobs_with_match_counts(db)
     ]
@@ -364,6 +370,8 @@ async def submit_job(
         min_years_experience=structured.min_years_experience,
         titles=structured.titles,
         structuring_model=settings.gemini_model,
+        required_language=payload.required_language,
+        min_language_cefr=payload.min_language_cefr,
     )
 
     try:
@@ -471,7 +479,42 @@ async def submit_job(
         titles=structured.titles,
         threshold=job.threshold,
         scoring_config_version=scoring_config.version,
+        required_language=job.required_language,
+        min_language_cefr=job.min_language_cefr,
         matches=match_responses,
+    )
+
+
+@app.patch("/v1/jobs/{job_id}/language-requirement", response_model=JobSummaryResponse)
+def update_job_language_requirement(
+    job_id: uuid.UUID,
+    payload: JobLanguageRequirementRequest,
+    db: Session = Depends(get_db),
+    recruiter: Recruiter = Depends(require_recruiter),
+):
+    """
+    Configure (or clear, by sending both fields null) an existing job's language
+    eligibility requirement -- the one write path for jobs created before this
+    feature existed, or whose requirement needs correcting. Deliberately does not
+    touch any Application already created for this job: each one keeps the
+    requirement snapshot it took at its own selection time (see
+    db.create_application's docstring and language_gate.py) -- editing a job here
+    can never silently change an already-reported gate result.
+    """
+    job = set_job_language_requirement(
+        db, job_id, payload.required_language, payload.min_language_cefr
+    )
+    if job is None:
+        raise HTTPException(status_code=404, detail="Job not found")
+
+    match_count = len(list_match_results_for_job(db, job_id))
+    return JobSummaryResponse(
+        job_id=job.id,
+        title=job.title,
+        created_at=job.created_at,
+        match_count=match_count,
+        required_language=job.required_language,
+        min_language_cefr=job.min_language_cefr,
     )
 
 
@@ -564,6 +607,27 @@ def submit_scoring_config(
 # between selection and decision; not implemented yet, per current scope.
 # ---------------------------------------------------------------------------
 
+def _language_gate_info(application) -> LanguageGateInfo:
+    """Shared by _application_response (display) and accept_application (enforcement)
+    -- see language_gate.py's module docstring for why both must call the same
+    function on the same data rather than risk two independently-derived answers."""
+    assessment = application.interview_assessment or {}
+    status = compute_language_gate(
+        required_language=application.required_language,
+        required_cefr=application.required_cefr,
+        has_interview_result=application.interview_assessment is not None,
+        assessed_language=assessment.get("language"),
+        assessed_cefr=assessment.get("cefr_level"),
+    )
+    return LanguageGateInfo(
+        status=status,
+        required_language=application.required_language,
+        required_cefr=application.required_cefr,
+        assessed_language=assessment.get("language"),
+        assessed_cefr=assessment.get("cefr_level"),
+    )
+
+
 def _application_response(application) -> ApplicationResponse:
     return ApplicationResponse(
         application_id=application.id,
@@ -578,6 +642,7 @@ def _application_response(application) -> ApplicationResponse:
         interview_assessment=application.interview_assessment,
         interview_completed_at=application.interview_completed_at,
         decided_at=application.decided_at,
+        language_gate=_language_gate_info(application),
     )
 
 
@@ -604,6 +669,12 @@ def select_candidate(
             status_code=422, detail="Cannot select a candidate that did not qualify"
         )
 
+    # Snapshot the job's language requirement (if any) onto the new Application right
+    # now -- not read live from `jobs` later, since a job's requirement is mutable
+    # (see the PATCH .../language-requirement endpoint) and this snapshot is what
+    # keeps an already-reported gate result from silently changing under a later edit.
+    job = get_job(db, match.job_id)
+
     try:
         application = create_application(
             db,
@@ -611,6 +682,8 @@ def select_candidate(
             match_result_id=match.id,
             candidate_id=match.candidate_id,
             selected_by=recruiter.id,
+            required_language=job.required_language if job else None,
+            required_cefr=job.min_language_cefr if job else None,
         )
     except IntegrityError:
         db.rollback()
@@ -710,8 +783,35 @@ def accept_application(
     db: Session = Depends(get_db),
     recruiter: Recruiter = Depends(require_recruiter),
 ):
-    """Terminal transition: selected/invited/interviewed -> accepted. Recorded in
-    recruiter_decisions, then triggers an async knowledge feedback write-back."""
+    """
+    Terminal transition: selected/invited/interviewed -> accepted. Recorded in
+    recruiter_decisions, then triggers an async knowledge feedback write-back.
+
+    Gated on the VoiceHR language eligibility gate (see language_gate.py) when the
+    job this application belongs to has a requirement: "pending" (interview not
+    finished), "failed" (assessed CEFR below the requirement), and "needs_review"
+    (missing/invalid/mismatched assessment data) all block acceptance with a 422
+    naming the reason; only "not_required" (no requirement configured) or "passed"
+    proceed to the state-machine transition below. This is deliberately checked only
+    here, never in reject_application -- a recruiter can always say no regardless of
+    the gate, and this is a resume-scoring-independent second-stage screen, not a
+    change to MatchResult/qualified (see CLAUDE.md, this module's own scoring rules).
+    """
+    application = get_application(db, application_id)
+    if application is None:
+        raise HTTPException(status_code=404, detail="Application not found")
+
+    gate = _language_gate_info(application)
+    if gate.status in BLOCKING_STATUSES:
+        raise HTTPException(
+            status_code=422,
+            detail=(
+                f"Cannot accept: language screening is {gate.status} "
+                f"(required {gate.required_cefr} {gate.required_language}, "
+                f"assessed {gate.assessed_cefr or 'none'} {gate.assessed_language or 'none'})"
+            ),
+        )
+
     return _decide(db, application_id, recruiter, "accept", background_tasks)
 
 
@@ -955,12 +1055,22 @@ async def invite_application(
     """
     Invite (or re-invite) an application's candidate to a VoiceHR interview.
 
+    VoiceHR now owns emailing the candidate their secure interview link automatically,
+    as part of the same call this makes -- RWS never sees or stores that link, and
+    never sends the email itself (see voicehr_client.invite_candidate's own docstring
+    and, on the VoiceHR side, backend/api/routes/invite.py's create_invite). A failed
+    delivery is indistinguishable from any other VoiceHR failure from here: both raise
+    VoiceHRClientError, both result in a 502 below, and both leave this application
+    exactly as it was (never advanced to 'invited') since record_invite_attempt is
+    never reached.
+
     Callable when the application is 'selected' (first invite) or 'invited' (resend --
     e.g. the candidate never received the link). invite_attempt_number is computed as
     current + 1 and is only persisted after VoiceHR responds successfully: if VoiceHR
     is called but its response never reaches RWS, the next call recomputes the same
     attempt number, so the same idempotency key is reused and VoiceHR's own idempotency
-    check (not a new duplicate interview) is what protects the retry.
+    check (not a new duplicate interview, not a duplicate email once delivery already
+    succeeded once) is what protects the retry.
     """
     application = get_application(db, application_id)
     if application is None:
@@ -988,6 +1098,17 @@ async def invite_application(
     attempt_number = application.invite_attempt_number + 1
     idempotency_key = f"{application_id}:{attempt_number}"
 
+    # If this job has a language requirement, VoiceHR conducts the interview in that
+    # exact (snapshotted) language -- not whatever the request body says -- so the
+    # eventual assessed_language can only ever match or genuinely mismatch the
+    # requirement, never diverge because of an unrelated manual selection here. Jobs
+    # with no requirement keep today's behavior: the recruiter picks the language.
+    interview_language = application.required_language or payload.language
+
+    # Cosmetic only (the candidate email's greeting, composed entirely by VoiceHR) --
+    # never used for matching/scoring/eligibility, and no other field of Job is sent.
+    job = get_job(db, application.job_id)
+
     try:
         await voicehr_client.invite_candidate(
             settings.voicehr_url,
@@ -995,10 +1116,15 @@ async def invite_application(
             idempotency_key=idempotency_key,
             candidate_name=contact["name"],
             candidate_email=contact["email"],
-            language=payload.language,
+            language=interview_language,
             external_reference_id=str(application_id),
+            job_title=job.title if job else None,
         )
     except VoiceHRClientError as exc:
+        # Covers both "VoiceHR unreachable" and "VoiceHR reached but could not deliver
+        # the invitation email" (see voicehr_client.invite_candidate's own docstring)
+        # -- either way, record_invite_attempt below is never reached, so the
+        # application is correctly left exactly as it was (never marked invited).
         raise HTTPException(status_code=502, detail=f"VoiceHR invitation failed: {exc}")
 
     updated = record_invite_attempt(db, application_id, attempt_number)

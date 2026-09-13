@@ -1097,6 +1097,9 @@ def test_invite_application_success(
     assert call["candidate_email"] == "alice@example.com"
     assert call["language"] == "en"
     assert call["external_reference_id"] == application_id
+    # VoiceHR now emails the candidate their link automatically; RWS still never sees
+    # or stores it -- only the job title is passed through, for that email's greeting.
+    assert call["job_title"] == "Backend Engineer"
     assert call["idempotency_key"] == f"{application_id}:1"
 
 

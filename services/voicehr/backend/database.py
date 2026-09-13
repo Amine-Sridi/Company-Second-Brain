@@ -78,6 +78,16 @@ def init_db():
         ("idempotency_key", "TEXT"),
         ("webhook_delivery_id", "TEXT"),
         ("webhook_delivered_at", "TEXT"),
+        # RWS's Job.title, for the candidate email only (see api/routes/invite.py) --
+        # not read by anything scoring/matching-related, which VoiceHR has no concept of.
+        ("job_title", "TEXT"),
+        # Automatic candidate invitation email delivery (see api/routes/invite.py:
+        # create_invite / deliver_invitation_email). NULL means "not yet delivered" --
+        # this is exactly what makes a duplicate POST /api/invite with the same
+        # Idempotency-Key safe to retry (delivery failed last time) without resending
+        # once it has actually succeeded.
+        ("invite_email_sent_at", "TEXT"),
+        ("invite_email_error", "TEXT"),
     ):
         if column not in interview_columns:
             try:
