@@ -9,15 +9,15 @@ import StatusBadge from "../components/StatusBadge.jsx";
 import EmptyState from "../components/EmptyState.jsx";
 import AssessmentPanel from "../components/AssessmentPanel.jsx";
 import { STATUS_LABELS, STATUS_TONE } from "../constants/applicationStatus.js";
+import { EVALUATION_STATUS_LABELS } from "../constants/language.js";
 import styles from "./InterviewsPage.module.css";
 
 const POLL_INTERVAL_MS = 7000;
 
-const INTERVIEW_STATUS_LABELS = {
-  completed: "Completed",
-  inconclusive: "Inconclusive",
-  failed: "Failed",
-};
+// See ApplicationsPage.jsx's identical comment: application.interview_status is a
+// different, coarser field than interview_assessment.evaluation_status, but shares
+// the same wording for the three values both use -- reused, not redefined.
+const INTERVIEW_STATUS_LABELS = EVALUATION_STATUS_LABELS;
 
 /**
  * Global, unscoped view of every application's interview progress across every job
@@ -215,11 +215,17 @@ function InterviewRow({ application }) {
 }
 
 // A compact "CEFR · overall/100" summary for the table row -- the full breakdown
-// (fluency/vocabulary/grammar/pronunciation/comprehension) is only in the expanded
+// (fluency/vocabulary/grammar/comprehension/interaction) is only in the expanded
 // AssessmentPanel, reached by clicking the row, same as ApplicationsPage.
 function formatScoreSummary(assessment) {
   if (!assessment) return "—";
-  if (assessment.evaluation_status === "failed") return "Failed";
+  if (assessment.evaluation_status === "failed") return EVALUATION_STATUS_LABELS.failed;
+  if (assessment.evaluation_status === "insufficient_evidence") {
+    // Never "—" here: that would be indistinguishable from "no interview yet" in
+    // this compact summary, when VoiceHR did in fact produce a result -- just not
+    // one confident enough to report a CEFR level from.
+    return EVALUATION_STATUS_LABELS.insufficient_evidence;
+  }
   const parts = [];
   if (assessment.cefr_level) parts.push(assessment.cefr_level);
   if (assessment.overall_score != null) parts.push(`${assessment.overall_score}/100`);

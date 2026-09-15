@@ -67,6 +67,29 @@ async def invite_candidate(
     return resp.json()
 
 
+async def resend_invite(base_url: str, api_key: str, external_reference_id: str) -> None:
+    """
+    Explicit resend: always attempts delivery on the interview VoiceHR already
+    created for this application, never creates a new interview or accepts an
+    Idempotency-Key -- the resend counterpart to invite_candidate's idempotent
+    first-send-and-retry logic. Calls VoiceHR's service-key-gated
+    /api/rws/interviews/{external_reference_id}/resend-invite (report.py:
+    resend_rws_invite), never the unauthenticated token-keyed
+    /interview/{token}/invite route, since RWS never stores that token.
+    """
+    try:
+        resp = await call_service(
+            "POST",
+            f"{base_url}/api/rws/interviews/{external_reference_id}/resend-invite",
+            api_key=api_key,
+        )
+    except ServiceCallError as exc:
+        raise VoiceHRClientError(str(exc)) from exc
+
+    if resp.status_code != 200:
+        raise VoiceHRClientError(f"VoiceHR resend returned {resp.status_code}: {resp.text}")
+
+
 async def get_interview_report(
     base_url: str, api_key: str, external_reference_id: str
 ) -> Optional[dict]:

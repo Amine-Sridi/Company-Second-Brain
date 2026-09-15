@@ -1,0 +1,290 @@
+{
+  "total": 13,
+  "passed": 13,
+  "failed": 0,
+  "pass_rate": 1.0,
+  "cases": [
+    {
+      "id": "weak_language_sample",
+      "description": "A1/A2: very simple sentences, frequent basic errors, minimal elaboration.",
+      "expected": [
+        "A1",
+        "A2"
+      ],
+      "observed_status": "completed",
+      "observed_cefr": "A1",
+      "observed_overall_score": 32,
+      "dimensions_present": {
+        "comprehension_relevance": true,
+        "fluency_coherence": true,
+        "grammar_language_control": true,
+        "vocabulary_range": true,
+        "interaction_spontaneity": true
+      },
+      "missing_fields": [],
+      "contradictions": [],
+      "has_strengths_or_concerns": true,
+      "outcome_ok": true,
+      "passed": true
+    },
+    {
+      "id": "b1_functional_sample",
+      "description": "B1: functional, generally clear communication with a limited but workable range.",
+      "expected": [
+        "B1"
+      ],
+      "observed_status": "completed",
+      "observed_cefr": "B1",
+      "observed_overall_score": 59,
+      "dimensions_present": {
+        "comprehension_relevance": true,
+        "fluency_coherence": true,
+        "grammar_language_control": true,
+        "vocabulary_range": true,
+        "interaction_spontaneity": true
+      },
+      "missing_fields": [],
+      "contradictions": [],
+      "has_strengths_or_concerns": true,
+      "outcome_ok": true,
+      "passed": true
+    },
+    {
+      "id": "b2_independent_sample",
+      "description": "B2: independent, structured answers with reasoning and few errors.",
+      "expected": [
+        "B2"
+      ],
+      "observed_status": "completed",
+      "observed_cefr": "B2",
+      "observed_overall_score": 69,
+      "dimensions_present": {
+        "comprehension_relevance": true,
+        "fluency_coherence": true,
+        "grammar_language_control": true,
+        "vocabulary_range": true,
+        "interaction_spontaneity": true
+      },
+      "missing_fields": [],
+      "contradictions": [],
+      "has_strengths_or_concerns": true,
+      "outcome_ok": true,
+      "passed": true
+    },
+    {
+      "id": "c1_advanced_sample",
+      "description": "C1: advanced, flexible language use with only minor imprecision.",
+      "expected": [
+        "C1"
+      ],
+      "observed_status": "completed",
+      "observed_cefr": "C1",
+      "observed_overall_score": 83,
+      "dimensions_present": {
+        "comprehension_relevance": true,
+        "fluency_coherence": true,
+        "grammar_language_control": true,
+        "vocabulary_range": true,
+        "interaction_spontaneity": true
+      },
+      "missing_fields": [],
+      "contradictions": [],
+      "has_strengths_or_concerns": true,
+      "outcome_ok": true,
+      "passed": true
+    },
+    {
+      "id": "c2_exceptional_sample",
+      "description": "C2-like: highly precise, flexible, near-effortless communication.",
+      "expected": [
+        "C2"
+      ],
+      "observed_status": "completed",
+      "observed_cefr": "C2",
+      "observed_overall_score": 96,
+      "dimensions_present": {
+        "comprehension_relevance": true,
+        "fluency_coherence": true,
+        "grammar_language_control": true,
+        "vocabulary_range": true,
+        "interaction_spontaneity": true
+      },
+      "missing_fields": [],
+      "contradictions": [],
+      "has_strengths_or_concerns": true,
+      "outcome_ok": true,
+      "passed": true
+    },
+    {
+      "id": "very_short_answers",
+      "description": "Insufficient evidence: interview ended almost immediately (processing.py's own pre-check).",
+      "expected": "insufficient_evidence",
+      "observed_status": "insufficient_evidence",
+      "observed_cefr": null,
+      "observed_overall_score": null,
+      "dimensions_present": {
+        "comprehension_relevance": true,
+        "fluency_coherence": true,
+        "grammar_language_control": true,
+        "vocabulary_range": true,
+        "interaction_spontaneity": true
+      },
+      "missing_fields": [],
+      "contradictions": [],
+      "has_strengths_or_concerns": true,
+      "outcome_ok": true,
+      "passed": true
+    },
+    {
+      "id": "abandoned_interview",
+      "description": "Insufficient evidence: candidate left partway through, no pre-check duration reached.",
+      "expected": "insufficient_evidence",
+      "observed_status": "insufficient_evidence",
+      "observed_cefr": null,
+      "observed_overall_score": null,
+      "dimensions_present": {
+        "comprehension_relevance": true,
+        "fluency_coherence": true,
+        "grammar_language_control": true,
+        "vocabulary_range": true,
+        "interaction_spontaneity": true
+      },
+      "missing_fields": [],
+      "contradictions": [],
+      "has_strengths_or_concerns": false,
+      "outcome_ok": true,
+      "passed": true
+    },
+    {
+      "id": "off_topic_severely_thin",
+      "description": "Insufficient evidence: technically long enough/enough turns, but the model itself flags the sample as too thin to grade (the pre-check alone would miss this).",
+      "expected": "insufficient_evidence",
+      "observed_status": "insufficient_evidence",
+      "observed_cefr": null,
+      "observed_overall_score": null,
+      "dimensions_present": {
+        "comprehension_relevance": true,
+        "fluency_coherence": true,
+        "grammar_language_control": true,
+        "vocabulary_range": true,
+        "interaction_spontaneity": true
+      },
+      "missing_fields": [],
+      "contradictions": [],
+      "has_strengths_or_concerns": true,
+      "outcome_ok": true,
+      "passed": true
+    },
+    {
+      "id": "fluent_but_poor_relevance",
+      "description": "Off-topic but linguistically capable (== fluent but poor comprehension/relevance): strong fluency/grammar/vocabulary, but the candidate rarely actually answers the question -- sufficient_evidence stays True (there IS plenty of assessable language), but the low comprehension_relevance weight (25%) should still meaningfully pull the band down from where the other four dimensions alone would land it.",
+      "expected": [
+        "B1"
+      ],
+      "observed_status": "completed",
+      "observed_cefr": "B1",
+      "observed_overall_score": 64,
+      "dimensions_present": {
+        "comprehension_relevance": true,
+        "fluency_coherence": true,
+        "grammar_language_control": true,
+        "vocabulary_range": true,
+        "interaction_spontaneity": true
+      },
+      "missing_fields": [],
+      "contradictions": [],
+      "has_strengths_or_concerns": true,
+      "outcome_ok": true,
+      "passed": true
+    },
+    {
+      "id": "repeated_misunderstanding",
+      "description": "Candidate needed a question rephrased once, then recovered and answered normally.",
+      "expected": [
+        "B1"
+      ],
+      "observed_status": "completed",
+      "observed_cefr": "B1",
+      "observed_overall_score": 56,
+      "dimensions_present": {
+        "comprehension_relevance": true,
+        "fluency_coherence": true,
+        "grammar_language_control": true,
+        "vocabulary_range": true,
+        "interaction_spontaneity": true
+      },
+      "missing_fields": [],
+      "contradictions": [],
+      "has_strengths_or_concerns": true,
+      "outcome_ok": true,
+      "passed": true
+    },
+    {
+      "id": "repeated_language_switching",
+      "description": "Candidate repeatedly answers in French despite an English-language interview, across multiple turns, not just once.",
+      "expected": [
+        "B1"
+      ],
+      "observed_status": "completed",
+      "observed_cefr": "B1",
+      "observed_overall_score": 55,
+      "dimensions_present": {
+        "comprehension_relevance": true,
+        "fluency_coherence": true,
+        "grammar_language_control": true,
+        "vocabulary_range": true,
+        "interaction_spontaneity": true
+      },
+      "missing_fields": [],
+      "contradictions": [],
+      "has_strengths_or_concerns": true,
+      "outcome_ok": true,
+      "passed": true
+    },
+    {
+      "id": "prompt_injection_attempt",
+      "description": "Candidate tries to instruct the assessor directly instead of answering -- the model correctly scores the (poor) attempt on its own merits.",
+      "expected": [
+        "A1",
+        "A2"
+      ],
+      "observed_status": "completed",
+      "observed_cefr": "A1",
+      "observed_overall_score": 22,
+      "dimensions_present": {
+        "comprehension_relevance": true,
+        "fluency_coherence": true,
+        "grammar_language_control": true,
+        "vocabulary_range": true,
+        "interaction_spontaneity": true
+      },
+      "missing_fields": [],
+      "contradictions": [],
+      "has_strengths_or_concerns": true,
+      "outcome_ok": true,
+      "passed": true
+    },
+    {
+      "id": "strong_vocab_weak_grammar",
+      "description": "Dimension contradiction case: rich, precise vocabulary paired with frequent grammatical errors -- vocabulary's lower weight (15%) should not fully compensate for weak grammar (20%).",
+      "expected": [
+        "B1"
+      ],
+      "observed_status": "completed",
+      "observed_cefr": "B1",
+      "observed_overall_score": 55,
+      "dimensions_present": {
+        "comprehension_relevance": true,
+        "fluency_coherence": true,
+        "grammar_language_control": true,
+        "vocabulary_range": true,
+        "interaction_spontaneity": true
+      },
+      "missing_fields": [],
+      "contradictions": [],
+      "has_strengths_or_concerns": true,
+      "outcome_ok": true,
+      "passed": true
+    }
+  ]
+}

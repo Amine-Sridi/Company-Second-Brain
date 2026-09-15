@@ -11,6 +11,18 @@ import sqlite3
 # module; only where it physically lives on disk changes.
 DB_PATH = "storage/voicehr.db"
 
+# Candidate gets up to this many automatic reconnects after a recoverable disconnect
+# (browser_disconnect / gemini_live_error) before the interview stops offering a fresh
+# `/start` attempt -- shared by api/routes/session.py (WebSocket-side disconnect
+# handling) and api/deps.py (validate_interview_start's stale-active reactivation), so
+# both halves of "reconnect after a drop" enforce the exact same bounded budget instead
+# of two independently-unbounded fallbacks (the bug this constant replaces: the old
+# code capped session.py's own reset at 1, but deps.py's 30-second staleness check had
+# no cap at all, silently undermining it for any reconnect attempted >30s after the
+# most recent /start call -- true for almost every real disconnect).
+MAX_INTERVIEW_RECONNECTS = 2
+
+
 def init_db():
     conn = sqlite3.connect(DB_PATH)
     cursor = conn.cursor()
@@ -88,6 +100,23 @@ def init_db():
         # once it has actually succeeded.
         ("invite_email_sent_at", "TEXT"),
         ("invite_email_error", "TEXT"),
+        # Session-robustness columns (candidate reconnect/completion-idempotency).
+        # pending_transcript/pending_duration_seconds hold whatever transcript/elapsed
+        # time a recoverable disconnect (browser_disconnect/gemini_live_error) captured
+        # before the drop -- api/routes/session.py loads them on the next WebSocket
+        # connect and hands them to the Gemini Live pipeline as resume_transcript/
+        # resume_duration_seconds, so a reconnect's final evaluated transcript/duration
+        # covers the whole conversation, not just the last leg. Cleared once the
+        # interview actually finalizes (see finalized_at below).
+        ("pending_transcript", "TEXT"),
+        ("pending_duration_seconds", "REAL"),
+        # Set exactly once, atomically, by processing.process_interview's own claim
+        # UPDATE ("WHERE finalized_at IS NULL") -- the actual exactly-once completion
+        # guard. A concurrent/duplicate finalization attempt (e.g. a WebSocket close
+        # racing a stale-session reconnect) sees rowcount == 0 on that UPDATE and
+        # returns immediately, before any evaluation work or webhook send happens.
+        # Independent of `status`, which still records the human-facing outcome.
+        ("finalized_at", "TEXT"),
     ):
         if column not in interview_columns:
             try:
@@ -141,6 +170,15 @@ def init_db():
         cursor.execute("ALTER TABLE reports ADD COLUMN evaluation_status TEXT NOT NULL DEFAULT 'pending'")
     if "evaluation_error" not in report_columns:
         cursor.execute("ALTER TABLE reports ADD COLUMN evaluation_error TEXT")
+    # Interaction/spontaneity is now scored as its own rubric dimension (see
+    # backend/services/evaluator.py) -- distinct from comprehension, which it used to
+    # be silently folded into. VoiceHR-internal only: never sent over the RWS webhook
+    # (shared/schemas.InterviewAssessment is unchanged), only surfaced via VoiceHR's
+    # own rich report (backend/api/routes/report.py: get_report), which the recruiter
+    # frontend's AssessmentScoreRow already renders "--" for gracefully when absent
+    # (exactly how a null/missing score already displays elsewhere).
+    if "interaction_score" not in report_columns:
+        cursor.execute("ALTER TABLE reports ADD COLUMN interaction_score INTEGER")
     cursor.execute(
         """UPDATE reports SET evaluation_status = CASE
                WHEN overall_score IS NULL THEN 'failed' ELSE 'completed' END

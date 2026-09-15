@@ -164,6 +164,24 @@
   flex-wrap: wrap;
 }
 
+.inviteGroup {
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-2);
+}
+
+.inviteFailedText {
+  color: var(--v2-danger);
+  font-size: var(--font-size-xs);
+  white-space: nowrap;
+}
+
+.inviteSentText {
+  color: var(--v2-text-muted);
+  font-size: var(--font-size-xs);
+  white-space: nowrap;
+}
+
 .inviteButton {
   background: linear-gradient(120deg, var(--v2-cyan), var(--v2-violet));
   color: var(--v2-bg-inset);

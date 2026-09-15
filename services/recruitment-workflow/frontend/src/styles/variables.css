@@ -15,9 +15,6 @@
   --color-primary-hover: #2549ad;
   --color-primary-bg: #eaf0fd;
 
-  /* A slightly cooler tint than --color-bg, used for hover states on rows/cards --
-     one shared value instead of each page inventing its own near-identical hex. */
-  --color-hover-bg: #f7f9fd;
   --color-neutral-bg: #f1f2f4;
 
   /* Semantic status colors -- used only for status/error signal, never decoration
@@ -31,11 +28,6 @@
   --color-warning-bg: #fdf3e0;
   --color-accent: #6b3fc4;
   --color-accent-bg: #f1eafd;
-
-  /* Hover shade for the one success-colored action button (Accept) -- was a bare hex
-     literal in ApplicationsPage.module.css; extracted here so every hover state in the
-     app is a token, not a one-off value (Phase 1 admin-shell pass). */
-  --color-success-hover: #185f36;
 
   --radius: 8px;
   --radius-pill: 999px;
@@ -78,24 +70,21 @@
 
 /* ===========================================================================
    V2 design system -- "AI recruitment command center" visual direction.
-   ADDITIVE ONLY: nothing above this line is changed or removed. Every page
-   except Dashboard (and the persistent Sidebar/TopBar chrome) still directly
-   depends on the --color-* tokens above keeping their current light-theme
-   values -- those pages render plain text straight onto the implicit light
-   body background with no surface of their own (see PageHeader's title, for
-   one example, on every un-migrated page). Repointing --color-text or
-   --color-bg to dark values here would silently make that text unreadable on
-   every page this phase does not touch.
-
-   So instead: a second, independent, dark-cinematic token set below, prefixed
-   --v2-, used only by the components this phase actually redesigns (Sidebar,
-   TopBar, StatTile, Dashboard, and the opt-in "glass" variant on
-   StatusBadge/EmptyState). Every other page is completely unaware this block
-   exists. As later phases migrate a page to V2, that page starts reading from
-   --v2-* instead of --color-*; once every page is migrated, this whole comment
-   -- and the "additive, don't touch --color-*" constraint it explains -- can be
-   deleted and --v2-* can simply become the new --color-* (see
-   FRONTEND_HANDOFF.md's Phase 1 entry for the full migration plan). ========= */
+   Every page now renders through this token set (the migration the comment
+   here used to describe as future work is complete). --color-* above is not
+   dead, though: LoginPage -- deliberately never migrated, see
+   FRONTEND_HANDOFF.md's Known Limitations -- still reads it directly for its
+   permanent light theme, and global.css's shared body/focus-ring defaults
+   also read it (the one V2-page inconsistency that already existed before
+   this comment was rewritten: an un-overridden focus ring or the pre-paint
+   body background on a V2 page is light-themed --color-primary/--color-bg,
+   not dark --v2-*; see Sidebar.module.css's own note on the same thing).
+   That collision is exactly why --v2-* was never renamed onto --color-*'s
+   names: LoginPage needs those specific token names to keep resolving to
+   their light values. --v2-* token names are also read live via
+   getComputedStyle() in MatchGraph.jsx/MatchGraph3D.jsx, so treat every name
+   below as a public API, not an internal implementation detail free to
+   rename. =================================================================*/
 :root {
   /* Deep charcoal/navy cinematic base -- never pure black (flat/lifeless) or a
      literal navy hue (reads as "corporate blue", not "command center"). */

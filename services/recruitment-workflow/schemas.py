@@ -240,6 +240,66 @@ class LanguageGateInfo(BaseModel):
     assessed_cefr: Optional[str] = None
 
 
+class InterviewRoundResponse(BaseModel):
+    """
+    One technical/managerial interview round (see db.InterviewRound's own
+    docstring for why this is a parallel signal, never a new Application.status
+    value). `outcome` is null unless `status == "completed"` -- enforced by a DB
+    CHECK constraint, mirrored here only as a type, not re-validated.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    id: UUID4
+    application_id: UUID4
+    round_type: Literal["technical", "managerial"]
+    status: Literal["scheduled", "completed", "cancelled"]
+    outcome: Optional[Literal["pass", "fail", "needs_review"]] = None
+    interviewer_name: str
+    scheduled_at: Optional[datetime] = None
+    notes: Optional[str] = None
+    created_by: UUID4
+    created_at: datetime
+    updated_at: datetime
+
+
+class InterviewRoundRequest(BaseModel):
+    """POST /v1/applications/{id}/interview-rounds' request body -- schedules a new
+    round in the 'scheduled' state. There is no `status`/`outcome` here: a round is
+    always created scheduled, with no verdict yet (see the lifecycle actions below --
+    reschedule/complete/cancel)."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    round_type: Literal["technical", "managerial"]
+    interviewer_name: str = Field(min_length=1, max_length=200)
+    scheduled_at: datetime
+    notes: Optional[str] = Field(None, max_length=2000)
+
+
+class RescheduleInterviewRoundRequest(BaseModel):
+    """.../interview-rounds/{round_id}/reschedule's request body -- only ever
+    moves scheduled_at, never touches round_type/interviewer_name/status."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    scheduled_at: datetime
+
+
+class CompleteInterviewRoundRequest(BaseModel):
+    """.../interview-rounds/{round_id}/complete's request body -- outcome is
+    required (never null): a round only reaches 'completed' with a verdict already
+    attached, matching migration 0007's paired outcome/status CHECK constraint at
+    the API boundary instead of only at the DB. `notes` is optional -- omitting it
+    leaves whatever was recorded at scheduling time untouched (see
+    main.py: complete_interview_round_endpoint)."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    outcome: Literal["pass", "fail", "needs_review"]
+    notes: Optional[str] = Field(None, max_length=2000)
+
+
 class ApplicationResponse(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -256,6 +316,7 @@ class ApplicationResponse(BaseModel):
     interview_completed_at: Optional[datetime]
     decided_at: Optional[datetime]
     language_gate: LanguageGateInfo
+    interview_rounds: list[InterviewRoundResponse] = Field(default_factory=list)
 
 
 class GlobalApplicationResponse(ApplicationResponse):

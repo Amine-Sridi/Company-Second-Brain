@@ -90,6 +90,7 @@ def _stub_transition_and_feedback(monkeypatch, application):
         lambda db, mid: SimpleNamespace(matched_requirements=[], missing_requirements=[], final_score=0.8),
     )
     monkeypatch.setattr(main, "get_job", lambda db, jid: SimpleNamespace(title="Some Job"))
+    monkeypatch.setattr(main, "list_interview_rounds_for_application", lambda db, aid: [])
     return accepted
 
 
@@ -243,6 +244,7 @@ def test_reject_is_never_blocked_by_the_language_gate(client, monkeypatch):
         lambda db, mid: SimpleNamespace(matched_requirements=[], missing_requirements=[], final_score=0.8),
     )
     monkeypatch.setattr(main, "get_job", lambda db, jid: SimpleNamespace(title="Some Job"))
+    monkeypatch.setattr(main, "list_interview_rounds_for_application", lambda db, aid: [])
 
     resp = test_client.post(
         f"/v1/applications/{application.id}/reject", headers=_auth_header(recruiter_id)

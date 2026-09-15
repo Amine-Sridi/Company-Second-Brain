@@ -49,6 +49,35 @@ TASKS = {
         ),
     ],
 }
+# TASKS above map onto the interview rubric's four fixed sections, in order:
+#   A. Warm-up             -- task 1 (background)
+#   B. Past experience     -- task 2 (a real challenge, actions taken, result)
+#   C. Opinion / reasoning -- task 3 (a stance and why, on a domain-neutral topic --
+#                             never a technical/trivia question; the goal is language,
+#                             not subject-matter expertise)
+#   D. Clarification / reformulation -- task 4 (paraphrase a short message in the
+#                             candidate's own words)
+# Each tuple's second string is that task's own single elaboration probe, used at
+# most once, only if that task's initial answer was very short/minimal.
+
+# Section E: one additional adaptive follow-up, asked once after the four fixed
+# tasks above, chosen by the interviewer from this small, fixed bank based on
+# observed candidate ability -- the one place genuine "adaptive questioning"
+# happens. Deliberately topic-agnostic (usable after any of the four tasks) and
+# deliberately small (three fixed tiers): bounded adaptation, not an invented,
+# unbounded follow-up question.
+ADAPTIVE_FOLLOWUPS = {
+    "en": {
+        "elaborate": "Could you tell me a bit more about that, maybe with a specific example?",
+        "reasoning": "That's helpful -- what made you feel that way, or what was your reasoning?",
+        "abstract": "Interesting. How do you think that might look different in another situation, or from someone else's point of view?",
+    },
+    "fr": {
+        "elaborate": "Pourriez-vous m'en dire un peu plus, peut-être avec un exemple concret ?",
+        "reasoning": "C'est utile — qu'est-ce qui vous a amené à penser cela, ou quel était votre raisonnement ?",
+        "abstract": "Intéressant. Comment pensez-vous que cela pourrait être différent dans une autre situation, ou du point de vue de quelqu'un d'autre ?",
+    },
+}
 
 CLOSING = {
     "en": "Thank you so much for your time. The assessment is now complete. You will be contacted by the recruitment team.",
@@ -99,10 +128,22 @@ async def run_sarah_pipeline(
     audio_path: str,
     *,
     candidate_name: str = "Candidate",
+    resume_transcript: list[dict] | None = None,
+    resume_duration_seconds: float = 0.0,
 ):
     """Run the interview over the WebSocket. Gemini Live is the only interview-conduct
-    implementation in this project; see gemini_live.py for the actual pipeline."""
+    implementation in this project; see gemini_live.py for the actual pipeline.
+
+    resume_transcript/resume_duration_seconds carry forward whatever a prior,
+    recoverably-dropped attempt on this same interview already captured (see
+    api/routes/session.py) -- Gemini Live itself has no memory across a fresh
+    client.aio.live.connect() call, so this is what makes "transcript already
+    captured is preserved" true across a reconnect without pretending the candidate's
+    actual conversation with Sarah continued uninterrupted (it starts over; only the
+    record of what was already said is carried into the final evaluated transcript).
+    """
     from backend.services.gemini_live import run_gemini_live_pipeline
     return await run_gemini_live_pipeline(
-        websocket, token, language, audio_path, candidate_name=candidate_name
+        websocket, token, language, audio_path, candidate_name=candidate_name,
+        resume_transcript=resume_transcript, resume_duration_seconds=resume_duration_seconds,
     )

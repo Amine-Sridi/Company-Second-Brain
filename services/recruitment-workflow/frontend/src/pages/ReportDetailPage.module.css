@@ -181,6 +181,65 @@
   font-size: var(--font-size-sm);
 }
 
+.qualityRow {
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-2);
+  flex-wrap: wrap;
+}
+
+.qualityDetail {
+  color: var(--v2-text-muted);
+  font-size: var(--font-size-sm);
+}
+
+.qualityExplanation {
+  margin: var(--spacing-2) 0 0;
+  font-size: var(--font-size-base);
+  color: var(--v2-text-muted);
+}
+
+.profileGrid {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-3);
+}
+
+.profileRow {
+  padding-bottom: var(--spacing-2);
+  border-bottom: 1px solid var(--v2-border);
+}
+
+.profileRow:last-child {
+  padding-bottom: 0;
+  border-bottom: none;
+}
+
+.profileHeader {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  font-size: var(--font-size-base);
+}
+
+.profileLabel {
+  color: var(--v2-text);
+  font-weight: 500;
+}
+
+.profileRating {
+  color: var(--v2-cyan);
+  font-size: var(--font-size-sm);
+  font-weight: 600;
+}
+
+.profileEvidence {
+  margin: var(--spacing-1) 0 0;
+  color: var(--v2-text-muted);
+  font-size: var(--font-size-sm);
+  font-style: italic;
+}
+
 /* `color-scheme: dark` hints the browser's own native <audio> control chrome
    (play button, scrubber, volume) to render in a dark-appropriate palette --
    real browser support (Chromium/Firefox), not a full custom-control rebuild,

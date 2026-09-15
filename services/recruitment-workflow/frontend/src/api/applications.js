@@ -39,11 +39,14 @@ export function getAllApplications() {
 }
 
 /**
- * Invites (or re-invites) an application's candidate to a VoiceHR interview. RWS
- * itself enforces when this is allowed -- only "selected" (first invite) or "invited"
- * (resend) are accepted; anything else is a 409. The frontend's Invite/Resend-Invite
- * button being shown only for those two statuses is a UX hint that mirrors this rule,
- * never a substitute for it (§22: don't duplicate backend business rules).
+ * Invites an application's candidate to a VoiceHR interview -- or, while still
+ * "selected" after a failed delivery, retries that same attempt (RWS/VoiceHR reuse
+ * the same interview/token via their own idempotency key; this call is identical
+ * either way). RWS itself enforces when this is allowed -- only "selected" or
+ * "invited" are accepted; anything else is a 409. The frontend only shows this for
+ * "selected" rows (Invite / Retry) -- once "invited", further re-sends go through
+ * resendInvite() below, a UX hint that mirrors the backend's own rules, never a
+ * substitute for them (§22: don't duplicate backend business rules).
  *
  * @param {string} applicationId
  * @param {"en"|"fr"} [language]
@@ -54,6 +57,21 @@ export function invite(applicationId, language = "en") {
     method: "POST",
     body: { language },
   });
+}
+
+/**
+ * Explicit resend: intentionally re-sends the candidate's existing interview
+ * invitation email without creating a new interview. Only callable while "invited"
+ * -- RWS itself enforces this (409 otherwise) and applies a short per-application
+ * cooldown server-side (429) so a double-click can't trigger two real sends; the
+ * frontend disabling the button while a request is in flight is a UX layer on top of
+ * that, not a substitute for it.
+ *
+ * @param {string} applicationId
+ * @returns {Promise<object>} ApplicationResponse (status stays "invited")
+ */
+export function resendInvite(applicationId) {
+  return request(`/v1/applications/${applicationId}/resend-invite`, { method: "POST" });
 }
 
 /**

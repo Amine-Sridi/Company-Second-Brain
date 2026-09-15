@@ -64,7 +64,8 @@ def test_interviews_table_schema(temp_db, monkeypatch):
                 "retry_count", "created_at", "expires_at", "started_at", "completed_at",
                 "invite_sent", "external_reference_id", "idempotency_key",
                 "webhook_delivery_id", "webhook_delivered_at", "job_title",
-                "invite_email_sent_at", "invite_email_error"}
+                "invite_email_sent_at", "invite_email_error",
+                "pending_transcript", "pending_duration_seconds", "finalized_at"}
     assert columns == expected
     conn.close()
 
@@ -91,7 +92,7 @@ def test_reports_table_schema(temp_db, monkeypatch):
     columns = {row[1] for row in cursor.fetchall()}
     expected = {"id", "interview_id", "report_token", "overall_score", "cefr_level", "confidence",
                 "inconclusive", "fluency_score", "vocabulary_score", "grammar_score",
-                "pronunciation_score", "comprehension_score", "strengths", "concerns",
+                "pronunciation_score", "comprehension_score", "interaction_score", "strengths", "concerns",
                 "evidence", "candidate_speaking_time", "word_count", "evaluation_status",
                 "evaluation_error", "created_at"}
     assert columns == expected

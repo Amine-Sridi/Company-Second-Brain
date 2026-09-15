@@ -127,7 +127,17 @@ class InterviewAssessment(BaseModel):
     pronunciation_score: Optional[int] = Field(None, ge=0, le=100)
     comprehension_score: Optional[int] = Field(None, ge=0, le=100)
     inconclusive: bool = False
-    evaluation_status: Literal["completed", "failed", "inconclusive"]
+    # "insufficient_evidence" added this pass (VoiceHR interview rubric/quality
+    # work, see handoff.md): a transcript too short/thin to support a defensible
+    # CEFR verdict -- overall_score/cefr_level are null whenever this value is
+    # sent, by construction on VoiceHR's side (evaluator.py), never a guessed
+    # number. language_gate.py's compute_language_gate already maps a null
+    # assessed_cefr to "needs_review" regardless of evaluation_status, so this
+    # addition needed no change to that file's own threshold logic. "inconclusive"
+    # is kept for backward compatibility with the schema's own prior accepted
+    # values (never actually produced by VoiceHR itself, but a replayed/stored
+    # older payload could still carry it).
+    evaluation_status: Literal["completed", "failed", "inconclusive", "insufficient_evidence"]
 
 
 class WebhookPayload(BaseModel):

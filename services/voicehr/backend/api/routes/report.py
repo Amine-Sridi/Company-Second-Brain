@@ -9,6 +9,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import FileResponse, HTMLResponse
 
 from backend.api.deps import get_db, require_admin_auth
+from backend.api.routes.interview import deliver_invitation_email
 from backend.api.routes.invite import require_rws_service_key
 import backend.database as database
 from backend.services.processing import retry_report
@@ -68,6 +69,16 @@ def get_report(report_token: str, db=Depends(get_db)):
     evaluation_status = row["evaluation_status"] or (
         "failed" if row["overall_score"] is None else "completed"
     )
+    # Explicit, recruiter-UI-friendly form of the same fact evaluation_status already
+    # encodes: True once a real CEFR verdict exists, False when the transcript didn't
+    # contain enough usable language to grade (never confused with a "failed"
+    # technical evaluator error, which is neither "sufficient" nor "insufficient"
+    # evidence -- it's simply unknown, so this stays None for that status).
+    sufficient_evidence = (
+        True if evaluation_status == "completed"
+        else False if evaluation_status == "insufficient_evidence"
+        else None
+    )
     return {
         "candidate_name": row["candidate_name"],
         "candidate_email": row["candidate_email"],
@@ -80,27 +91,49 @@ def get_report(report_token: str, db=Depends(get_db)):
         "cefr_level": row["cefr_level"],
         "confidence": confidence,
         "evaluation_status": evaluation_status,
+        "sufficient_evidence": sufficient_evidence,
         "evaluation_error": row["evaluation_error"],
         "inconclusive": bool(row["inconclusive"]),
         "dimensions": {
+            # interaction and comprehension are now scored as two separate rubric
+            # dimensions (see backend/services/evaluator.py) -- interaction_comprehension
+            # is kept, aliased to comprehension alone, only so an older stored report
+            # (scored before this pass) still renders its one combined number under
+            # its original key rather than silently disappearing.
             "interaction_comprehension": row["comprehension_score"],
+            "comprehension_relevance": row["comprehension_score"],
+            "interaction_spontaneity": row["interaction_score"],
             "fluency_coherence": row["fluency_score"],
             "grammar_language_control": row["grammar_score"],
             "vocabulary_range": row["vocabulary_score"],
-            "pronunciation_intelligibility": row["pronunciation_score"],
+            # Never fabricated -- always null, unconditionally, regardless of what
+            # this row's own pronunciation_score column happens to contain. The
+            # evaluator only ever sees the text transcript, never audio, so there is
+            # no reliable evidence to score pronunciation from (see evaluator.py's
+            # own comment) -- and a handful of reports scored before that rule
+            # existed do still carry a stale non-null value in this column. Reading
+            # it back verbatim would let an old row keep claiming a pronunciation
+            # assessment this system no longer stands behind; hard-coding None here
+            # is what makes "pronunciation is unavailable" a read-time guarantee,
+            # not just a write-time habit.
+            "pronunciation_intelligibility": None,
             # Keep the short names for existing report consumers.
             "fluency": row["fluency_score"],
             "vocabulary": row["vocabulary_score"],
             "grammar": row["grammar_score"],
-            "pronunciation": row["pronunciation_score"],
+            "pronunciation": None,
             "comprehension": row["comprehension_score"],
+            "interaction": row["interaction_score"],
         },
         "dimension_weights": {
-            "interaction_comprehension": 0.25,
+            "comprehension_relevance": 0.25,
             "fluency_coherence": 0.25,
             "grammar_language_control": 0.20,
             "vocabulary_range": 0.15,
-            "pronunciation_intelligibility": 0.15,
+            "interaction_spontaneity": 0.15,
+            # Reported for transparency, not fabrication -- 0 weight because it is
+            # never scored (see above), not because it doesn't matter.
+            "pronunciation_intelligibility": 0.0,
         },
         "strengths": load_json(row["strengths"], []),
         "concerns": load_json(row["concerns"], []),
@@ -194,6 +227,37 @@ def get_rws_recording(
         raise HTTPException(status_code=404, detail="Recording not available")
     media_type = "audio/webm" if path.suffix.lower() == ".webm" else (mimetypes.guess_type(str(path))[0] or "audio/wav")
     return FileResponse(path, media_type=media_type)
+
+
+@router.post("/api/rws/interviews/{external_reference_id}/resend-invite")
+async def resend_rws_invite(
+    external_reference_id: str,
+    db=Depends(get_db),
+    _auth: None = Depends(require_rws_service_key),
+):
+    """
+    RWS-facing explicit resend, keyed by external_reference_id like the report/
+    recording lookups above -- the service-key-gated counterpart RWS needs to trigger
+    a resend, since the existing POST /interview/{token}/invite (interview.py:
+    send_invitation_email) is unauthenticated and keyed by the raw token, which RWS
+    never stores (see that route's own docstring).
+
+    Always attempts delivery on the interview's *existing* token/row (never creates a
+    new interview, unlike POST /api/invite with a fresh Idempotency-Key) via
+    deliver_invitation_email -- the same function every other send path (automatic
+    first send, automatic retry, the token-keyed explicit resend) already funnels
+    through, so composition/sending logic never forks. Returns only whether the send
+    succeeded; the interview link/token is never included in the response.
+    """
+    row = db.execute(
+        "SELECT * FROM interviews WHERE external_reference_id = ?",
+        (external_reference_id,),
+    ).fetchone()
+    if not row:
+        raise HTTPException(status_code=404, detail="Interview not found")
+
+    await deliver_invitation_email(db, row, row["token"])
+    return {"status": "sent"}
 
 
 @router.get("/recordings/{filename}")

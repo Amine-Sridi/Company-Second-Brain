@@ -311,6 +311,19 @@ def test_assessment_status_invalid():
         InterviewAssessment(**_make_assessment(evaluation_status="unknown"))
 
 
+def test_assessment_insufficient_evidence_accepted_with_null_cefr():
+    """VoiceHR's interview rubric/quality pass (see handoff.md): a transcript too
+    short/thin to support a defensible CEFR verdict is reported this way, always with
+    a null cefr_level -- never a guessed number. This is the smallest schema change
+    that lets language_gate.py's existing null-assessed-CEFR handling (already
+    "needs_review") cover this new outcome with no change to that file at all."""
+    a = InterviewAssessment(**_make_assessment(
+        evaluation_status="insufficient_evidence", inconclusive=True, cefr_level=None, overall_score=None,
+    ))
+    assert a.evaluation_status == "insufficient_evidence"
+    assert a.cefr_level is None
+
+
 def test_assessment_extra_field_rejected():
     with pytest.raises(ValidationError):
         InterviewAssessment(**_make_assessment(candidate_name="Alice"))

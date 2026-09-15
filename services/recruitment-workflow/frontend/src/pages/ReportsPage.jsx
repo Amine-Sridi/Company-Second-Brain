@@ -4,7 +4,9 @@ import { getAllApplications } from "../api/applications.js";
 import { ApiError } from "../api/client.js";
 import { useCandidateIdentity } from "../hooks/useCandidateIdentity.js";
 import PageHeader from "../components/PageHeader.jsx";
+import StatusBadge from "../components/StatusBadge.jsx";
 import EmptyState from "../components/EmptyState.jsx";
+import { EVALUATION_STATUS_LABELS, EVALUATION_STATUS_TONE } from "../constants/language.js";
 import styles from "./ReportsPage.module.css";
 
 /**
@@ -74,6 +76,7 @@ export default function ReportsPage() {
                 <th>Job</th>
                 <th>CEFR</th>
                 <th>Overall score</th>
+                <th>Status</th>
                 <th>Completed</th>
               </tr>
             </thead>
@@ -142,6 +145,11 @@ function ReportRow({ application }) {
       </td>
       <td>{assessment.cefr_level ?? "—"}</td>
       <td>{assessment.overall_score != null ? `${assessment.overall_score}/100` : "—"}</td>
+      <td>
+        <StatusBadge variant="glass" tone={EVALUATION_STATUS_TONE[assessment.evaluation_status] ?? "neutral"}>
+          {EVALUATION_STATUS_LABELS[assessment.evaluation_status] ?? assessment.evaluation_status}
+        </StatusBadge>
+      </td>
       <td className={styles.dateCell}>
         {application.interview_completed_at
           ? new Date(application.interview_completed_at).toLocaleDateString(undefined, {

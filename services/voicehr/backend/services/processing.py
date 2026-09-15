@@ -21,8 +21,40 @@ async def process_interview(token: str, transcript: list[dict], audio_path: str 
             return
 
         interview_id = row["id"]
+
+        # Atomically claim this interview for finalization -- exactly one caller can
+        # ever win this UPDATE. Without it, two callers racing for the same interview
+        # (a WebSocket close finalizing normally while a stale-session path also
+        # reaches this function, or any other double-invocation) would both pass the
+        # plain status check above, both call evaluate()/send the webhook, and both
+        # commit their own report/recording rows -- and since the webhook's
+        # delivery_id is freshly generated per call (rws_client.py), RWS's own
+        # delivery-id dedup cannot catch this: from RWS's side these would look like
+        # two independent, legitimate completions, not a retried duplicate. This
+        # UPDATE has no `await` before it, so under this project's single-process,
+        # single-event-loop deployment it always runs to completion before the event
+        # loop can switch to a second concurrent call -- the second call's own claim
+        # attempt then sees rowcount == 0 and returns immediately, before any
+        # evaluation work or webhook send.
+        now_claim = datetime.utcnow().isoformat()
+        claimed = conn.execute(
+            "UPDATE interviews SET finalized_at = ? "
+            "WHERE id = ? AND finalized_at IS NULL AND status IN ('active', 'pending')",
+            (now_claim, interview_id),
+        )
+        if claimed.rowcount == 0:
+            return
+        conn.commit()
+
         terminated = ended_reason in ("candidate_refused", "abusive_language")
-        inconclusive = terminated or duration_seconds < 300 or sum(
+        # This is the structural, deterministic pre-check (too short/too few turns/
+        # forcibly ended) -- told to the evaluator up front (below) so its own prompt
+        # note is accurate, distinct from evaluation_status below, which can *also*
+        # come back "insufficient_evidence" from the model's own read of the
+        # transcript's content even when this pre-check found nothing structurally
+        # wrong (e.g. long enough, enough turns, but almost entirely off-topic or
+        # non-answers).
+        pre_check_inconclusive = terminated or duration_seconds < 300 or sum(
             1 for turn in transcript if turn.get("role") in ("user", "candidate")
         ) < 3
         os.makedirs("storage/transcripts", exist_ok=True)
@@ -33,9 +65,15 @@ async def process_interview(token: str, transcript: list[dict], audio_path: str 
         scores = await evaluate(
             transcript,
             language=row["language"],
-            inconclusive=inconclusive,
+            inconclusive=pre_check_inconclusive,
             duration_seconds=duration_seconds,
         )
+        # The single source of truth from here on: either half (the deterministic
+        # pre-check, or the model's own sufficient_evidence: false) is enough to
+        # treat this interview as not having produced a confident, usable result --
+        # drives VoiceHR's own interview/report status *and* what RWS is told, so the
+        # two can never disagree about whether a CEFR verdict actually exists.
+        inconclusive = pre_check_inconclusive or scores.get("evaluation_status") == "insufficient_evidence"
         report_token = generate_report_token()
         now = datetime.utcnow().isoformat()
         status = "terminated" if terminated else ("inconclusive" if inconclusive else "completed")
@@ -43,13 +81,13 @@ async def process_interview(token: str, transcript: list[dict], audio_path: str 
         conn.execute(
             """INSERT INTO reports (interview_id, report_token, overall_score, cefr_level, confidence,
                inconclusive, fluency_score, vocabulary_score, grammar_score, pronunciation_score,
-               comprehension_score, strengths, concerns, evidence, candidate_speaking_time,
+               comprehension_score, interaction_score, strengths, concerns, evidence, candidate_speaking_time,
                word_count, evaluation_status, evaluation_error, created_at)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
             (interview_id, report_token, scores.get("overall_score"), scores.get("cefr_level"),
              scores.get("confidence"), int(inconclusive), scores.get("fluency_score"),
              scores.get("vocabulary_score"), scores.get("grammar_score"), scores.get("pronunciation_score"),
-             scores.get("comprehension_score"), json.dumps(scores.get("strengths", [])),
+             scores.get("comprehension_score"), scores.get("interaction_score"), json.dumps(scores.get("strengths", [])),
              json.dumps(scores.get("concerns", [])), json.dumps(scores.get("evidence", [])),
              scores.get("candidate_speaking_time"), scores.get("word_count"),
              scores.get("evaluation_status", "failed" if scores.get("overall_score") is None else "completed"),
@@ -60,7 +98,16 @@ async def process_interview(token: str, transcript: list[dict], audio_path: str 
                ended_reason, raw_transcript) VALUES (?, ?, ?, ?, ?, ?)""",
             (interview_id, audio_path, transcript_path, int(duration_seconds), ended_reason, json.dumps(transcript)),
         )
-        conn.execute("UPDATE interviews SET status = ?, completed_at = ? WHERE id = ?", (status, now, interview_id))
+        # Clear the reconnect-recovery scratch columns now that this interview has
+        # genuinely finalized -- nothing will ever read them again for this row (a
+        # completed/inconclusive/terminated interview never re-enters the connect/
+        # start flow), so leaving stale data there would only be confusing on
+        # inspection.
+        conn.execute(
+            "UPDATE interviews SET status = ?, completed_at = ?, "
+            "pending_transcript = NULL, pending_duration_seconds = NULL WHERE id = ?",
+            (status, now, interview_id),
+        )
         conn.commit()
 
         # This is the completion path session.py drives after a WebSocket interview
@@ -121,16 +168,17 @@ async def retry_report(report_token: str) -> dict:
             raise ValueError("No transcript is available for evaluation")
 
         duration_seconds = row["duration_seconds"] or 0
-        inconclusive = duration_seconds < 300 or sum(
+        pre_check_inconclusive = duration_seconds < 300 or sum(
             1 for turn in transcript if turn.get("role") in ("user", "candidate")
         ) < 3
         scores = await evaluate(
             transcript,
             language=row["language"],
-            inconclusive=inconclusive,
+            inconclusive=pre_check_inconclusive,
             duration_seconds=duration_seconds,
         )
         evaluation_status = scores.get("evaluation_status", "failed" if scores.get("overall_score") is None else "completed")
+        inconclusive = pre_check_inconclusive or evaluation_status == "insufficient_evidence"
         if evaluation_status == "failed":
             error = scores.get("error", "Evaluation failed")
             conn.execute(
@@ -144,12 +192,12 @@ async def retry_report(report_token: str) -> dict:
         conn.execute(
             """UPDATE reports SET overall_score = ?, cefr_level = ?, confidence = ?, inconclusive = ?,
                fluency_score = ?, vocabulary_score = ?, grammar_score = ?, pronunciation_score = ?,
-               comprehension_score = ?, strengths = ?, concerns = ?, evidence = ?,
+               comprehension_score = ?, interaction_score = ?, strengths = ?, concerns = ?, evidence = ?,
                candidate_speaking_time = ?, word_count = ?, evaluation_status = ?, evaluation_error = ?
                WHERE report_token = ?""",
             (scores.get("overall_score"), scores.get("cefr_level"), scores.get("confidence"), int(inconclusive),
              scores.get("fluency_score"), scores.get("vocabulary_score"), scores.get("grammar_score"),
-             scores.get("pronunciation_score"), scores.get("comprehension_score"),
+             scores.get("pronunciation_score"), scores.get("comprehension_score"), scores.get("interaction_score"),
              json.dumps(scores.get("strengths", [])), json.dumps(scores.get("concerns", [])),
              json.dumps(scores.get("evidence", [])), scores.get("candidate_speaking_time"),
              scores.get("word_count"), evaluation_status, None, report_token),

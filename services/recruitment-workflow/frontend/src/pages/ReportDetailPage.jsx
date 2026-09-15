@@ -4,32 +4,36 @@ import { getInterviewReport } from "../api/interviews.js";
 import { getAllApplications } from "../api/applications.js";
 import { ApiError, requestBlob } from "../api/client.js";
 import PageHeader from "../components/PageHeader.jsx";
-import AssessmentPanel from "../components/AssessmentPanel.jsx";
 import StatusBadge from "../components/StatusBadge.jsx";
-import { LANGUAGE_GATE_LABELS, LANGUAGE_GATE_TONE, LANGUAGE_LABELS } from "../constants/language.js";
+import {
+  EVALUATION_STATUS_LABELS,
+  EVALUATION_STATUS_TONE,
+  INSUFFICIENT_EVIDENCE_EXPLANATION,
+  LANGUAGE_GATE_LABELS,
+  LANGUAGE_GATE_TONE,
+  LANGUAGE_LABELS,
+  describeDimensionScore,
+} from "../constants/language.js";
 import styles from "./ReportDetailPage.module.css";
 
-const LANGUAGE_GATE_RESULT_TEXT = {
-  passed: "Meets requirement",
-  failed: "Below required level",
-  needs_review: "Needs review",
-  pending: "Pending",
-};
-
 /**
- * "Required: B2 English / VoiceHR: C1 English / Result: Meets requirement" -- RWS's
+ * "Required: B2 English / Assessed: C1 English / Result: Meets requirement" -- RWS's
  * own verdict (language_gate.py), never recomputed here. Only rendered when this
- * application's job actually has a requirement (see the not_required guard above),
+ * application's job actually has a requirement (see the not_required guard below),
  * so a job with no requirement shows nothing extra on an otherwise-unrelated report.
+ * Deliberately separate from the interview's own assessment quality below it (see
+ * AssessmentQualitySection) -- this section states a JOB REQUIREMENT and a SYSTEM
+ * DECISION, both owned by RWS; the assessment section states what VoiceHR itself
+ * observed. Keeping the two visually distinct is this task's own explicit ask.
  *
  * assessed_cefr and assessed_language are set independently (a webhook missing one
  * but not the other is exactly what "needs_review" exists to catch -- see
  * language_gate.py) -- rendering must handle that combination without ever
  * interpolating a bare `null`/`undefined` into the text a recruiter reads.
  */
-function LanguageGateSummary({ gate }) {
+function LanguageScreeningSection({ gate }) {
   const requiredLabel = LANGUAGE_LABELS[gate.required_language] ?? gate.required_language;
-  const voicehrText = gate.assessed_cefr
+  const assessedText = gate.assessed_cefr
     ? [gate.assessed_cefr, gate.assessed_language ? (LANGUAGE_LABELS[gate.assessed_language] ?? gate.assessed_language) : null]
         .filter(Boolean)
         .join(" ")
@@ -45,56 +49,131 @@ function LanguageGateSummary({ gate }) {
         </span>
       </div>
       <div className={styles.languageGateRow}>
-        <span>VoiceHR</span>
-        <span>{voicehrText}</span>
+        <span>Assessed</span>
+        <span>{assessedText}</span>
       </div>
       <div className={styles.languageGateRow}>
         <span>Result</span>
         <StatusBadge variant="glass" tone={LANGUAGE_GATE_TONE[gate.status] ?? "neutral"}>
-          {LANGUAGE_GATE_RESULT_TEXT[gate.status] ?? LANGUAGE_GATE_LABELS[gate.status] ?? gate.status}
+          {LANGUAGE_GATE_LABELS[gate.status] ?? gate.status}
         </StatusBadge>
       </div>
     </div>
   );
 }
 
-// AssessmentPanel expects InterviewAssessment's flat shape (fluency_score,
-// vocabulary_score, ...) -- VoiceHR's own report nests the same numbers under
-// dimensions.fluency/.vocabulary/... (see report.py: get_report, the "short
-// names for existing report consumers" block). This adapts one to the other so
-// AssessmentPanel can be reused completely unmodified, per this task's own
-// "reuse AssessmentPanel where appropriate" instruction -- not a redesign of it.
+/**
+ * First-class treatment for whether VoiceHR's own evaluation produced enough to
+ * trust at all -- distinct from, and shown above, the Language Screening verdict
+ * (which can only ever be as good as this). "insufficient_evidence" is never styled
+ * like "failed": inconclusive is not the same as failed (a warning tone throughout,
+ * never danger), and no fake CEFR/0-score is ever shown in its place -- overall_score/
+ * cefr_level are genuinely null for this status, by construction on VoiceHR's side.
+ */
+function AssessmentQualitySection({ report }) {
+  const status = report.evaluation_status;
+  return (
+    <div className={styles.section}>
+      <h2 className={styles.notesTitle}>Assessment quality</h2>
+      <div className={styles.qualityRow}>
+        <StatusBadge variant="glass" tone={EVALUATION_STATUS_TONE[status] ?? "neutral"}>
+          {EVALUATION_STATUS_LABELS[status] ?? status}
+        </StatusBadge>
+        {status === "completed" && report.cefr_level && (
+          <span className={styles.qualityDetail}>
+            {report.cefr_level}
+            {report.overall_score != null ? ` · ${report.overall_score}/100` : ""}
+          </span>
+        )}
+      </div>
+      {status === "insufficient_evidence" && (
+        <p className={styles.qualityExplanation}>{INSUFFICIENT_EVIDENCE_EXPLANATION}</p>
+      )}
+      {status === "failed" && (
+        <p className={styles.qualityExplanation}>
+          Evaluation failed — no scores are available for this interview.
+        </p>
+      )}
+    </div>
+  );
+}
+
+// The five real, evidenced rubric dimensions (backend/services/evaluator.py:
+// DIMENSION_WEIGHTS) -- pronunciation is deliberately absent everywhere in this
+// section: it is always null (the evaluator only ever sees text, never audio), and
+// listing it here would only invite "why is this always blank?" instead of
+// answering that question.
+const PROFILE_DIMENSIONS = [
+  { key: "fluency_coherence", label: "Fluency & coherence" },
+  { key: "vocabulary_range", label: "Vocabulary" },
+  { key: "grammar_language_control", label: "Grammar" },
+  { key: "comprehension_relevance", label: "Comprehension" },
+  { key: "interaction_spontaneity", label: "Interaction" },
+];
+
+// A short, concrete, observable note tied to this dimension -- transcript quotes or
+// the evaluator's own brief factual observation, never private model reasoning
+// (evaluator.py's own prompt never asks for -- and normalize_result never copies --
+// anything resembling chain-of-thought).
+function evidenceNoteFor(report, dimensionKey) {
+  const item = (report.evidence || []).find((entry) => entry.dimension === dimensionKey);
+  if (!item) return null;
+  return item.note || item.quote || null;
+}
+
+/**
+ * Only shown once a real, confident verdict exists (evaluation_status === "completed")
+ * -- for "insufficient_evidence"/"failed", AssessmentQualitySection above is already
+ * the complete, honest picture; a per-dimension breakdown here would risk implying
+ * these numbers are as trustworthy as a normal result, which is exactly what this
+ * task's own "insufficient evidence needs first-class treatment" instruction warns
+ * against.
+ */
+function LanguageProfileSection({ report }) {
+  if (report.evaluation_status !== "completed") return null;
+  return (
+    <div className={styles.section}>
+      <h2 className={styles.notesTitle}>Language profile</h2>
+      <div className={styles.profileGrid}>
+        {PROFILE_DIMENSIONS.map(({ key, label }) => {
+          const score = report.dimensions?.[key] ?? null;
+          const note = evidenceNoteFor(report, key);
+          return (
+            <div key={key} className={styles.profileRow}>
+              <div className={styles.profileHeader}>
+                <span className={styles.profileLabel}>{label}</span>
+                <span className={styles.profileRating}>{describeDimensionScore(score)}</span>
+              </div>
+              {note && <p className={styles.profileEvidence}>"{note}"</p>}
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
 // VoiceHR's real evaluator output shapes strengths/concerns as timestamp-linked
 // objects ({ text, timestamp }), not plain strings -- confirmed live against a
-// real Gemini evaluation during this task's own verification, not assumed from
-// the (untyped) response. Handles a plain string too, defensively, since nothing
-// on the VoiceHR side guarantees the richer shape forever.
+// real Gemini evaluation during an earlier task's own verification, not assumed
+// from the (untyped) response. Handles a plain string too, defensively, since
+// nothing on the VoiceHR side guarantees the richer shape forever.
 function noteText(note) {
   if (typeof note === "string") return note;
   return note?.text ?? String(note);
 }
 
-function toAssessmentShape(report) {
-  return {
-    overall_score: report.overall_score ?? null,
-    cefr_level: report.cefr_level ?? null,
-    fluency_score: report.dimensions?.fluency ?? null,
-    vocabulary_score: report.dimensions?.vocabulary ?? null,
-    grammar_score: report.dimensions?.grammar ?? null,
-    pronunciation_score: report.dimensions?.pronunciation ?? null,
-    comprehension_score: report.dimensions?.comprehension ?? null,
-    inconclusive: Boolean(report.inconclusive),
-    evaluation_status: report.evaluation_status,
-  };
-}
-
 /**
- * One interview's full report -- candidate/RWS's own AssessmentPanel scores plus
- * the VoiceHR-only detail (strengths/concerns, transcript, recording) that only
- * this endpoint has. Self-sufficient from one fetch (GET /v1/interviews/
- * {applicationId}/report) -- a hard refresh on this URL reflects real backend
- * state, same rule every other page in this app follows. No job title shown here
- * (VoiceHR has no concept of RWS jobs); ReportsPage's list is where that lives.
+ * One interview's full report -- the Language Screening (RWS's own deterministic
+ * verdict) plus the VoiceHR-only detail (assessment quality, per-dimension profile,
+ * strengths/concerns, transcript, recording) that only this endpoint has. The
+ * hierarchy here is deliberate, not incidental: a recruiter should be able to
+ * understand *why* a candidate received their language result without reading the
+ * full transcript, which stays available below for anyone who wants to go deeper.
+ * Self-sufficient from one fetch (GET /v1/interviews/{applicationId}/report) -- a
+ * hard refresh on this URL reflects real backend state, same rule every other page
+ * in this app follows. No job title shown here (VoiceHR has no concept of RWS
+ * jobs); ReportsPage's list is where that lives.
  */
 export default function ReportDetailPage() {
   const { applicationId } = useParams();
@@ -236,11 +315,13 @@ export default function ReportDetailPage() {
             {report.status && <span>Status: {report.status}</span>}
           </div>
 
-          <AssessmentPanel assessment={toAssessmentShape(report)} />
-
           {languageGate && languageGate.status !== "not_required" && (
-            <LanguageGateSummary gate={languageGate} />
+            <LanguageScreeningSection gate={languageGate} />
           )}
+
+          <AssessmentQualitySection report={report} />
+
+          <LanguageProfileSection report={report} />
 
           {(report.strengths?.length > 0 || report.concerns?.length > 0) && (
             <div className={styles.notesGrid}>

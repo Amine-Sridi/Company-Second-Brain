@@ -80,6 +80,7 @@ def test_select_snapshots_job_language_requirement_onto_application(client, monk
         )
 
     monkeypatch.setattr(main, "create_application", fake_create_application)
+    monkeypatch.setattr(main, "list_interview_rounds_for_application", lambda db, aid: [])
 
     resp = test_client.post(f"/v1/matches/{match.id}/select", headers=_auth_header(recruiter_id))
 
@@ -118,6 +119,7 @@ def test_select_on_job_without_requirement_snapshots_nulls(client, monkeypatch):
         )
 
     monkeypatch.setattr(main, "create_application", fake_create_application)
+    monkeypatch.setattr(main, "list_interview_rounds_for_application", lambda db, aid: [])
 
     resp = test_client.post(f"/v1/matches/{match.id}/select", headers=_auth_header(recruiter_id))
 
@@ -230,6 +232,7 @@ def test_invite_uses_snapshotted_required_language(client, monkeypatch):
         required_language="fr", required_cefr="C1",
     )
     monkeypatch.setattr(main, "record_invite_attempt", lambda db, aid, attempt: updated)
+    monkeypatch.setattr(main, "list_interview_rounds_for_application", lambda db, aid: [])
 
     resp = test_client.post(
         f"/v1/applications/{application.id}/invite",

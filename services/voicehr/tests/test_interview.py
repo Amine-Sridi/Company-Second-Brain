@@ -104,6 +104,53 @@ def test_start_interview_recovers_stale_active_session(client, db):
     ).fetchone()["status"] == "active"
 
 
+def test_start_interview_recovers_stale_session_within_reconnect_budget(client, db):
+    """retry_count below the shared MAX_INTERVIEW_RECONNECTS budget still recovers --
+    this is the same stale-active reactivation as the test above, exercised at a
+    retry_count that isn't the default 0, to pin that the bound is retry_count-aware
+    (not just "always recover"), one step short of exhausted."""
+    from backend.database import MAX_INTERVIEW_RECONNECTS
+
+    token = create_interview(
+        db, token="stale-token-mid-budget", status="active", retry_count=MAX_INTERVIEW_RECONNECTS - 1
+    )
+    db.execute(
+        "UPDATE interviews SET started_at = ? WHERE token = ?",
+        ((datetime.utcnow() - timedelta(minutes=2)).isoformat(), token),
+    )
+    db.commit()
+
+    response = client.post(f"/api/interview/{token}/start")
+    assert response.status_code == 200
+    assert db.execute(
+        "SELECT status FROM interviews WHERE token = ?", (token,)
+    ).fetchone()["status"] == "active"
+
+
+def test_start_interview_does_not_recover_stale_session_beyond_reconnect_budget(client, db):
+    """Once the shared reconnect budget (also enforced by session.py's own
+    WebSocket-disconnect handler) is exhausted, the stale-active check must stop
+    silently reactivating the interview -- it stays 'active' and unreachable, with a
+    clear, distinct error, rather than looping forever."""
+    from backend.database import MAX_INTERVIEW_RECONNECTS
+
+    token = create_interview(
+        db, token="stale-token-exhausted", status="active", retry_count=MAX_INTERVIEW_RECONNECTS
+    )
+    db.execute(
+        "UPDATE interviews SET started_at = ? WHERE token = ?",
+        ((datetime.utcnow() - timedelta(minutes=2)).isoformat(), token),
+    )
+    db.commit()
+
+    response = client.post(f"/api/interview/{token}/start")
+    assert response.status_code == 409
+    assert "multiple attempts" in response.json()["detail"]
+    assert db.execute(
+        "SELECT status FROM interviews WHERE token = ?", (token,)
+    ).fetchone()["status"] == "active"
+
+
 def test_complete_interview(client, db):
     token = create_interview(db, token="test-token", status="active")
     response = client.post(f"/api/interview/{token}/complete")

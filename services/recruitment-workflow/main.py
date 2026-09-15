@@ -13,6 +13,7 @@ from __future__ import annotations
 import hashlib
 import hmac
 import logging
+import time
 import uuid
 from pathlib import Path
 from typing import Annotated
@@ -31,12 +32,16 @@ import voicehr_client
 from auth import InvalidTokenError, create_access_token, decode_access_token, verify_password
 from db import (
     Recruiter,
+    cancel_interview_round,
+    complete_interview_round,
     create_application,
+    create_interview_round,
     create_job_with_description,
     create_match_result,
     create_scoring_config,
     get_application,
     get_db,
+    get_interview_round,
     get_job,
     get_latest_scoring_config,
     get_match_explanation,
@@ -48,11 +53,13 @@ from db import (
     list_all_applications,
     list_all_match_results,
     list_applications_for_job,
+    list_interview_rounds_for_application,
     list_jobs_with_match_counts,
     list_match_results_for_job,
     mark_webhook_event_processed,
     record_interview_result,
     record_invite_attempt,
+    reschedule_interview_round,
     set_job_language_requirement,
     transition_application,
 )
@@ -66,9 +73,13 @@ from schemas import (
     CandidateKnowledgeResponse,
     CandidateSummaryResponse,
     GlobalApplicationResponse,
+    CompleteInterviewRoundRequest,
     GraphEdge,
     GraphJobNode,
+    InterviewRoundRequest,
+    InterviewRoundResponse,
     InviteApplicationRequest,
+    RescheduleInterviewRoundRequest,
     JobLanguageRequirementRequest,
     JobResponse,
     JobSubmissionRequest,
@@ -628,7 +639,14 @@ def _language_gate_info(application) -> LanguageGateInfo:
     )
 
 
-def _application_response(application) -> ApplicationResponse:
+def _application_response(application, db: Session) -> ApplicationResponse:
+    """
+    One query per call for interview_rounds -- fine at this project's demo scale
+    (a handful of applications total, per handoff.md's "no infra ahead of
+    demonstrated need" rule), the same tradeoff already accepted elsewhere in this
+    file rather than a premature batched-fetch abstraction for a list this small.
+    """
+    rounds = list_interview_rounds_for_application(db, application.id)
     return ApplicationResponse(
         application_id=application.id,
         job_id=application.job_id,
@@ -643,6 +661,22 @@ def _application_response(application) -> ApplicationResponse:
         interview_completed_at=application.interview_completed_at,
         decided_at=application.decided_at,
         language_gate=_language_gate_info(application),
+        interview_rounds=[
+            InterviewRoundResponse(
+                id=r.id,
+                application_id=r.application_id,
+                round_type=r.round_type,
+                status=r.status,
+                outcome=r.outcome,
+                interviewer_name=r.interviewer_name,
+                scheduled_at=r.scheduled_at,
+                notes=r.notes,
+                created_by=r.created_by,
+                created_at=r.created_at,
+                updated_at=r.updated_at,
+            )
+            for r in rounds
+        ],
     )
 
 
@@ -691,7 +725,7 @@ def select_candidate(
             status_code=409, detail="This candidate has already been selected for this job"
         )
 
-    return _application_response(application)
+    return _application_response(application, db)
 
 
 async def _send_candidate_feedback_background(
@@ -773,7 +807,7 @@ def _decide(
         decided_at=updated.decided_at,
     )
 
-    return _application_response(updated)
+    return _application_response(updated, db)
 
 
 @app.post("/v1/applications/{application_id}/accept", response_model=ApplicationResponse)
@@ -827,6 +861,188 @@ def reject_application(
     return _decide(db, application_id, recruiter, "reject", background_tasks)
 
 
+# ---------------------------------------------------------------------------
+# Interview rounds -- post-VoiceHR technical/managerial interview stage
+#
+# A parallel, one-to-many signal beside Application's own state machine, the same
+# relationship the language gate already has to it (see db.InterviewRound's own
+# docstring). Creation is gated on the application/language-gate state (see
+# create_interview_round_endpoint); the three lifecycle actions below are gated
+# only on the round's own status ('scheduled' -> 'completed' | 'cancelled', a
+# terminal choice either way) -- neither touches Application.status, MatchResult,
+# or the language gate.
+# ---------------------------------------------------------------------------
+
+def _interview_round_response(round_) -> InterviewRoundResponse:
+    return InterviewRoundResponse(
+        id=round_.id,
+        application_id=round_.application_id,
+        round_type=round_.round_type,
+        status=round_.status,
+        outcome=round_.outcome,
+        interviewer_name=round_.interviewer_name,
+        scheduled_at=round_.scheduled_at,
+        notes=round_.notes,
+        created_by=round_.created_by,
+        created_at=round_.created_at,
+        updated_at=round_.updated_at,
+    )
+
+
+def _get_own_interview_round(db: Session, application_id: uuid.UUID, round_id: uuid.UUID):
+    """
+    Fetches a round and confirms it belongs to the given application -- a round
+    that exists but under a different application_id in the URL is treated as
+    "not found" here, the same as a round_id that doesn't exist at all, rather
+    than leaking whether a mismatched round_id exists somewhere else.
+    """
+    round_ = get_interview_round(db, round_id)
+    if round_ is None or round_.application_id != application_id:
+        return None
+    return round_
+
+
+@app.post(
+    "/v1/applications/{application_id}/interview-rounds",
+    response_model=InterviewRoundResponse,
+    status_code=201,
+)
+def create_interview_round_endpoint(
+    application_id: uuid.UUID,
+    payload: InterviewRoundRequest,
+    db: Session = Depends(get_db),
+    recruiter: Recruiter = Depends(require_recruiter),
+):
+    """
+    Schedule a new technical/managerial interview round. Two independent gates,
+    both reusing checks that already exist rather than duplicating logic:
+
+    1. The application must not already be accepted/rejected -- a terminal
+       decision, after which nothing further should be scheduled.
+    2. The language gate must not be blocking (same BLOCKING_STATUSES/
+       _language_gate_info accept_application already uses) -- this stage is
+       explicitly "for candidates who pass the language gate" (handoff.md), not a
+       parallel path that could let a still-screening candidate through.
+
+    Application.status itself is never touched here -- only a new interview_rounds
+    row is created; see db.InterviewRound's own docstring for why.
+    """
+    application = get_application(db, application_id)
+    if application is None:
+        raise HTTPException(status_code=404, detail="Application not found")
+
+    if application.status in ("accepted", "rejected"):
+        raise HTTPException(
+            status_code=422,
+            detail=f"Cannot schedule an interview round: application is already {application.status}",
+        )
+
+    gate = _language_gate_info(application)
+    if gate.status in BLOCKING_STATUSES:
+        raise HTTPException(
+            status_code=422,
+            detail=(
+                f"Cannot schedule an interview round: language screening is {gate.status} "
+                f"(required {gate.required_cefr} {gate.required_language}, "
+                f"assessed {gate.assessed_cefr or 'none'} {gate.assessed_language or 'none'})"
+            ),
+        )
+
+    round_ = create_interview_round(
+        db,
+        application_id=application_id,
+        round_type=payload.round_type,
+        interviewer_name=payload.interviewer_name,
+        scheduled_at=payload.scheduled_at,
+        notes=payload.notes,
+        created_by=recruiter.id,
+    )
+    return _interview_round_response(round_)
+
+
+@app.post(
+    "/v1/applications/{application_id}/interview-rounds/{round_id}/reschedule",
+    response_model=InterviewRoundResponse,
+)
+def reschedule_interview_round_endpoint(
+    application_id: uuid.UUID,
+    round_id: uuid.UUID,
+    payload: RescheduleInterviewRoundRequest,
+    db: Session = Depends(get_db),
+    recruiter: Recruiter = Depends(require_recruiter),
+):
+    """Update a round's scheduled_at. Only from 'scheduled' -- a completed or
+    cancelled round is a closed record, not something to move around."""
+    existing = _get_own_interview_round(db, application_id, round_id)
+    if existing is None:
+        raise HTTPException(status_code=404, detail="Interview round not found")
+
+    updated = reschedule_interview_round(db, round_id, payload.scheduled_at)
+    if updated is None:
+        raise HTTPException(
+            status_code=409,
+            detail=f"Interview round is not reschedulable (current status: {existing.status})",
+        )
+    return _interview_round_response(updated)
+
+
+@app.post(
+    "/v1/applications/{application_id}/interview-rounds/{round_id}/complete",
+    response_model=InterviewRoundResponse,
+)
+def complete_interview_round_endpoint(
+    application_id: uuid.UUID,
+    round_id: uuid.UUID,
+    payload: CompleteInterviewRoundRequest,
+    db: Session = Depends(get_db),
+    recruiter: Recruiter = Depends(require_recruiter),
+):
+    """
+    Record a round's outcome, only from 'scheduled'. `outcome` is required here
+    (Literal["pass", "fail", "needs_review"]) -- the request schema itself rejects
+    a missing/invalid value with a 422 before this ever reaches the DB, matching
+    (not just relying on) migration 0007's paired outcome/status CHECK constraint.
+    `notes`, if omitted, leaves whatever was set at scheduling time untouched
+    rather than clobbering it with a null.
+    """
+    existing = _get_own_interview_round(db, application_id, round_id)
+    if existing is None:
+        raise HTTPException(status_code=404, detail="Interview round not found")
+
+    updated = complete_interview_round(db, round_id, payload.outcome, payload.notes)
+    if updated is None:
+        raise HTTPException(
+            status_code=409,
+            detail=f"Interview round is not completable (current status: {existing.status})",
+        )
+    return _interview_round_response(updated)
+
+
+@app.post(
+    "/v1/applications/{application_id}/interview-rounds/{round_id}/cancel",
+    response_model=InterviewRoundResponse,
+)
+def cancel_interview_round_endpoint(
+    application_id: uuid.UUID,
+    round_id: uuid.UUID,
+    db: Session = Depends(get_db),
+    recruiter: Recruiter = Depends(require_recruiter),
+):
+    """Cancel a round, only from 'scheduled'. Terminal, like 'completed' -- no
+    un-cancel; schedule a new round instead if one is still needed."""
+    existing = _get_own_interview_round(db, application_id, round_id)
+    if existing is None:
+        raise HTTPException(status_code=404, detail="Interview round not found")
+
+    updated = cancel_interview_round(db, round_id)
+    if updated is None:
+        raise HTTPException(
+            status_code=409,
+            detail=f"Interview round is not cancellable (current status: {existing.status})",
+        )
+    return _interview_round_response(updated)
+
+
 @app.get("/v1/jobs/{job_id}/applications", response_model=list[ApplicationResponse])
 def get_job_applications(
     job_id: uuid.UUID,
@@ -836,7 +1052,7 @@ def get_job_applications(
     """Recruiter-facing: review selections and decisions made so far for a job."""
     if get_job(db, job_id) is None:
         raise HTTPException(status_code=404, detail="Job not found")
-    return [_application_response(a) for a in list_applications_for_job(db, job_id)]
+    return [_application_response(a, db) for a in list_applications_for_job(db, job_id)]
 
 
 @app.get("/v1/applications", response_model=list[GlobalApplicationResponse])
@@ -854,7 +1070,7 @@ def get_all_applications(
     """
     return [
         GlobalApplicationResponse(
-            **_application_response(application).model_dump(),
+            **_application_response(application, db).model_dump(),
             job_title=job_title,
         )
         for application, job_title in list_all_applications(db)
@@ -1136,7 +1352,77 @@ async def invite_application(
             status_code=409,
             detail="Application state changed during invitation and could not be updated",
         )
-    return _application_response(updated)
+    return _application_response(updated, db)
+
+
+# In-memory per-application cooldown for explicit resend requests -- a single-instance
+# deployment need (no Redis, per CLAUDE.md's infra constraints), not a persisted field
+# or new workflow status. Guards against a double-click (or an impatient repeated
+# click) triggering more than one real provider send in quick succession; RWS's own
+# 'invited'-only status check above is the real authority on *whether* a resend is
+# ever allowed at all, this only throttles *how often*.
+_RESEND_COOLDOWN_SECONDS = 10.0
+_resend_cooldowns: dict[uuid.UUID, float] = {}
+
+
+@app.post("/v1/applications/{application_id}/resend-invite", response_model=ApplicationResponse)
+async def resend_invite(
+    application_id: uuid.UUID,
+    db: Session = Depends(get_db),
+    recruiter: Recruiter = Depends(require_recruiter),
+):
+    """
+    Explicit resend: intentionally re-sends the candidate's existing interview
+    invitation email without creating a new interview and without changing this
+    application's own state -- unlike POST /v1/applications/{application_id}/invite,
+    which (from 'selected') creates a new attempt/interview, or (after a failed
+    attempt, still 'selected') retries that same attempt via its own idempotency key.
+    Only callable once already 'invited': the initial invite/retry path above is what
+    gets an application to 'invited' in the first place, and is the only recovery
+    path while the first delivery hasn't yet succeeded.
+
+    Calls VoiceHR's own service-key-gated resend-by-external_reference_id endpoint
+    (voicehr_client.resend_invite), which reuses the exact interview/token VoiceHR
+    created at invite time -- RWS never sees or stores that token/link, and never
+    looks up or persists the candidate's contact info here (VoiceHR already has it
+    from the initial invite; see resume_intelligence_client.get_contact, only used by
+    the initial invite path above).
+
+    On failure, the application is left exactly as it was ('invited'): a resend
+    failure is not a reason to lose the fact that the initial invitation already
+    succeeded, and this task deliberately does not add a workflow status for a
+    transient email failure (see language_gate.py / handoff.md for the project's
+    existing "don't add a status for a derived/transient signal" precedent).
+    """
+    application = get_application(db, application_id)
+    if application is None:
+        raise HTTPException(status_code=404, detail="Application not found")
+    if application.status != "invited":
+        raise HTTPException(
+            status_code=409,
+            detail=f"Application is not in a resendable state (current status: {application.status})",
+        )
+
+    now = time.monotonic()
+    last_attempt = _resend_cooldowns.get(application_id)
+    if last_attempt is not None and (now - last_attempt) < _RESEND_COOLDOWN_SECONDS:
+        raise HTTPException(
+            status_code=429,
+            detail="Resend already requested; please wait a moment before trying again",
+        )
+    # Recorded before the VoiceHR call (not after) so two near-simultaneous clicks --
+    # the exact double-click case this guards against -- can't both pass the check
+    # while the first is still in flight.
+    _resend_cooldowns[application_id] = now
+
+    try:
+        await voicehr_client.resend_invite(
+            settings.voicehr_url, settings.voicehr_api_key, str(application_id)
+        )
+    except VoiceHRClientError as exc:
+        raise HTTPException(status_code=502, detail=f"VoiceHR resend failed: {exc}")
+
+    return _application_response(application, db)
 
 
 # ---------------------------------------------------------------------------

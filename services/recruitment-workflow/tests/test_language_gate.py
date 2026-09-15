@@ -52,6 +52,19 @@ def test_missing_assessed_cefr_needs_review():
     assert compute_language_gate("en", "B2", True, "en", None) == "needs_review"
 
 
+def test_insufficient_evidence_needs_review_not_pass_or_fail():
+    """VoiceHR's interview rubric/quality pass (see handoff.md) added a distinct
+    evaluation_status, "insufficient_evidence" (shared/schemas.InterviewAssessment),
+    for a transcript too short/thin to support a defensible CEFR verdict -- VoiceHR
+    always sends assessed_cefr/assessed_language as null in that case (evaluator.py
+    never fabricates a grade from too little evidence). This function needed no
+    change at all to handle it correctly: a null assessed_cefr already falls into
+    this exact branch, identical to test_missing_assessed_cefr_needs_review above --
+    named separately here so the connection to that specific outcome is explicit and
+    searchable, not just an incidental consequence of the missing-CEFR case."""
+    assert compute_language_gate("en", "B2", True, None, None) == "needs_review"
+
+
 def test_invalid_assessed_cefr_needs_review():
     assert compute_language_gate("en", "B2", True, "en", "Z9") == "needs_review"
 

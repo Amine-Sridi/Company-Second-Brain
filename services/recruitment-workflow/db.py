@@ -283,6 +283,56 @@ class Application(Base):
     )
 
 
+class InterviewRound(Base):
+    """
+    One technical/managerial interview round for an Application -- the post-VoiceHR
+    stage for a candidate whose language gate has cleared (see handoff.md and
+    language_gate.py). Deliberately a parallel signal, not a new Application.status
+    value: Application.status stays selected/invited/interviewed/accepted/rejected,
+    unchanged, exactly the same relationship the language gate already has to that
+    state machine. main.py's create_interview_round enforces the two preconditions
+    (language gate not blocking, application not already accepted/rejected) -- this
+    model and its helpers below assume the caller already checked those, the same
+    division of responsibility record_interview_result/transition_application use.
+
+    interviewer_name is free text, not a foreign key to a user/interviewer table:
+    this project has exactly one seeded recruiter account and no interviewer
+    directory or auth system (CLAUDE.md's non-negotiable decisions) -- inventing one
+    here would be exactly the kind of speculative infrastructure CLAUDE.md's code
+    style rules warn against. created_by *is* a real FK to recruiters, the same
+    audit pattern already used by Application.selected_by/decided_by.
+
+    outcome is NULL unless status='completed' (enforced by a paired DB CHECK
+    constraint, the same style as jobs_language_requirement_paired_check) -- a
+    scheduled or cancelled round never has a pass/fail/needs_review verdict.
+    """
+
+    __tablename__ = "interview_rounds"
+    __table_args__ = {"schema": "recruitment"}
+
+    id: uuid.UUID = Column(
+        UUID(as_uuid=True), primary_key=True, server_default=text("gen_random_uuid()")
+    )
+    application_id: uuid.UUID = Column(
+        UUID(as_uuid=True), ForeignKey("recruitment.applications.id"), nullable=False
+    )
+    round_type: str = Column(Text, nullable=False)
+    status: str = Column(Text, nullable=False, server_default=text("'scheduled'"))
+    outcome: Optional[str] = Column(Text, nullable=True)
+    interviewer_name: str = Column(Text, nullable=False)
+    scheduled_at: Optional[datetime] = Column(DateTime(timezone=True), nullable=True)
+    notes: Optional[str] = Column(Text, nullable=True)
+    created_by: uuid.UUID = Column(
+        UUID(as_uuid=True), ForeignKey("recruitment.recruiters.id"), nullable=False
+    )
+    created_at: datetime = Column(
+        DateTime(timezone=True), server_default=text("now()"), nullable=False
+    )
+    updated_at: datetime = Column(
+        DateTime(timezone=True), server_default=text("now()"), nullable=False
+    )
+
+
 class RecruiterDecision(Base):
     """Append-only audit log of every successful accept/reject transition."""
 
@@ -785,6 +835,122 @@ def record_interview_result(
 
 def get_application_by_id(db: Session, application_id: uuid.UUID) -> Optional[Application]:
     return get_application(db, application_id)
+
+
+# ---------------------------------------------------------------------------
+# Interview rounds (post-VoiceHR technical/managerial interview stage)
+# ---------------------------------------------------------------------------
+
+def create_interview_round(
+    db: Session,
+    application_id: uuid.UUID,
+    round_type: str,
+    interviewer_name: str,
+    scheduled_at: Optional[datetime],
+    notes: Optional[str],
+    created_by: uuid.UUID,
+) -> InterviewRound:
+    """
+    Create a new round in the 'scheduled' state. Callers (main.py's
+    create_interview_round endpoint) are responsible for the two preconditions --
+    language gate not blocking, application not already accepted/rejected -- this
+    function does not re-check either, the same division of responsibility
+    create_application/transition_application already have with their own callers.
+    """
+    round_ = InterviewRound(
+        application_id=application_id,
+        round_type=round_type,
+        interviewer_name=interviewer_name,
+        scheduled_at=scheduled_at,
+        notes=notes,
+        created_by=created_by,
+    )
+    db.add(round_)
+    db.commit()
+    db.refresh(round_)
+    return round_
+
+
+def list_interview_rounds_for_application(
+    db: Session, application_id: uuid.UUID
+) -> list[InterviewRound]:
+    """Every round for one application, oldest first -- the order they were
+    scheduled in, which is also their natural reading order in the UI."""
+    return (
+        db.query(InterviewRound)
+        .filter(InterviewRound.application_id == application_id)
+        .order_by(InterviewRound.created_at.asc())
+        .all()
+    )
+
+
+def get_interview_round(db: Session, round_id: uuid.UUID) -> Optional[InterviewRound]:
+    return db.query(InterviewRound).filter(InterviewRound.id == round_id).first()
+
+
+def reschedule_interview_round(
+    db: Session, round_id: uuid.UUID, scheduled_at: datetime
+) -> Optional[InterviewRound]:
+    """
+    Atomically move a round's scheduled_at, only from 'scheduled' -- the same
+    conditional-UPDATE-WHERE-status pattern record_invite_attempt/
+    transition_application already use, race-safe under concurrent duplicate
+    requests for the same reason theirs is: only one UPDATE can match the WHERE
+    clause regardless of request timing. Returns None (a no-op, not an error) if
+    the round doesn't exist or isn't 'scheduled' -- main.py's caller already knows
+    which by checking existence first, and turns None into a 409.
+    """
+    result = db.execute(
+        update(InterviewRound)
+        .where(InterviewRound.id == round_id, InterviewRound.status == "scheduled")
+        .values(scheduled_at=scheduled_at, updated_at=func.now())
+    )
+    if result.rowcount == 0:
+        db.rollback()
+        return None
+    db.commit()
+    return get_interview_round(db, round_id)
+
+
+def complete_interview_round(
+    db: Session, round_id: uuid.UUID, outcome: str, notes: Optional[str]
+) -> Optional[InterviewRound]:
+    """
+    Atomically transition a round from 'scheduled' to 'completed' with its
+    outcome, satisfying migration 0007's paired outcome/status CHECK constraint
+    by construction (outcome is always set in the same UPDATE that sets
+    status='completed'). notes is only overwritten when the caller actually
+    supplies one -- passing None leaves whatever was recorded at scheduling time
+    untouched rather than clobbering it with a null.
+    """
+    values = {"status": "completed", "outcome": outcome, "updated_at": func.now()}
+    if notes is not None:
+        values["notes"] = notes
+    result = db.execute(
+        update(InterviewRound)
+        .where(InterviewRound.id == round_id, InterviewRound.status == "scheduled")
+        .values(**values)
+    )
+    if result.rowcount == 0:
+        db.rollback()
+        return None
+    db.commit()
+    return get_interview_round(db, round_id)
+
+
+def cancel_interview_round(db: Session, round_id: uuid.UUID) -> Optional[InterviewRound]:
+    """Atomically transition a round from 'scheduled' to 'cancelled' -- terminal,
+    like 'completed'; there is no un-cancel."""
+    result = db.execute(
+        update(InterviewRound)
+        .where(InterviewRound.id == round_id, InterviewRound.status == "scheduled")
+        .values(status="cancelled", updated_at=func.now())
+    )
+    if result.rowcount == 0:
+        db.rollback()
+        return None
+    db.commit()
+    return get_interview_round(db, round_id)
 
 
 # ---------------------------------------------------------------------------

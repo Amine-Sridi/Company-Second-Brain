@@ -2,6 +2,7 @@
 Tests for the interview-completion path: backend/services/processing.py, which is
 what session.py's WebSocket handler calls when a candidate finishes an interview.
 """
+import asyncio
 from unittest.mock import patch, AsyncMock
 
 import pytest
@@ -183,3 +184,88 @@ async def test_local_completion_path_rws_unreachable_does_not_break_report_email
     row = db.execute("SELECT * FROM interviews WHERE token = ?", (token,)).fetchone()
     assert row["webhook_delivery_id"] is not None
     assert row["webhook_delivered_at"] is None
+
+
+# ---------------------------------------------------------------------------
+# Completion idempotency (VoiceHR autonomous interview session robustness)
+# ---------------------------------------------------------------------------
+
+@pytest.mark.asyncio
+async def test_process_interview_concurrent_calls_finalize_exactly_once(
+    client, db, mock_send_email, mock_notify_rws
+):
+    """
+    The real race this guards against: two calls to process_interview for the same
+    interview overlapping in time (e.g. a WebSocket close finalizing normally while
+    something else also reaches this function for the same token). evaluate() is
+    given a real await point (asyncio.sleep) so the two calls' execution genuinely
+    interleaves under asyncio.gather -- without the finalized_at claim landing before
+    that await point, both calls would pass the old plain status check, both evaluate,
+    and both send a webhook with a *different* delivery_id each (rws_client.py mints a
+    fresh one per call), which RWS's own delivery-id dedup cannot catch as a
+    duplicate. Exactly one evaluation/report/webhook must result.
+    """
+    token = create_interview(db, token="test-token", status="active", external_reference_id="app-42")
+
+    async def slow_evaluate(*args, **kwargs):
+        await asyncio.sleep(0.05)
+        return {
+            "overall_score": 72, "cefr_level": "B2", "confidence": "medium",
+            "fluency_score": 70, "vocabulary_score": 75, "grammar_score": 68,
+            "pronunciation_score": 74, "comprehension_score": 80,
+            "strengths": [], "concerns": [], "evidence": [],
+            "candidate_speaking_time": 420, "word_count": 1200,
+            "evaluation_status": "completed",
+        }
+
+    with patch("backend.services.processing.evaluate", new=slow_evaluate):
+        await asyncio.gather(
+            process_interview(token, _TRANSCRIPT, "storage/recordings/x.webm", 600, "completed"),
+            process_interview(token, _TRANSCRIPT, "storage/recordings/x.webm", 600, "completed"),
+        )
+
+    mock_notify_rws.assert_called_once()
+    interview_id = db.execute("SELECT id FROM interviews WHERE token = ?", (token,)).fetchone()["id"]
+    report_count = db.execute(
+        "SELECT COUNT(*) AS n FROM reports WHERE interview_id = ?", (interview_id,)
+    ).fetchone()["n"]
+    recording_count = db.execute(
+        "SELECT COUNT(*) AS n FROM recordings WHERE interview_id = ?", (interview_id,)
+    ).fetchone()["n"]
+    assert report_count == 1
+    assert recording_count == 1
+
+
+@pytest.mark.asyncio
+async def test_process_interview_repeated_sequential_calls_run_evaluation_once(
+    client, db, mock_evaluate, mock_send_email, mock_notify_rws
+):
+    """The simpler, sequential case: once an interview has finalized, a second call
+    (e.g. a duplicate finalization attempt after the fact) must be a pure no-op."""
+    token = create_interview(db, token="test-token", status="active", external_reference_id="app-42")
+
+    await process_interview(token, _TRANSCRIPT, "storage/recordings/x.webm", 600, "completed")
+    await process_interview(token, _TRANSCRIPT, "storage/recordings/x.webm", 600, "completed")
+
+    mock_evaluate.assert_called_once()
+    mock_notify_rws.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_process_interview_clears_pending_reconnect_columns_on_finalize(
+    client, db, mock_evaluate, mock_send_email, mock_notify_rws
+):
+    """Once genuinely finalized, the reconnect-recovery scratch columns are cleared --
+    nothing will ever read them again for this row."""
+    token = create_interview(db, token="test-token", status="active", external_reference_id="app-42")
+    db.execute(
+        "UPDATE interviews SET pending_transcript = ?, pending_duration_seconds = ? WHERE token = ?",
+        ('[{"role": "user", "text": "leftover"}]', 42.0, token),
+    )
+    db.commit()
+
+    await process_interview(token, _TRANSCRIPT, "storage/recordings/x.webm", 600, "completed")
+
+    row = db.execute("SELECT * FROM interviews WHERE token = ?", (token,)).fetchone()
+    assert row["pending_transcript"] is None
+    assert row["pending_duration_seconds"] is None

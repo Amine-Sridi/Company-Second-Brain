@@ -1217,6 +1217,169 @@ def test_invite_requires_jwt_not_service_key(
     assert mock_voicehr.calls == []
 
 
+def test_invite_application_failure_leaves_application_selected(
+    client, auth_headers, mock_second_brain, mock_resume_intelligence, mock_voicehr
+):
+    """A failed initial send (VoiceHR unreachable, or reached but email delivery
+    failed -- indistinguishable from here) must never advance the application past
+    'selected'. invite_attempt_number also stays at 0: it is only persisted after
+    VoiceHR responds successfully (see main.py: invite_application)."""
+    candidate = make_candidate(skills=["Python"], similarity_score=0.9)
+    job_id, application_id = _select_one_candidate(client, auth_headers, mock_second_brain, candidate)
+    mock_resume_intelligence.set_contact(
+        candidate["candidate_id"],
+        {"candidate_id": candidate["candidate_id"], "name": "Alice", "email": "alice@example.com", "phone": None},
+    )
+    mock_voicehr.fail()
+
+    resp = client.post(
+        f"/v1/applications/{application_id}/invite", json={"language": "en"}, headers=auth_headers
+    )
+    assert resp.status_code == 502
+
+    applications = client.get(f"{_JOBS_URL}/{job_id}/applications", headers=auth_headers).json()
+    application = next(a for a in applications if a["application_id"] == application_id)
+    assert application["status"] == "selected"
+    assert application["invite_attempt_number"] == 0
+
+
+def test_retry_after_failed_send_reuses_same_idempotency_key(
+    client, auth_headers, mock_second_brain, mock_resume_intelligence, mock_voicehr, monkeypatch
+):
+    """The Retry button on the frontend is just this same POST /invite call again.
+    Since a failed attempt never persists an incremented invite_attempt_number, the
+    retry recomputes the exact same attempt number and therefore the exact same
+    idempotency key -- which is what makes VoiceHR reuse the same interview/token
+    instead of creating a duplicate one."""
+    candidate = make_candidate(skills=["Python"], similarity_score=0.9)
+    _, application_id = _select_one_candidate(client, auth_headers, mock_second_brain, candidate)
+    mock_resume_intelligence.set_contact(
+        candidate["candidate_id"],
+        {"candidate_id": candidate["candidate_id"], "name": "Alice", "email": "alice@example.com", "phone": None},
+    )
+    mock_voicehr.fail()
+
+    first = client.post(
+        f"/v1/applications/{application_id}/invite", json={"language": "en"}, headers=auth_headers
+    )
+    assert first.status_code == 502
+
+    import voicehr_client as _voicehr_client_module
+
+    async def _succeed(base_url, api_key, idempotency_key, candidate_name, candidate_email,
+                        language, external_reference_id, job_title=None):
+        mock_voicehr.calls.append({"idempotency_key": idempotency_key})
+        return {
+            "interview_link": "http://voicehr.test/interview?token=retry",
+            "expires_at": "2026-09-01T00:00:00Z",
+            "external_reference_id": external_reference_id,
+        }
+
+    monkeypatch.setattr(_voicehr_client_module, "invite_candidate", _succeed)
+
+    second = client.post(
+        f"/v1/applications/{application_id}/invite", json={"language": "en"}, headers=auth_headers
+    )
+    assert second.status_code == 200
+    assert second.json()["invite_attempt_number"] == 1
+    assert mock_voicehr.calls[-1]["idempotency_key"] == f"{application_id}:1"
+
+
+# ===========================================================================
+# Explicit resend -- POST /v1/applications/{id}/resend-invite
+#
+# Distinct from a normal (re-)invite above: only allowed once already 'invited',
+# never creates a new interview/attempt, and a failure must never revert the
+# application away from 'invited'.
+# ===========================================================================
+
+def test_explicit_resend_sends_intentionally_and_reuses_interview(
+    client, auth_headers, mock_second_brain, mock_resume_intelligence, mock_voicehr
+):
+    _, application_id = select_and_invite(
+        client, auth_headers, mock_second_brain, mock_resume_intelligence, mock_voicehr
+    )
+
+    resp = client.post(f"/v1/applications/{application_id}/resend-invite", headers=auth_headers)
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["status"] == "invited"
+    # No new interview/attempt: resend never calls invite_candidate again, and
+    # invite_attempt_number is untouched (still the original 1 from select_and_invite).
+    assert body["invite_attempt_number"] == 1
+    assert len(mock_voicehr.calls) == 1  # only the original invite call, no new one
+
+    assert len(mock_voicehr.resend_calls) == 1
+    assert mock_voicehr.resend_calls[0]["external_reference_id"] == application_id
+
+
+def test_explicit_resend_failure_leaves_application_invited(
+    client, auth_headers, mock_second_brain, mock_resume_intelligence, mock_voicehr
+):
+    job_id, application_id = select_and_invite(
+        client, auth_headers, mock_second_brain, mock_resume_intelligence, mock_voicehr
+    )
+    mock_voicehr.fail_resend()
+
+    resp = client.post(f"/v1/applications/{application_id}/resend-invite", headers=auth_headers)
+    assert resp.status_code == 502
+
+    applications = client.get(f"{_JOBS_URL}/{job_id}/applications", headers=auth_headers).json()
+    application = next(a for a in applications if a["application_id"] == application_id)
+    assert application["status"] == "invited"  # never reverted
+
+
+def test_explicit_resend_on_selected_application_returns_409(
+    client, auth_headers, mock_second_brain, mock_voicehr
+):
+    """Resend only makes sense once VoiceHR has already created an interview
+    (i.e. 'invited'); a 'selected' application has nothing to resend yet -- use the
+    initial invite/retry path instead."""
+    candidate = make_candidate(skills=["Python"], similarity_score=0.9)
+    _, application_id = _select_one_candidate(client, auth_headers, mock_second_brain, candidate)
+
+    resp = client.post(f"/v1/applications/{application_id}/resend-invite", headers=auth_headers)
+    assert resp.status_code == 409
+    assert mock_voicehr.resend_calls == []
+
+
+def test_explicit_resend_on_unknown_application_returns_404(client, auth_headers):
+    resp = client.post(f"/v1/applications/{uuid.uuid4()}/resend-invite", headers=auth_headers)
+    assert resp.status_code == 404
+
+
+def test_explicit_resend_requires_jwt_not_service_key(
+    client, auth_headers, mock_second_brain, mock_resume_intelligence, mock_voicehr
+):
+    _, application_id = select_and_invite(
+        client, auth_headers, mock_second_brain, mock_resume_intelligence, mock_voicehr
+    )
+
+    resp = client.post(
+        f"/v1/applications/{application_id}/resend-invite", headers={"x-api-key": _VALID_KEY}
+    )
+    assert resp.status_code == 401
+    assert mock_voicehr.resend_calls == []
+
+
+def test_rapid_repeated_resend_is_rate_limited(
+    client, auth_headers, mock_second_brain, mock_resume_intelligence, mock_voicehr
+):
+    """Guards against an impatient double-click firing two real provider sends in
+    quick succession -- a short server-side cooldown per application, not a new
+    persisted field or workflow status (see main.py: resend_invite)."""
+    _, application_id = select_and_invite(
+        client, auth_headers, mock_second_brain, mock_resume_intelligence, mock_voicehr
+    )
+
+    first = client.post(f"/v1/applications/{application_id}/resend-invite", headers=auth_headers)
+    second = client.post(f"/v1/applications/{application_id}/resend-invite", headers=auth_headers)
+
+    assert first.status_code == 200
+    assert second.status_code == 429
+    assert len(mock_voicehr.resend_calls) == 1  # only the first click actually sent
+
+
 # ===========================================================================
 # VoiceHR -> RWS webhook -- POST /v1/webhooks/voicehr
 # ===========================================================================

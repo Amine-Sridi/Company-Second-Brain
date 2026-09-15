@@ -6,8 +6,8 @@ detail (routes, pages, components, visual design) lives in `FRONTEND_HANDOFF.md`
 instead — this file never duplicates it, only references it (per the two files'
 own long-standing division of labor).
 
-**Project status: feature-complete; one queued follow-up feature remains** (see
-`[NEXT]` at the end). Every backend service, the full recruiter frontend, and
+**Project status: feature-complete, with one new backend slice in progress**
+(see `[NEXT]` at the end). Every backend service, the full recruiter frontend, and
 the 2D/3D knowledge graph are implemented and passed a final whole-system
 readiness audit (see "Demo readiness" below). A dedicated audit of VoiceHR's
 autonomous real-time candidate interview confirmed it was already fully built
@@ -17,9 +17,39 @@ milestone 25 and the Known Limitations entry below for a real, external
 eligibility gate was then implemented as a deterministic, RWS-owned
 second-stage screening signal on top of that interview flow (milestone 26),
 VoiceHR was made to email candidates their interview link automatically
-(milestone 27), and most recently the integration-test fixture that had
-accidentally wiped the live demo database was hardened and the demo data it
-destroyed was restored (milestone 28).
+(milestone 27), the integration-test fixture that had accidentally wiped the
+live demo database was hardened and the demo data it destroyed was restored
+(milestone 28), an explicit resend/recovery flow was added on top of that
+automatic delivery — a "Retry" UX for a failed initial send and a distinct
+"Resend invitation" action once already invited, both reusing the same
+VoiceHR interview/token (milestone 29), the autonomous interview session
+itself was hardened against normal browser/network/audio failures — a
+bounded, consistent reconnect budget, transcript preservation across a
+reconnect, an exactly-once completion guard, a single-owner WebSocket lock
+per interview, and clearer candidate-facing UI states (milestone 30) — and
+most recently the interview's own content quality was overhauled: a real
+five-dimension rubric (interaction split out from comprehension,
+pronunciation honestly stopped being fabricated from text-only evidence), a
+five-section adaptive-but-bounded question structure, language-purity/
+never-reveal-the-result/prompt-injection-resistance instructions, a genuine
+A1-C2 CEFR range, and a new `insufficient_evidence` outcome that stops a
+short/thin interview from ever producing a real, comparable (and possibly
+wrong) pass/fail verdict (milestone 31) — and most recently that rubric was
+put to use and explained: a deterministic golden-case benchmark for the
+evaluator (runnable standalone, no live Gemini needed), a hardened
+assessment contract (pronunciation nulled unconditionally at read time, an
+explicit `sufficient_evidence` field), and a full Report Detail redesign so
+a recruiter can see *why* a candidate received their language result
+(Language Screening → Assessment Quality → Language Profile →
+Strengths/Concerns → Transcript) without reading the raw transcript or
+evaluator JSON, plus a real duplicate-label bug fixed along the way
+(milestone 32). Most recently, a design-only pass (no code) defined the
+post-VoiceHR recruitment stage — what happens for a candidate once the
+language gate clears — as a parallel `interview_rounds` signal beside
+`Application`'s existing state machine, deliberately not a new set of
+`Application.status` values (the same relationship the language gate itself
+already has to that state machine); the first backend slice from that design
+— the table, the model, and creation — has now landed (milestone 33).
 
 **RESOLVED — the previous "demo backbone unusable" warning that used to live
 here.** Both blockers it described are now fixed: (1) the destructive
@@ -32,10 +62,12 @@ Applications have been recreated (see "Current state" below) via a new,
 explicit, idempotent seed script, including reconnecting one application to
 VoiceHR's own surviving completed-report history. **What is still genuinely
 unresolved**: VoiceHR's `RESEND_API_KEY` remains unset in this environment, so
-**every real `POST /v1/applications/{id}/invite` call still fails with a
-clean 502** — the seed script worked around this (it never calls that
-endpoint), but a live "Invite" click in front of a jury still cannot succeed
-until a real Resend key is configured (see Known Limitations).
+**every real `POST /v1/applications/{id}/invite` or `.../resend-invite` call
+still fails with a clean 502** — the seed script worked around this (it never
+calls that endpoint), but a live "Invite"/"Resend invitation" click in front
+of a jury still cannot succeed until a real Resend key is configured (see
+Known Limitations). This is precisely the failure path milestone 29's new
+"Invitation not sent" / Retry UX was built and live-verified against.
 
 ---
 
@@ -52,20 +84,47 @@ embeddings, one role per schema, no cross-schema grants (verified live).
 | Service | Tests | Notes |
 |---|---|---|
 | Resume Intelligence | 86 passed | Runs in-container or on host. |
-| Recruitment Workflow (RWS) | 105 passed | `services/recruitment-workflow/tests/` — mocked-DB unit/route tests, host or in-container. |
-| VoiceHR | 154 passed | **Host only** — its Docker image deliberately ships without `pytest` (lean production image). +13 this session for automatic invitation email delivery (idempotent send/retry, job-title/language content, failure semantics, the explicit resend route). |
+| Recruitment Workflow (RWS) | 135 passed | `services/recruitment-workflow/tests/` — mocked-DB unit/route tests, host or in-container. +12 this session (milestone 34): reschedule/complete/cancel success, 409-wrong-state, 404-unknown-round, 404-cross-application, and complete's 422-before-the-db cases, all in `test_interview_rounds.py`. |
+| VoiceHR | 205 passed | **Host only** — its Docker image deliberately ships without `pytest` (lean production image). +11 this session (milestone 32): 5 new `test_report.py` assessment-contract tests, `test_interview_quality.py` restructured onto the new `golden_cases.py`/`benchmark_runner.py` split (9→15 tests: 13 golden cases + 2 whole-benchmark checks). Also runnable standalone, no pytest: `cd services/voicehr && python -m tests.benchmark_runner`. |
 | Second Brain | none | No `tests/` directory exists. A pre-existing, accepted gap — its one real integration (Resume Intelligence → Second Brain ingest/embed) is instead covered by a live end-to-end smoke test (candidate ingested, embedded, retrieved, PII boundary confirmed via direct `psql`). |
 
 **A second test suite exists at the repo root** (`tests/unit/`,
 `tests/integration/`) — discovered two sessions ago, not new work.
-`tests/unit/` (138 passed) exercises `shared/` modules (schemas, scoring,
-auth, LLM interface, observability, HTTP client) directly, no DB.
+`tests/unit/` (139 passed; +1 this session, milestone 31's new
+`InterviewAssessment.evaluation_status == "insufficient_evidence"` schema
+test) exercises `shared/` modules (schemas, scoring, auth, LLM interface,
+observability, HTTP client) directly, no DB.
 `tests/integration/` runs each service's real FastAPI app against a **real
 Postgres** — see the test-isolation invariant immediately below for what
 changed about how this now has to be run. `tests/integration/test_db_safety.py`
 (13 passed, new this session) is a pure unit test of the guard itself, no DB
 needed. `test_resume_intelligence.py`/`test_second_brain.py` exist too but
 were not run this session (untouched by this session's changes).
+`test_recruitment_workflow.py` is 96 passed (was 88 before milestone 29's +8
+for the explicit resend flow) — re-confirmed green this session at the same
+count, since milestone 30 touched only VoiceHR, which this suite doesn't
+cover. **`tests/integration/test_interview_rounds_integration.py` (17
+passed, milestones 33-34 combined)** — real Postgres, run against the
+disposable `company_second_brain_test` database per the test-isolation
+invariant below, never the live demo database. Covers what the RWS-local
+monkeypatched suite structurally cannot: `recruitment.interview_rounds`'s DB
+`CHECK` constraints are actually enforced (invalid `round_type`/`status`/
+`outcome`, and both directions of the paired outcome-only-when-completed
+constraint), a real end-to-end create → persist → embedded-on-read round
+trip through the real API, and (milestone 34) real reschedule/complete/
+cancel round trips including a real cross-application 404 and a real
+409-after-a-real-terminal-transition.
+
+**New this session (milestone 32): the recruiter frontend has its first-ever
+test file.** This project has never introduced a JS test framework (Jest/
+Vitest/React Testing Library) across the whole V2 frontend build-out,
+relying on real-browser Playwright verification instead — that stays true
+here too for anything involving actual rendering. `src/constants/
+language.test.js` (13 passed) covers only the *pure logic* pieces
+(label/tone consistency, exact wording, score-band boundaries, null-safety)
+via Node's own built-in test runner, zero new dependencies or config:
+`cd services/recruitment-workflow/frontend && node --test
+src/constants/language.test.js`.
 
 **Test-database isolation is now a hard invariant, not a caution.** The
 incident this used to warn about here — `test_recruitment_workflow.py`'s
@@ -191,6 +250,50 @@ without following that file's "if you think a decision is wrong" process.
   enforce it, so "what the recruiter is shown" and "what blocks accept" can
   never drift apart. Only `accept` is gated — `reject` is never blocked,
   since a recruiter can always decline regardless of screening outcome.
+- **New this session (milestone 33): the post-VoiceHR interview stage is a
+  parallel signal beside `Application`'s state machine, not a new set of
+  `Application.status` values** — the exact same relationship the language
+  gate already has to it, deliberately reused rather than re-invented.
+  `Application.status` stays `selected`/`invited`/`interviewed`/`accepted`/
+  `rejected`, unchanged; `recruitment.interview_rounds` is a separate,
+  one-to-many table (`db.InterviewRound`), and `POST .../interview-rounds`
+  never writes to `Application.status` at all. Creating a round is gated on
+  two checks, both reusing existing logic rather than duplicating it: the
+  application must not already be `accepted`/`rejected`, and
+  `language_gate.status` must not be blocking (the exact same
+  `_language_gate_info`/`BLOCKING_STATUSES` `accept_application` already
+  uses) — this stage exists specifically "for candidates who pass the
+  language gate," enforced at the API boundary. A round's own `outcome`
+  (`pass`/`fail`/`needs_review`) is informational only: unlike the language
+  gate, it does **not** block `accept`/`reject` — a technical/managerial
+  interview is a human judgment call the recruiter already made, and
+  auto-blocking their own final decision on a verdict they themselves
+  recorded would work against "recruiter remains final decision-maker," the
+  one constraint this design was explicitly built to preserve.
+  `interviewer_name` is free text, not a foreign key: this project has
+  exactly one seeded recruiter account and no interviewer/user directory
+  (see CLAUDE.md's non-negotiable decisions) — inventing one would be
+  speculative infrastructure this project's own code-style rules warn
+  against.
+- **New this session (milestone 31): the evaluator/RWS-gate responsibility
+  split is now explicit and load-bearing, not just implicit.** VoiceHR's
+  evaluator (Gemini, `backend/services/evaluator.py`) is the only place any
+  LLM judgment enters this feature at all, and its output is strictly
+  advisory evidence, never a decision: it returns
+  `{cefr_level, confidence, dimensions: {comprehension_relevance,
+  fluency_coherence, grammar_language_control, vocabulary_range,
+  interaction_spontaneity}, strengths, concerns, evidence}` (pronunciation
+  omitted — see Known limitations) or, when the transcript doesn't contain
+  enough usable language, `cefr_level: null` with
+  `evaluation_status: "insufficient_evidence"`. It never sees, and cannot
+  express, "passed"/"failed"/"eligible" — those words do not exist in its
+  vocabulary. RWS alone turns "assessed CEFR" into a decision, deterministically:
+  `language_gate.py`'s `compute_language_gate()` (unchanged by this pass,
+  see below) is the only place `CEFR_RANK[assessed] >= CEFR_RANK[required]`
+  is ever evaluated, and it runs on plain data (two strings in, one status
+  out) with no model call of any kind. The same discipline `CLAUDE.md`
+  already requires for resume matching ("the LLM never determines...
+  threshold comparisons") extends cleanly to this second, later gate.
 - **Three independent, mutually-exclusive auth mechanisms** (verified never to
   substitute for one another, both by code inspection and by test): recruiter
   JWT (`Authorization: Bearer`, `JWT_SECRET`, `JWT_EXPIRY_MINUTES=45`) for
@@ -246,6 +349,21 @@ without following that file's "if you think a decision is wrong" process.
   email's greeting (RWS passes `Job.title`, cosmetic only, never used for
   matching/eligibility); `invite_email_error` is retained only as VoiceHR's
   own internal diagnostic, never surfaced in the email itself.
+- **New this session (milestone 29): a third, `external_reference_id`-keyed
+  explicit resend route** — `POST /api/rws/interviews/{external_reference_id}/resend-invite`
+  (`report.py`, service-key gated, alongside the report/recording routes it
+  sits next to) — exists specifically because the token-keyed route above is
+  unauthenticated and RWS never stores that token, so RWS couldn't call it
+  directly without either storing a token (never done) or adding this new
+  route. It also funnels through the same `deliver_invitation_email`, always
+  attempts delivery (ignoring `invite_email_sent_at`, like the token-keyed
+  route), and never creates a new interview or accepts an `Idempotency-Key`.
+  RWS's own `POST /v1/applications/{id}/resend-invite` is its only caller,
+  only from `invited`, with an in-memory per-application cooldown against
+  double-click spam (not a persisted field). The "Invitation not sent"/Retry
+  UI state on a *failed initial* send is deliberately ephemeral frontend
+  state only, never persisted to `Application` — see milestone 29 below for
+  why.
 - **The real-time interview session is candidate-only by construction, not by
   policy.** Confirmed by source inspection this session: RWS's frontend has
   zero WebSocket usage anywhere (`grep -ri "websocket" src/` — no matches),
@@ -262,6 +380,34 @@ without following that file's "if you think a decision is wrong" process.
   (`ws://.../ws/interview/{token}`, confirmed via live Playwright network
   inspection — no Google/Gemini host ever contacted from the browser side),
   so the real Gemini API key never reaches client code.
+- **New this session (milestone 30): the autonomous interview session is
+  robust to normal browser/network/audio failures without changing this
+  architecture.** VoiceHR runs one uvicorn worker, one process (its
+  Dockerfile has no `--workers` flag) — an in-process `asyncio.Lock` per
+  interview token (`api/routes/session.py`) is therefore a real, sufficient
+  single-owner guard, not a stand-in for a distributed one; held for the
+  entire WebSocket handler body (through `process_interview`, not released
+  early), it makes two simultaneous WebSocket connections for one interview
+  structurally impossible to both bridge a live Gemini session. A single
+  shared `MAX_INTERVIEW_RECONNECTS` (`database.py`, currently `2`) bounds
+  every automatic recovery path identically — the WebSocket-disconnect
+  handler's own reset and the separate stale-active-session check in
+  `api/deps.py`'s `validate_interview_start` used to be independent and
+  inconsistently capped; they now share one budget. `interviews.
+  pending_transcript`/`pending_duration_seconds` (new nullable SQLite
+  columns) carry a recoverably-dropped attempt's transcript/elapsed time
+  into the next attempt (`resume_transcript`/`resume_duration_seconds` on
+  `run_sarah_pipeline`/`run_gemini_live_pipeline`) — Gemini Live itself has
+  no memory across a fresh `connect()` call, so the greeting/task-1 opening
+  genuinely restarts (an honest reconnect, never a faked mid-conversation
+  resume), but the transcript actually evaluated covers the whole
+  conversation. `interviews.finalized_at` (new nullable column) is what
+  `process_interview` claims atomically, with no `await` before the claim
+  UPDATE, before ever calling `evaluate()` or sending the completion
+  webhook — the actual exactly-once guarantee, independent of (and a
+  backstop for) the WebSocket lock above; it does not touch or duplicate
+  RWS's own `delivery_id`-based webhook dedup, which remains exactly as it
+  was.
 - **Gemini is the sole AI provider**, behind `shared/llm.py`'s `LLMProvider`
   interface (`GeminiProvider`: `generate_text`, `generate_structured`,
   `embed_text`). Model: `gemini-3.6-flash` for text/structuring/evaluation,
@@ -316,14 +462,19 @@ not carried forward from memory.
 | `GET /v1/candidates/{id}/knowledge` | JWT | Transient proxy to Second Brain; no `db` dependency. |
 | `GET /v1/graph/candidates-jobs` | JWT | Reads RWS's own persisted `MatchResult`/`Job` rows only — the 2D/3D knowledge graph's sole data source. Both qualified and disqualified edges included, unfiltered. |
 | `POST /v1/matches/{match_id}/select` | JWT | 422 if not qualified; 409 on duplicate (DB `UNIQUE` constraint). Snapshots the job's current language requirement (if any) onto the new `Application`. |
-| `POST /v1/applications/{id}/invite` | JWT | Pre-flight Resume Intelligence contact lookup (422 if none, before ever calling VoiceHR); idempotent retry via `{application_id}:{attempt}`. If the application has a snapshotted language requirement, VoiceHR is invited in that language regardless of the request body's own `language` field. Also passes the job's `title` (cosmetic, for VoiceHR's candidate email). **Success now means VoiceHR actually emailed the candidate** — a `502` here can mean either VoiceHR is unreachable or the email failed to send; either way the application is never marked `invited`. |
+| `POST /v1/applications/{id}/invite` | JWT | Pre-flight Resume Intelligence contact lookup (422 if none, before ever calling VoiceHR); idempotent retry via `{application_id}:{attempt}`. If the application has a snapshotted language requirement, VoiceHR is invited in that language regardless of the request body's own `language` field. Also passes the job's `title` (cosmetic, for VoiceHR's candidate email). **Success now means VoiceHR actually emailed the candidate** — a `502` here can mean either VoiceHR is unreachable or the email failed to send; either way the application is never marked `invited`. Callable from `selected` (first send) or `invited` (still callable directly, though the frontend now only surfaces this button while `selected` — see below); a failed attempt leaves `invite_attempt_number` un-persisted, so the very next call recomputes the same attempt number/idempotency key, which is what makes a frontend "Retry" click reuse VoiceHR's already-created interview instead of creating a duplicate one. |
+| `POST /v1/applications/{id}/resend-invite` | JWT | **New this session.** Explicit resend, only callable while `invited` (409 otherwise). Calls VoiceHR's new `POST /api/rws/interviews/{id}/resend-invite`, which reuses the exact interview/token created at invite time via the same `deliver_invitation_email` function every other send path already shares — never creates a new interview, never accepts/needs an `Idempotency-Key`, never looks up or persists the candidate's contact (VoiceHR already has it). A failure (`502`) never reverts the application away from `invited`. A short in-memory per-application cooldown (10s, module-level dict, no Redis) returns `429` on a rapid repeat click — a UX safeguard, not a persisted field or new workflow status. |
 | `POST /v1/applications/{id}/accept` | JWT | Atomic conditional `UPDATE`; schedules a background Second Brain feedback write-back after the response is already sent. **422 if the language eligibility gate is `pending`/`failed`/`needs_review`** — the response body names which and the required-vs-assessed values. |
 | `POST /v1/applications/{id}/reject` | JWT | Same state machine, background write-back — **never gated by the language eligibility gate**; a recruiter can always decline. |
-| `GET /v1/jobs/{job_id}/applications` | JWT | Job-scoped. Every row's `language_gate` object (`status`, `required_language`, `required_cefr`, `assessed_language`, `assessed_cefr`) is computed fresh on every read, never a stored column. |
-| `GET /v1/applications` | JWT | Global, unscoped, adds `job_title` and the same `language_gate` object. |
+| `POST /v1/applications/{id}/interview-rounds` | JWT | **Milestone 33.** Schedules a post-VoiceHR technical/managerial interview round — the stage after the language gate clears. 422 if the application is already `accepted`/`rejected`, or if `language_gate.status` is `pending`/`failed`/`needs_review` (same `BLOCKING_STATUSES` check `accept` already uses). Creates one `recruitment.interview_rounds` row (`scheduled`, no outcome yet) — never touches `Application.status`, which stays exactly `selected`/`invited`/`interviewed`/`accepted`/`rejected` as before; this is a parallel signal, not a new state-machine value, the same relationship the language gate itself has to that state machine. `interviewer_name` is free text, not a foreign key — this project has exactly one seeded recruiter account and no interviewer/user directory. |
+| `POST /v1/applications/{id}/interview-rounds/{round_id}/reschedule` | JWT | **New this session (milestone 34).** Updates only `scheduled_at`; 409 if the round is not currently `scheduled` (names its actual status), 404 if the round doesn't exist or belongs to a different `application_id` than the URL's. |
+| `POST /v1/applications/{id}/interview-rounds/{round_id}/complete` | JWT | **New this session (milestone 34).** Sets `outcome` (required — `pass`/`fail`/`needs_review`, 422 if missing/invalid, checked before ever reaching the DB) and optional `notes`, `status → completed`; only from `scheduled` (409/404 as above). Omitting `notes` preserves whatever was set at scheduling time rather than clearing it. |
+| `POST /v1/applications/{id}/interview-rounds/{round_id}/cancel` | JWT | **New this session (milestone 34).** `status → cancelled`, no body; only from `scheduled` (409/404 as above). Terminal — no un-cancel. |
+| `GET /v1/jobs/{job_id}/applications` | JWT | Job-scoped. Every row's `language_gate` object (`status`, `required_language`, `required_cefr`, `assessed_language`, `assessed_cefr`) is computed fresh on every read, never a stored column. **New this session**: every row also carries `interview_rounds` (a list, possibly empty), fetched fresh per application the same way `language_gate` is. |
+| `GET /v1/applications` | JWT | Global, unscoped, adds `job_title` and the same `language_gate`/`interview_rounds` fields. |
 | `GET /v1/interviews/{id}/report` | JWT | Proxies VoiceHR; rewrites `recording` to a same-origin RWS URL — browser never sees VoiceHR's host or the service key. |
 | `GET /v1/interviews/{id}/recording` | JWT | Relays raw audio bytes; no disk/DB write. |
-| `POST /v1/webhooks/voicehr` | HMAC (`X-Signature`) | Inserts into `interview_webhook_events` (dedup by `delivery_id`) before any state mutation; unresolvable/malformed references return `200` no-op, never a retry-storming error. `assessment` now also carries `language` (the interview's own conducted language) alongside the pre-existing `cefr_level` — both feed the language eligibility gate. |
+| `POST /v1/webhooks/voicehr` | HMAC (`X-Signature`) | Inserts into `interview_webhook_events` (dedup by `delivery_id`) before any state mutation; unresolvable/malformed references return `200` no-op, never a retry-storming error. `assessment` now also carries `language` (the interview's own conducted language) alongside the pre-existing `cefr_level` — both feed the language eligibility gate. **New this session (milestone 31)**: `assessment.evaluation_status` accepts a fourth value, `"insufficient_evidence"` (`shared/schemas.InterviewAssessment`) — sent with `cefr_level: null`, which `language_gate.py` already mapped to `needs_review` before this addition; no change to that file's own threshold logic. |
 
 ### Resume Intelligence (PII owner)
 
@@ -350,7 +501,7 @@ not carried forward from memory.
 |---|---|
 | `POST /api/invite` | service key (`X-Api-Key`, RWS only) |
 | `GET/POST /interview/{token}...` (start/prepare/complete) | token-gated, candidate-facing |
-| `GET /api/rws/interviews/{external_reference_id}/report` \| `/recording` | service key — the two routes RWS's proxy above calls |
+| `GET /api/rws/interviews/{external_reference_id}/report` \| `/recording` \| `POST .../resend-invite` | service key — the RWS-facing routes RWS's own proxy endpoints call |
 | `GET /api/report/{report_token}`, `GET /report` | unguessable-token bearer link, candidate/shareable |
 | `GET /api/admin/reports`, `GET /admin/reports`, `POST /api/admin/reports/{token}/retry`, `GET /recordings/{filename}` | HTTP Basic |
 | `GET /health`, `GET /health/detail` | none |
@@ -359,10 +510,20 @@ not carried forward from memory.
 automatically, synchronously, as part of the same call — see "Architecture /
 invariants" above for the full idempotency/failure-semantics contract. The
 previously-dead `POST /interview/{token}/invite` (unauthenticated, token-only)
-now shares that same delivery implementation and is kept as an explicit,
-always-resends primitive — still not called from anywhere in the current
-architecture, per this session's own "do not restore the old admin-UI flow"
-instruction.
+shares that same delivery implementation and remains an explicit,
+always-resends primitive kept for a future admin-UI need — still not called
+from anywhere in the current architecture.
+
+**New this session**: `POST /api/rws/interviews/{external_reference_id}/resend-invite`
+(`report.py`, service-key gated, alongside the report/recording routes it sits
+next to) is what RWS's own new resend endpoint calls instead — the
+token-keyed route above can't be, since it's unauthenticated and keyed by a
+raw token RWS never stores. This new route resolves the interview by
+`external_reference_id` (RWS's own `application_id`, already used by the
+report/recording routes) and always attempts delivery via the same shared
+`deliver_invitation_email` function, on the interview's existing row — no new
+interview, no new token, no `Idempotency-Key`. Returns only `{"status": "sent"}`;
+never the token/link.
 
 ---
 
@@ -525,7 +686,11 @@ python services/recruitment-workflow/scripts/seed_demo_data.py --yes --job-title
   to know this candidate is identity-less, since RWS itself only discovers
   that at invite time. Do not click Invite/Accept on this specific
   application in a live demo; use one of the other two restored applications
-  instead.
+  instead. **Re-confirmed this session (milestone 32)**: the two console
+  404s observed during a real-browser consistency pass across
+  Applications/Interviews/Reports were traced directly to this exact
+  candidate's identity lookup, not a new regression from anything touched
+  this session.
 - **RESOLVED this session (milestone 27): "no in-product way to retrieve a
   VoiceHR interview link."** VoiceHR now emails the candidate their secure
   link automatically as part of `POST /api/invite` itself — see "Architecture
@@ -534,11 +699,14 @@ python services/recruitment-workflow/scripts/seed_demo_data.py --yes --job-title
 - **CRITICAL, demo-blocking as of milestone 27: `RESEND_API_KEY` is empty in
   VoiceHR's `.env`.** Automatic invitation email delivery (milestone 27) is
   now what determines whether `POST /api/invite` succeeds at all — with no
-  key configured, `_send_email` immediately raises, and **every real "Invite"
-  click in the recruiter UI currently fails with a clean 502**, verified live
-  this session. This is a behavior change from before milestone 27, when a
+  key configured, `_send_email` immediately raises, and **every real
+  "Invite"/"Retry"/"Resend invitation" click in the recruiter UI currently
+  fails with a clean 502**, verified live this and the milestone-29 session
+  (the new explicit resend endpoint hits the exact same `_send_email`
+  failure). This is a behavior change from before milestone 27, when a
   missing key was harmless (no email was ever attempted). A real Resend API
-  key must be configured before "Invite" can be demonstrated live. **Not
+  key must be configured before "Invite"/"Resend invitation" can be
+  demonstrated live succeeding. **Not
   blocking for demo data itself anymore**: this session's demo-data
   restoration (see "Current demo data" above) deliberately never calls
   `POST /v1/applications/{id}/invite` at all — it advances the one
@@ -585,6 +753,50 @@ python services/recruitment-workflow/scripts/seed_demo_data.py --yes --job-title
   and kept it as an explicit, always-resends primitive — still not called
   from any current frontend, which is deliberate scope for this session (see
   `[NEXT]`).
+- **New this session (milestone 30): an interview that exhausts its
+  `MAX_INTERVIEW_RECONNECTS` budget while genuinely abandoned (the candidate
+  never returns at all) stays `active` forever, with no automatic terminal
+  report and no webhook ever sent to RWS.** A deliberate, minimal-scope
+  tradeoff, not an oversight: auto-finalizing it would need either a
+  scheduler (explicitly out of scope — "no scheduler unless necessary") or
+  forcing an evaluation of a possibly-empty/nonsensical transcript just to
+  produce *some* terminal status. The chosen policy instead satisfies the
+  actual requirement ("abandoned sessions must never appear as successful
+  assessments") the simplest possible way: an exhausted-budget interview is
+  simply never resumable and never evaluated, so it can never look
+  successful — RWS's own `Application` just stays `invited` indefinitely for
+  that candidate, which a recruiter can already act on manually (accept/
+  reject are both allowed from `invited`). If a real deployment ever needs
+  an automatic "this candidate never came back" signal to RWS, that would be
+  the next incremental step, not a sign this policy was wrong at this
+  project's scale.
+- **New this session (milestone 31): pronunciation is permanently
+  unassessed, by design, not a gap to close later.** VoiceHR's evaluator
+  only ever receives the interview's text transcript — never audio — so
+  `pronunciation_score` is now always `null` (`AssessmentPanel` already
+  renders this as "—", same as any other missing score). Assessing
+  pronunciation for real would mean sending recorded audio to an LLM for
+  acoustic analysis, a genuine new capability, not a prompt/rubric tweak —
+  explicitly out of this task's scope ("do not change... provider
+  architecture"). If a future session adds this, it belongs alongside a
+  real audio-analysis provider call, not a guessed number from text alone.
+- **New this session (milestone 31): the new rubric/adaptive-questioning
+  prompt and the new `insufficient_evidence` outcome have never been
+  observed producing a real, completed evaluation.** VoiceHR's Gemini
+  project is still denied access by Google (see the milestone-25 finding
+  above, re-confirmed unchanged this session) — every live check this
+  session could only reach the connect/evaluate *failure* path, honestly.
+  The new prompt was confirmed to build correctly and reach that same
+  pre-existing failure (not a new one), and the new evaluator logic is
+  covered thoroughly by the mocked golden-case benchmark
+  (`tests/test_interview_quality.py`) and prompt-content tests
+  (`tests/test_interview_prompt.py`) — but no real candidate has ever seen
+  the new Section E adaptive follow-up, and no real transcript has ever
+  produced the new `interaction_spontaneity` score or a genuine
+  `insufficient_evidence` webhook. The next session with real Gemini access
+  should do exactly one controlled live interview and inspect the result
+  before trusting this rubric's real-world behavior beyond what the mocked
+  tests already prove.
 
 ---
 
@@ -954,30 +1166,743 @@ re-verifying against current source, per every prior session's own discipline.
     introduced) — both are called out explicitly under "Demo readiness" so
     neither surprises a presenter live.
 
+29. **VoiceHR invitation delivery UX + explicit resend/recovery flow**:
+    closes the gap milestone 27 deliberately left open. Added exactly one new
+    endpoint per service, both reusing existing mechanisms rather than
+    building new ones: VoiceHR's `POST /api/rws/interviews/{external_reference_id}/resend-invite`
+    (`report.py`, service-key gated, alongside the report/recording routes)
+    resolves the interview by `external_reference_id` and always attempts
+    delivery via the same shared `deliver_invitation_email` used by every
+    other send path — never a new interview/token, never an
+    `Idempotency-Key`; RWS's `POST /v1/applications/{id}/resend-invite`
+    (JWT-gated, `main.py`) is its thin proxy, only callable while `invited`
+    (409 otherwise), with an in-memory 10s-per-application cooldown (429 on a
+    rapid repeat, no persisted field, no Redis) guarding against double-click
+    spam. Neither route looks up or persists the candidate's contact — VoiceHR
+    already has it from the initial invite, and RWS still never stores
+    candidate email.
+
+    The "Invitation not sent" / Retry state on `ApplicationsPage` is
+    deliberately **ephemeral, component-scoped React state only**
+    (`lastInviteFailed`), not a new backend field or workflow status — RWS's
+    own `invite_attempt_number` is still only persisted after a successful
+    VoiceHR call (unchanged from milestone 27), so a failed attempt leaves no
+    persisted signal to distinguish "never attempted" from "attempted and
+    failed" beyond the existing `502`; a page reload correctly reverts to a
+    plain "Invite" button, which is the right behavior (reload means
+    re-reading real backend state, and this label was never part of it). The
+    existing `POST /v1/applications/{id}/invite` is completely unchanged and
+    still both creates the first interview and (while still `selected`)
+    retries a previously failed attempt via its own existing idempotency key
+    — "Retry" on the frontend is just that same call again, not a new
+    endpoint. Frontend button matrix: `selected` (never attempted) → "Invite";
+    `selected` (last attempt failed, ephemeral) → "Invitation not sent" +
+    "Retry"; `invited` → "Invitation sent" + "Resend invitation" (new explicit
+    resend). The old "Resend Invite" button (which called the *normal* invite
+    endpoint from `invited`, creating a genuinely new attempt/interview) was
+    removed from the UI in favor of this explicit resend — the backend
+    endpoint it used to call is untouched and still accepts calls from
+    `invited` if something else needed to invoke it.
+
+    **Tests**: 6 new VoiceHR tests (`tests/test_report.py`, host-only) cover
+    the new route's auth, 404, success-reuses-interview-never-leaks-token,
+    sends-even-if-already-delivered, and failure→502. 6 new RWS unit tests
+    (`tests/test_resend_invite.py`, no real Postgres, same
+    monkeypatch-`main`/mock-`db` pattern as `test_language_requirement_workflow.py`)
+    cover success/409/404/502/auth/rate-limit in isolation. 8 new
+    repo-root integration tests (`tests/integration/test_recruitment_workflow.py`,
+    real Postgres) cover: a failed initial send leaves the application
+    `selected` with `invite_attempt_number` still `0`; a retry after failure
+    reuses the exact same idempotency key; explicit resend sends
+    intentionally and reuses the interview (no new `invite_candidate` call);
+    resend failure leaves the application `invited`; resend on a `selected`
+    application returns 409; resend on an unknown application returns 404;
+    resend requires JWT not service key; and a second rapid resend click
+    returns 429 with only one real call reaching VoiceHR. Combined with
+    already-existing coverage (VoiceHR's own duplicate-idempotency-key test,
+    RWS's missing-contact-422 and already-decided-409 tests), all ten
+    scenarios this task's own spec called out are covered. Full suite counts
+    this session: VoiceHR 160 passed (was 154), RWS unit 111 passed (was
+    105), repo-root `tests/unit/` 138 passed (unchanged, not touched by this
+    task), repo-root integration 96 passed (was 88).
+
+    **Verified live** (with the DB-safety guard explicitly re-confirmed
+    fail-closed first — ran the integration suite with no `TEST_DATABASE_URL`
+    set, got `UnsafeTestDatabaseError` at conftest import with zero queries
+    issued, then ran it correctly against `company_second_brain_test`):
+    rebuilt and redeployed both the `recruitment-workflow` (frontend + backend)
+    and `voicehr` images; in a real headless-Chromium session against the live
+    stack, clicked "Invite" on a `selected` demo application with a real
+    Resume Intelligence contact record and got a genuine (unmocked) `502`
+    from VoiceHR's own `RESEND_API_KEY`-unset failure (`RESEND_API_KEY` is
+    still unset in this environment — this was a real failure, not simulated);
+    the "Invitation not sent"/"Retry" UI rendered correctly with the real
+    error text in the banner; confirmed via direct Postgres/SQLite queries
+    that the application stayed `selected` (`invite_attempt_number` still
+    `0`) and that VoiceHR had created exactly one interview row for it
+    (`invite_email_sent_at` still `NULL`); clicked "Retry" in the browser,
+    got the same genuine `502` again, and confirmed via SQLite that still
+    exactly one interview row exists for that `external_reference_id`, with
+    the identical `token` and `idempotency_key` as before the retry — no
+    duplicate interview was created. Did **not** attempt to fake or force a
+    live successful send/resend or an `invited`-status "Resend invitation"
+    screenshot (`RESEND_API_KEY` absence makes a real successful live send
+    impossible right now, and manually forcing `status='invited'` in the DB
+    would misrepresent an invite that never actually succeeded) — the
+    successful-path and resend-specific UI logic are instead covered by the
+    mocked-provider test suites above, which is what this task's own
+    instructions called for. Confirmed via direct `psql` row counts
+    (`jobs`/`applications`/`match_results`: 2/3/16, unchanged) that none of
+    this session's real API calls or test runs touched the live demo data.
+
+30. **VoiceHR autonomous interview session robustness**: audited the real
+    session lifecycle (`api/deps.py`'s token/start validation,
+    `api/routes/session.py`'s WebSocket handler, `services/gemini_live.py`'s
+    Gemini Live bridge, `services/processing.py`'s completion path,
+    `interview.html`'s candidate JS) before changing anything, and found
+    three real, independent gaps rather than a single bug: (1) two
+    *independent, inconsistent* recovery mechanisms for a dropped/stale
+    session — `session.py`'s own WebSocket-disconnect handler capped its
+    reset at `retry_count < 1`, but `deps.py`'s separate 30-second
+    stale-active reactivation had no cap at all, silently overriding that
+    "one retry" limit for almost any real-world reconnect (which is
+    virtually always attempted more than 30 seconds after the original
+    `/start`); (2) a reconnect discarded the entire transcript captured
+    before the drop — `run_gemini_live_pipeline`'s `transcript` list was
+    always freshly empty per WebSocket connection, so re-evaluating after a
+    reconnect only ever saw the *last* leg's conversation; (3) no exactly-once
+    guard on `process_interview` itself — its old check was a plain
+    `SELECT` + later `UPDATE` with `evaluate()` (a real `await` point)
+    in between, so two calls racing for the same interview would both pass
+    the check, both evaluate, and both send a webhook with a *different*
+    `delivery_id` each (`rws_client.py` mints a fresh one per call) — RWS's
+    own delivery-id dedup cannot catch this, since from RWS's side these
+    look like two independent, legitimate completions, not a retried
+    duplicate.
+
+    Fixed all three with small, DB-guard-first changes, keeping the exact
+    same architecture (candidate-only token URL → VoiceHR WebSocket →
+    Gemini Live → transcript/evaluation → signed RWS webhook; no recruiter
+    live monitoring added, none was requested): a single shared
+    `MAX_INTERVIEW_RECONNECTS = 2` (`database.py`) now bounds *both*
+    recovery mechanisms identically (up to 2 automatic reconnects, 3
+    attempts total, budget exhausted → the interview simply stays `active`
+    and unreachable rather than looping forever or being auto-finalized —
+    no scheduler, no forced evaluation of a possibly-nonsensical transcript,
+    and it already satisfies "never looks like a successful assessment"
+    since no report is ever generated for it); two new nullable SQLite
+    columns, `pending_transcript`/`pending_duration_seconds`, persist
+    whatever a recoverable disconnect (`browser_disconnect`/
+    `gemini_live_error`) already captured, and the next WebSocket connect on
+    the same token loads and forwards them into
+    `run_sarah_pipeline`/`run_gemini_live_pipeline` as
+    `resume_transcript`/`resume_duration_seconds`, seeding the new leg's
+    transcript list and adding to its elapsed-time total — an honest
+    reconnect, not a faked one: Gemini Live itself has no memory across a
+    fresh `connect()` call, so Sarah's greeting/task-1 genuinely restarts,
+    but the final transcript handed to evaluation/reporting covers the
+    whole conversation, matching this task's own "show an honest
+    recoverable state rather than pretending continuity" instruction; a
+    third new column, `finalized_at`, is what `process_interview` now
+    claims *before* calling `evaluate()` (`UPDATE ... WHERE finalized_at IS
+    NULL AND status IN ('active','pending')`, checked via `rowcount`) —
+    since this claim has no `await` before it, this project's single-
+    process/single-event-loop deployment guarantees it always completes
+    before a second concurrent call can even begin its own claim attempt,
+    making finalization exactly-once without touching RWS's own
+    delivery-id dedup at all (verified: a test that mocks `evaluate()` with
+    a real `await asyncio.sleep()` and runs two `process_interview()` calls
+    via `asyncio.gather` fails without the claim and passes with it —
+    confirmed by literally reverting the claim and watching the test fail,
+    then restoring it). Also added one new in-process guard,
+    `api/routes/session.py`'s per-token `asyncio.Lock` (VoiceHR runs one
+    uvicorn worker, one process — an in-process lock is a real, sufficient
+    guard here, not a stand-in for a distributed one), held for the
+    *entire* handler body including `process_interview` (not released
+    early), so two simultaneous WebSocket connections for the same token
+    can never independently start their own Gemini Live pipeline — the
+    second is accepted just long enough to send a clear
+    `{"type":"already_active"}` message, then closed. `finalized_at`'s
+    claim remains the defense-in-depth backstop if the lock were ever
+    bypassed. Frontend (`interview.html`, candidate-only, no admin/recruiter
+    surface touched): added two new states the spec explicitly asked for —
+    "Finishing up…" (`step-finalizing`, shown the instant the candidate
+    clicks Finish, covering the real recording-upload wait that previously
+    left them on a frozen screen with only a disabled button) and
+    "Microphone problem" (`step-mic-lost`, triggered by a `track.onended`/
+    `onmute` listener on the live mic track *or* a `getUserMedia` failure
+    mid-interview, offering "Resume with microphone" which reuses the exact
+    same tested reconnect path — deliberately not a bespoke recovery
+    mechanism); the initial mic-permission-denied state gained a distinct,
+    actionable message (permission denied vs. no device found) and a
+    working "Try again" button that re-invokes `getUserMedia` in place,
+    where before there was only static text and a permanently-disabled
+    Start button; `startInterview()`'s failed-`/start` handling now reads
+    and shows the backend's own `detail` message instead of one hardcoded
+    generic string, so the new exhausted-budget message ("This interview
+    could not be resumed after multiple attempts...") actually reaches the
+    candidate (found live, mid-verification, exactly because the automated
+    test suite can't see rendered browser text — see below); a stale
+    "You can reconnect once" string (now inaccurate since the shared budget
+    moved from 1 to 2) was corrected, and the two remaining purely-cosmetic
+    client-side `retryCount` thresholds were aligned to the same shared
+    value via one named constant, `MAX_CLIENT_RECONNECT_HINT` (the
+    backend's own 409 remains the actual authority either way).
+
+    **Tests** (deterministic, mocked Gemini/provider throughout — no real
+    Gemini Live session in any test): 3 new `test_processing.py` tests
+    (concurrent-calls-finalize-exactly-once — the decisive one, verified to
+    fail without the fix; repeated-sequential-calls-run-once;
+    pending-columns-cleared-on-finalize), 5 new `test_session.py` tests
+    (completed-interview-cannot-be-resumed;
+    recoverable-disconnect-persists-transcript-and-skips-process_interview;
+    reconnect-forwards-pending-transcript-and-merges-the-result;
+    disconnect-beyond-retry-budget-leaves-interview-active-not-looping;
+    two-simultaneous-sockets-second-rejected — also verified to fail
+    without the fix, by literally removing the lock and watching it fail),
+    2 new `test_interview.py` tests (stale-session recovery within budget;
+    stale-session recovery correctly refused once budget is exhausted, with
+    the distinct message). VoiceHR: 170 passed (was 160). RWS/repo-root
+    suites untouched by this task and confirmed still green (RWS unit: 111;
+    repo-root `tests/unit/`: 138; repo-root integration
+    `test_recruitment_workflow.py`: 96, run only after re-confirming the
+    `TEST_DATABASE_URL` safety guard still fails closed with it unset).
+
+    **Verified live**, against the real running stack (rebuilt/redeployed
+    `voicehr` image), using VoiceHR's own genuine, still-open Gemini
+    access-denial (`403`, see Known Limitations) as the real "upstream
+    disconnect" this task needed anyway — never faked, and no claim is made
+    here that real Gemini Live recovery works, only that VoiceHR's own
+    robustness logic behaves correctly around a real upstream failure: (1)
+    a real candidate session hit the real `403` three times in a row
+    (fake-mic Chromium via `--use-fake-device-for-media-stream`); the first
+    two correctly reset to `pending` with `retry_count` 1 then 2 and an
+    empty `pending_transcript` (no conversation had started before Gemini's
+    connect itself failed); the third correctly left the interview stuck
+    `active` at `retry_count=2` (budget exhausted) instead of resetting
+    again; a fourth attempt correctly got the new, distinct "could not be
+    resumed after multiple attempts" message (confirmed both in the API
+    response and, after the `res.json().detail` frontend fix mentioned
+    above, in the rendered browser text) — and exactly one interview row
+    existed for that token throughout all four attempts. (2) A denied
+    microphone permission showed the new distinct message, kept the Start
+    button disabled, showed a working "Try again" button, and — confirmed
+    directly via SQLite — never advanced the interview's status away from
+    `pending`. (3) A page refresh immediately after `/start` (before any
+    real Gemini exchange) reached the consent screen again with zero
+    duplicate interview rows created (1 before, 1 after). (4) The two new
+    UI states (`step-finalizing`, `step-mic-lost`) were driven directly via
+    `showStep()` and screenshotted to confirm they render with the intended
+    copy — not reachable through the real flow without either a working
+    Gemini connection (finalizing) or an actual live mic track ending
+    mid-conversation (mic-lost), both infeasible to force honestly against
+    the real, currently-denied Gemini project. Confirmed via direct `psql`
+    row counts (`jobs`/`applications`/`match_results`: 2/3/16, unchanged)
+    that none of this session's work touched the live demo data — VoiceHR's
+    own SQLite gained a handful of harmless test interview rows from these
+    live checks (`mic-denied-test@example.com`, `refresh-test@example.com`,
+    `robustness-test@example.com`, plus the one from milestone 29's own
+    verification), left in place as harmless residue, same as prior
+    sessions' documented test-data artifacts.
+
+31. **VoiceHR interview rubric + adaptive questioning quality.** Audited the
+    real interview prompt, question plan, evaluator prompt/schema, and CEFR
+    mapping (`backend/services/agent.py`, `gemini_live.py`, `evaluator.py`)
+    before changing anything, and found four concrete, evidence-based gaps
+    rather than vague "make it better" targets:
+
+    1. **Pronunciation was scored despite zero audio evidence.** The
+       evaluator only ever receives the text transcript (`format_transcript`)
+       — never audio — yet the old prompt still asked Gemini for a
+       `pronunciation_intelligibility_score` and weighted it into
+       `overall_score` (15%), merely labeled "less certain." Fixed by
+       removing it entirely from the schema/weights: `pronunciation_score`
+       is now always `None` ("not assessed," never fabricated), matching
+       this task's own "do not pretend to assess pronunciation from
+       transcript-only evidence" instruction. `AssessmentPanel`'s existing
+       null-tolerant rendering (`value == null ? "—"`) needed no change —
+       pronunciation now always renders as "—", which is the honest,
+       intended result, not a regression.
+    2. **The CEFR mapping could structurally never report A1 or C2.**
+       `cefr_level_for_score`'s old thresholds only ever produced A2-C1,
+       four of the six real levels — fixed to a genuine A1-C2 mapping
+       (`<35 A1, <50 A2, <65 B1, <80 B2, <92 C1, else C2`).
+    3. **"Inconclusive" interviews still reported a real, comparable CEFR
+       level.** A short/aborted interview (duration<300s, <3 candidate
+       turns, or a safety-triggered termination) was already flagged
+       `inconclusive` internally, but the evaluator still returned a real
+       `cefr_level`/`overall_score` computed from that thin sample — just
+       labeled "Low confidence," a label `language_gate.py`'s
+       `compute_language_gate` never even looks at. In practice this meant
+       a two-minute aborted interview could still legitimately pass or fail
+       a job's language requirement. Fixed with a new, explicit
+       `insufficient_evidence` outcome (see below) that nulls
+       `cefr_level`/`overall_score` unconditionally.
+    4. **Interaction/spontaneity had no rubric line of its own** — silently
+       folded into a single `interaction_comprehension` bucket with
+       comprehension. Split into two real, separately-scored dimensions.
+
+    **Interview structure (candidate-facing prompt, `agent.py`/
+    `gemini_live.py`)** — kept the existing four-task shape (evidence-based:
+    already well-formed, not rewritten without cause) and made its section
+    boundaries explicit in the system prompt: **A. Warm-up** (background),
+    **B. Past experience** (a real challenge/actions/result), **C. Opinion /
+    reasoning** (a stance and why, on a domain-neutral topic — the prompt now
+    explicitly forbids trivia/technical-knowledge questions: this is a
+    language assessment, not a knowledge test), **D. Clarification /
+    reformulation** (paraphrase a short message), **E. Adaptive follow-up** —
+    new: exactly one additional follow-up after the four fixed tasks, chosen
+    by the interviewer from a small three-tier bank
+    (`ADAPTIVE_FOLLOWUPS["elaborate"/"reasoning"/"abstract"]`) based on
+    observed candidate ability. **Adaptive questioning is bounded by prompt
+    instruction, not new orchestration code** (this project's Gemini Live
+    architecture is one system prompt conducting the whole native-audio
+    conversation — there is no per-turn code state machine to add rules to,
+    and none was added): at most one elaboration follow-up per fixed task,
+    at most one rephrase-once for a misunderstood question, never a second
+    Section E follow-up, never an invented sixth section. **Language
+    purity**: the prompt now explicitly requires the entire interview stay
+    in the configured language, forbids the interviewer ever switching
+    languages, allows exactly one brief request to continue in the target
+    language if the candidate answers in another one, and explicitly
+    forbids turning the session into translation assistance after that.
+    **Never reveal the result**: explicit instruction never to say anything
+    like "That sounds like B2," matching this task's own named example.
+    **Prompt-injection / interview control**: new explicit section stating
+    the candidate's own words are never instructions — covers revealing the
+    system prompt, skipping ahead, assigning a level/score, declaring a
+    pass, changing the rubric, and claiming to be the recruiter/an
+    administrator. **Brevity**: added an explicit "keep your own turns
+    brief, the candidate should do most of the talking" instruction (an
+    audit finding: interviewer turns had no length constraint before).
+
+    **Evidence-based CEFR evaluation (`evaluator.py`)**: `DIMENSION_WEIGHTS`
+    is now five real, evidenced dimensions —
+    `comprehension_relevance` (25%), `fluency_coherence` (25%),
+    `grammar_language_control` (20%), `vocabulary_range` (15%),
+    `interaction_spontaneity` (15%) — summing to 1.0, with pronunciation
+    permanently excluded (see above). The model must also return
+    `sufficient_evidence: bool` in its structured JSON; **either** that flag
+    being `false` **or** the caller's own deterministic pre-check (duration/
+    turn-count/termination, unchanged, still computed in `processing.py`)
+    is enough to route the result through a new `_insufficient_evidence_result`
+    path: `cefr_level`/`overall_score` become `None` (never a guessed
+    number), `evaluation_status` becomes `"insufficient_evidence"`, and
+    per-dimension scores are still passed through best-effort (useful
+    signal for a recruiter's own reading of strengths/concerns, even though
+    the aggregate verdict is withheld). `processing.py` now derives one
+    combined `inconclusive` signal (`pre_check_inconclusive OR
+    evaluation_status == "insufficient_evidence"`) used consistently for
+    VoiceHR's own interview/report status *and* what RWS is told — the two
+    can no longer disagree about whether a real CEFR verdict exists.
+    **RWS needed a two-line, explicitly-authorized schema change, nothing
+    else**: `shared/schemas/__init__.py`'s `InterviewAssessment.evaluation_status`
+    Literal gained `"insufficient_evidence"` as a fourth accepted value
+    (`language_gate.py` itself is untouched — `compute_language_gate` already
+    mapped a null `assessed_cefr` to `"needs_review"` before this pass, for
+    the pre-existing "VoiceHR's own evaluation failed" case; a new dedicated
+    test, `test_insufficient_evidence_needs_review_not_pass_or_fail`,
+    pins that this is the exact same, already-correct branch). **RWS resume
+    scoring, the gate's threshold comparison itself, the admin workflow, the
+    candidate-only privacy boundary, the provider architecture, and the
+    webhook's transport mechanism (HMAC signing, delivery-id dedup,
+    best-effort single-attempt delivery) are all completely unchanged** —
+    confirmed by inspection and by every existing test in those areas still
+    passing unmodified.
+
+    **The new `interaction_spontaneity` dimension is VoiceHR-internal only,
+    deliberately never added to the cross-service webhook schema**: it is
+    stored in a new nullable SQLite column (`reports.interaction_score`,
+    same lightweight `ALTER TABLE` pattern as every prior column addition)
+    and surfaced only through VoiceHR's own rich report
+    (`GET /api/report/{token}` / RWS's proxy `GET /v1/interviews/{id}/report`,
+    which passes VoiceHR's JSON through verbatim, no schema on that path) —
+    never through `POST /v1/webhooks/voicehr`. RWS's recruiter frontend
+    (`ReportDetailPage.jsx`, `AssessmentPanel.jsx`) gained one new row each
+    ("Interaction") using the exact same graceful-null pattern pronunciation
+    already relied on (`value == null ? "—"`), so the two other
+    `AssessmentPanel` call sites that only ever see the narrower
+    webhook-derived object (ApplicationsPage/InterviewsPage) simply render
+    "—" for it, no special-casing needed. `AssessmentPanel` also gained a
+    label/tone for the new `insufficient_evidence` status and a short
+    "needs manual review" note when no CEFR level exists for that status.
+
+    **Tests** (all deterministic, mocked Gemini throughout — no live call in
+    any test, per this task's own instruction): rewrote `test_evaluator.py`
+    for the new dimension names/weights and added coverage for
+    model-reported `sufficient_evidence: false`, the full A1-C2 CEFR range,
+    pronunciation always being `None` regardless of input, the dimension
+    weights summing to 1.0, and a prompt-injection-attempt case (proves the
+    surrounding *code* has no keyword-based override a transcript could
+    game — the model's own resistance can only be verified live, see
+    below). New `test_interview_prompt.py` (10 tests) captures the real
+    `config.system_instruction` the pipeline builds and asserts on its
+    actual content: the five-section structure, the bounded
+    adaptive-questioning rules, the domain-knowledge-testing prohibition,
+    the never-reveal-the-result rule, the anti-injection rule, language
+    purity for both languages, and that `TASKS`/`ADAPTIVE_FOLLOWUPS` are
+    correctly embedded. New `test_interview_quality.py` is the golden-case
+    benchmark this task's own section 10 asked for — nine table-driven
+    cases (weak/intermediate/strong samples, very-short-answers,
+    off-topic-answers, repeated-misunderstanding, candidate-switches-
+    language, prompt-injection-attempt, abandoned-interview), each
+    asserting an expected CEFR band or `insufficient_evidence` outcome —
+    a small, maintainable regression aid, explicitly not a claim of
+    certified CEFR accuracy. `test_database.py`/`test_processing.py`/
+    `test_report.py` updated for the new `interaction_score` column.
+    RWS gained one `test_language_gate.py` case and one
+    `tests/unit/test_schemas.py` case for the new `evaluation_status` value.
+    VoiceHR: 194 passed (was 170). RWS: 112 passed (was 111). Repo-root
+    `tests/unit/`: 139 passed (was 138). Repo-root integration
+    (`test_recruitment_workflow.py`): 96 passed, unchanged — re-run only
+    after re-confirming the `TEST_DATABASE_URL` safety guard still fails
+    closed with it unset.
+
+    **Live verification**: VoiceHR's Google project **still** returns the
+    documented `403 PERMISSION_DENIED` (re-confirmed directly this session,
+    both via a raw evaluator call and via a real candidate-side browser
+    session against the rebuilt/redeployed `voicehr` image) — unrelated to
+    this change, not worked around, provider not changed, per this task's
+    own explicit instructions. What *was* verified live and honestly claimed:
+    the rewritten, longer system prompt builds without error for both
+    languages and reaches Gemini Live's real connect call cleanly (proven
+    both by `test_interview_prompt.py` executing the actual prompt-building
+    code path, and by one real browser session that reached the exact same
+    pre-existing 403 — not some new error the prompt rewrite might have
+    introduced); the existing milestone-30 bounded-reconnect behavior
+    (status reset to `pending`, `retry_count` incremented) still works
+    correctly with the new prompt in place; the rebuilt `recruitment-workflow`
+    frontend's Report Detail page renders correctly against the one real
+    stored report in the current demo data (screenshotted; that specific
+    report's own `evaluation_status` is `"failed"`, pre-existing per
+    milestone 28's own notes, so it correctly shows "no scores available"
+    rather than the new dimension grid — expected, not a defect). A genuine
+    controlled interview producing a real, completed evaluation with a real
+    CEFR verdict — the only way to observe the new interaction-dimension
+    row actually populated, or the prompt's adaptive/language-purity/
+    anti-injection behavior for real — remains blocked by the same external,
+    non-code Google-side access denial documented since milestone 25;
+    nothing here changes that. Confirmed via direct `psql` row counts
+    (`jobs`/`applications`/`match_results`: 2/3/16, unchanged) that none of
+    this session's work touched the live demo data.
+
+32. **VoiceHR interview quality benchmark + recruiter-facing assessment
+    explanation.** Two halves, both scoped to *using and explaining* the
+    milestone-31 rubric — no interview-flow redesign, no change to resume
+    scoring or `language_gate.py`'s threshold logic, exactly as instructed.
+
+    **Benchmark runner** (`services/voicehr/tests/`): `golden_cases.py` (data)
+    and `benchmark_runner.py` (analysis + CLI) are now split out of the test
+    file that uses them, so the benchmark is runnable two ways — as pytest
+    (`test_interview_quality.py`, runs in CI with everything else, no live
+    Gemini) and standalone (`cd services/voicehr && python -m
+    tests.benchmark_runner`, writes `tests/benchmark_results/latest.{json,md}`
+    and exits non-zero on any failure). Every case mocks
+    `evaluator._evaluate_with_gemini` directly with a hand-written response;
+    `analyze_case()` checks four things per case, not just the CEFR band:
+    dimension coverage (all five real rubric dimensions present in the
+    result), missing/invalid top-level fields, "obvious contradictions"
+    (e.g. `evaluation_status: "completed"` with a null `cefr_level`,
+    `evaluation_status: "insufficient_evidence"` with a real CEFR still
+    attached, `pronunciation_score` non-null — checked against a fixed
+    disallowed-fields list too, in case a model response ever tried to sneak
+    a `reasoning`/`chain_of_thought` key through), and the expected outcome
+    itself. `REQUIRED_PASS_RATE = 1.0` is the explicit, reasoned threshold:
+    every case is fully deterministic (a fixed mocked response, never a real
+    model call), so there is no meaningful "acceptable" partial pass rate —
+    a drop below 100% always means either a real pipeline regression or a
+    fixture that needs updating, never noise to tolerate. Golden cases grew
+    from 9 to 13 (one clean case per requested scenario, not dozens of
+    near-duplicates): added `b2_independent_sample`, `c1_advanced_sample`
+    (narrowed from the old combined "strong_sample"), `c2_exceptional_sample`,
+    `fluent_but_poor_relevance` (linguistically capable but off-topic --
+    demonstrates that a 25%-weighted comprehension score of 10 still pulls an
+    otherwise-C1-looking profile down to B1, i.e. the weighting genuinely
+    matters, not just cosmetically), and `strong_vocab_weak_grammar`
+    (vocabulary's smaller 15% weight doesn't let it fully compensate for
+    weak 20%-weighted grammar); enhanced `candidate_switching_language` into
+    `repeated_language_switching` (multiple switch-backs across turns, not
+    one). Full CEFR range A1→C2 is now covered by a clean, distinct case
+    each. A committed `tests/benchmark_results/latest.{json,md}` snapshot
+    exists as a concrete, browsable artifact (per this task's own "optional
+    benchmark artifact" section) — illustrative of the runner's own output
+    shape, not automatically kept in sync on every future run.
+
+    **Assessment contract hardening** (`backend/api/routes/report.py`): two
+    real fixes, found by re-reading the contract this task's own section 3
+    asked for, not by assumption. (1) `pronunciation_score`/
+    `pronunciation_intelligibility`/`pronunciation` in `get_report()`'s
+    output are now hard-coded `None`, unconditionally — previously they
+    passed through whatever the `reports.pronunciation_score` *column*
+    happened to contain, which meant a handful of reports scored before the
+    milestone-31 rubric pass (when pronunciation genuinely was written) could
+    still render a real number, quietly contradicting the "never fabricated"
+    contract for exactly the reports old enough to test it. Enforced at read
+    time now, not just by what the current evaluator happens to write. (2) A
+    new derived field, `sufficient_evidence: true | false | null`
+    (`true` for `"completed"`, `false` for `"insufficient_evidence"`, `null`
+    — genuinely unknown, not a guess either way — for `"failed"`), gives the
+    frontend (and any future consumer) an explicit boolean instead of a
+    string-comparison against `evaluation_status` everywhere. VoiceHR-only,
+    same reasoning as milestone 31's `interaction_score`: never added to the
+    cross-service webhook schema (`shared/schemas.InterviewAssessment`),
+    since RWS's own gate logic never needs it — `evaluation_status` already
+    reaching `"insufficient_evidence"` there is sufficient, and the webhook's
+    own architecture (signing, dedup, transport) is untouched, per this
+    task's explicit "do not redesign the interview flow" instruction read
+    together with the prior session's "do not change webhook architecture."
+
+    **Recruiter Report Detail redesign** (`ReportDetailPage.jsx`): reordered
+    and restructured into exactly the hierarchy this task specified —
+    **Language Screening** (Required/Assessed/Result — RWS's own
+    deterministic verdict, `language_gate.py`, never recomputed here) →
+    **Assessment Quality** (a status badge plus, for `insufficient_evidence`,
+    the exact explanation text this task named verbatim: "VoiceHR did not
+    collect enough usable language evidence to assign a reliable CEFR
+    level.") → **Language Profile** (the five real dimensions, each shown as
+    a qualitative band — Excellent/Strong/Good/Fair/Limited, a new
+    `describeDimensionScore()` helper, purely display sugar, never used to
+    compute anything — plus a short evidence-backed quote/note pulled from
+    the evaluator's own `evidence` array when one exists for that dimension;
+    only shown once `evaluation_status === "completed"`, since a per-dimension
+    breakdown during `insufficient_evidence` would risk implying numbers that
+    aren't trustworthy yet) → Strengths/Concerns → Recording → Transcript
+    (always available, unchanged). `AssessmentPanel` (still used by
+    ApplicationsPage/InterviewsPage's compact row-expansion view, a
+    deliberately different, denser context this task didn't ask to redesign)
+    dropped its permanently-`null` Pronunciation row for the same "why is
+    this always blank" reason, and now shows the exact
+    `INSUFFICIENT_EVIDENCE_EXPLANATION` text too, with a distinctly-toned
+    (`warning`, never `danger`) badge — inconclusive is never styled like
+    failed, anywhere. `noteText`/evidence rendering already existed and were
+    reused, not reinvented.
+
+    **Report consistency, the explicit ask in this task's own section 7**:
+    found and fixed a real, concrete duplicate-label bug —
+    `ReportDetailPage.jsx` had its own local `LANGUAGE_GATE_RESULT_TEXT`
+    object showing `passed → "Meets requirement"`, while
+    `constants/language.js`'s shared `LANGUAGE_GATE_LABELS` (used by
+    ApplicationsPage's own column) showed the *same* status as `"Passed"` —
+    two different words for one state, exactly the anti-pattern this task
+    warned against. Fixed by deleting the duplicate and updating the one
+    shared source (`LANGUAGE_GATE_LABELS.passed` is now `"Meets
+    requirement"` everywhere). Also consolidated `EVALUATION_STATUS_LABELS`/
+    `TONE` (previously defined three times — once each in `AssessmentPanel.jsx`,
+    `ApplicationsPage.jsx`'s own `INTERVIEW_STATUS_LABELS`, and
+    `InterviewsPage.jsx`'s own copy of the same) into one shared export in
+    `constants/language.js`, reused by all three plus a new "Status" column
+    on `ReportsPage`'s own list (previously the only page with no way to
+    tell an `insufficient_evidence`/`failed` row apart from any other blank
+    CEFR/score pair). `InterviewsPage`'s compact `formatScoreSummary()` also
+    stopped collapsing `insufficient_evidence` into the same bare "—" a
+    not-yet-interviewed row would show.
+
+    **Tests**: Backend — `test_interview_quality.py` (15 cases, up from 9:
+    13 golden cases + 2 whole-benchmark-runner tests, one of which pins that
+    two consecutive runs produce byte-identical CEFR results, i.e. no hidden
+    state/randomness). `test_report.py` gained 5 new tests for exactly this
+    task's own list: structured dimension payload roundtrip (long-form +
+    short-alias keys both survive a write→read cycle), pronunciation always
+    null even when a legacy row's own column holds a stale non-null value,
+    an old-style stored report (no `interaction_score`, default
+    `evaluation_status`) still renders without a crash or a fabricated
+    value, `insufficient_evidence` surviving the *full* `process_interview`
+    → `reports` table → `get_report()` pipeline (not just a unit test of
+    `evaluator.py` in isolation) with the correct combined `inconclusive`
+    flag reaching the RWS-webhook helper, and a fixed-list check that no
+    `reasoning`/`chain_of_thought`/`internal_notes`/`raw_response`/`thinking`
+    key ever appears in a response. Frontend — since this project has never
+    introduced a JS test framework (Jest/Vitest/RTL), relying on real-browser
+    Playwright verification throughout instead, added 13 framework-free unit
+    tests for `constants/language.js`'s pure logic
+    (`src/constants/language.test.js`, run via Node's own built-in test
+    runner — `node --test src/constants/language.test.js`, zero new
+    dependencies/config) covering the label/tone consistency, the exact
+    insufficient-evidence wording, `describeDimensionScore`'s band
+    boundaries, and `describeLanguageGate`'s null-safety across every gate
+    status. The seven rendering scenarios this task's own section 8 asked
+    for (passed/failed/pending/needs_review/insufficient-evidence/
+    no-requirement/missing-optional-dimension-data) were instead verified
+    live, in real Chromium, using Playwright's `page.route()` to inject
+    deterministic synthetic report/application fixtures — the same
+    "deterministic fixtures instead of live Gemini" instruction section 10
+    gives for live verification, applied to satisfy both sections in one
+    pass rather than duplicating the effort. VoiceHR: 205 passed (was 194).
+    RWS: 112 passed (unchanged — untouched this session). Repo-root
+    `tests/unit/`: 139 passed (unchanged). Repo-root integration
+    (`test_recruitment_workflow.py`): 96 passed (unchanged), run only after
+    re-confirming the `TEST_DATABASE_URL` safety guard still fails closed
+    with it unset.
+
+    **Live verification**: rebuilt/redeployed both `recruitment-workflow`
+    and `voicehr`. All six synthetic Report Detail states rendered exactly
+    as designed (screenshotted) with zero console errors across the whole
+    pass. The one real, persisted `evaluation_status: "failed"` demo report
+    (pre-existing since milestone 28) still renders correctly post-redesign
+    — "Failed" quality badge, the existing failure explanation text,
+    transcript still reachable below. `ApplicationsPage`'s language-gate
+    column confirmed to no longer say "Passed" anywhere (now consistently
+    "Meets requirement"). `ReportsPage`'s new Status column renders. A
+    375px-wide mobile viewport of the real report page showed no horizontal
+    overflow. Two console 404s were observed during the consistency pass —
+    both confirmed (via direct URL inspection) to be the already-documented
+    orphaned-candidate identity lookup (`0a699701-...`, see Known
+    limitations below), not a new regression. VoiceHR's Gemini access is
+    still denied (documented since milestone 25, unrelated to this task,
+    not worked around) — no genuine, freshly-completed interview exists to
+    show the new Language Profile section against real (not fixture) data;
+    everything in this milestone's own live-verification pass used either
+    the one pre-existing real report or explicit, clearly-synthetic
+    fixtures, never a faked "success." Confirmed via direct `psql` row
+    counts (`jobs`/`applications`/`match_results`: 2/3/16, unchanged) that
+    none of this session's work touched the live demo data.
+33. **Post-VoiceHR interview stage, first backend slice: `interview_rounds`
+    table + create endpoint.** A prior design-only session (no code) worked
+    out how to represent a technical/managerial interview stage for
+    candidates whose language gate has cleared, without widening
+    `Application.status` or touching `MatchResult`/the language gate itself
+    — the design settled on a parallel, one-to-many `interview_rounds` table,
+    the same relationship the language gate already has to the state
+    machine, rather than new `Application.status` values (which would have
+    rippled into `_DECIDABLE_STATUSES`, the frontend's `STATUS_LABELS`/
+    `STATUS_TONE`/`STATUS_ORDER`, and the Dashboard's pipeline-by-status
+    breakdown, for no real benefit). This session implemented exactly the
+    first slice of that design: migration `0007` (new
+    `recruitment.interview_rounds` table — `round_type` `technical`/
+    `managerial`, `status` `scheduled`/`completed`/`cancelled`, `outcome`
+    `pass`/`fail`/`needs_review`/null, `interviewer_name` free text,
+    `scheduled_at`, `notes`, `created_by` → `recruiters.id`, paired `CHECK`
+    constraint enforcing `outcome` is set if-and-only-if `status =
+    'completed'`), the `InterviewRound` ORM model + `create_interview_round`/
+    `list_interview_rounds_for_application` in `db.py`, the
+    `InterviewRoundResponse`/`InterviewRoundRequest` schemas, and
+    `POST /v1/applications/{id}/interview-rounds`. That endpoint enforces two
+    gates by reusing existing checks rather than duplicating logic: the
+    application must not already be `accepted`/`rejected`, and
+    `language_gate.status` must not be `pending`/`failed`/`needs_review`
+    (the exact same `_language_gate_info`/`BLOCKING_STATUSES` `accept`
+    already uses) — this is deliberately "for candidates who pass the
+    language gate," enforced at the API boundary, not just a UI convention.
+    `interviewer_name` is a plain `TEXT` column, not a foreign key: this
+    project has exactly one seeded recruiter account and no interviewer/user
+    directory (CLAUDE.md's non-negotiable decisions), so there is no table to
+    reference. `_application_response` (shared by every `Application` read
+    path — `select`, `accept`/`reject`, `invite`, `resend-invite`, both
+    `GET .../applications` routes) now also fetches and embeds
+    `interview_rounds`, one query per application — accepted deliberately
+    rather than batched, at this project's demo scale (a handful of
+    applications total). Only creation exists so far; reschedule/complete/
+    cancel are the next slice (see `[NEXT]`) — deliberately deferred rather
+    than built speculatively ahead of a real need to exercise them.
+
+    **Verification**: migration applied cleanly to both the live demo
+    database and the disposable `company_second_brain_test` database (same
+    `alembic upgrade head`, both confirmed at `0007` via `\d
+    recruitment.interview_rounds` — table owned by `recruitment_role`, same
+    as every other table, no separate `GRANT` needed). RWS unit suite: 123
+    passed (was 112 — the new `test_interview_rounds.py` plus a monkeypatch
+    addition to every existing test that exercises `_application_response`,
+    since it now has one more dependency to stub). Safe integration suite
+    (`TEST_DATABASE_URL` pointed at `company_second_brain_test`, never the
+    live database, per `db_safety.py`'s guard): the existing 96
+    `test_recruitment_workflow.py` tests still pass unchanged, plus 9 new
+    `test_interview_rounds_integration.py` tests covering what the
+    monkeypatched suite structurally cannot — the DB `CHECK` constraints
+    really are enforced by Postgres (invalid `round_type`, invalid `status`,
+    invalid `outcome`, both directions of the paired outcome/status
+    constraint), and one real end-to-end create → persist → embedded-on-read
+    round trip through the real API and a real session. Confirmed via direct
+    `psql` row counts that the live demo database's `jobs`/`applications`/
+    `match_results` counts (2/3/16) and `interview_rounds` count (0) are
+    exactly as before — this session only added schema, never demo data —
+    and smoke-tested the live API (`GET /v1/applications` with a real JWT)
+    to confirm every real application row now carries `"interview_rounds":
+    []` with zero errors.
+34. **Interview-round lifecycle actions: reschedule, complete, cancel.**
+    Closes out the post-VoiceHR interview stage's first vertical slice
+    (milestone 33 landed only creation). Three verb-named `POST` endpoints,
+    matching this file's existing style (`accept`/`reject`/`invite`/
+    `resend-invite`), not a generic `PATCH`:
+    `POST .../interview-rounds/{round_id}/reschedule` (updates `scheduled_at`
+    only), `.../complete` (sets `outcome` — required, `Literal["pass",
+    "fail", "needs_review"]` — plus optional `notes`, `status →
+    'completed'`), and `.../cancel` (`status → 'cancelled'`, no body) — all
+    three only from `status='scheduled'`, all three terminal-in-effect
+    (`completed`/`cancelled` have no path back to `scheduled`; reschedule
+    is the only repeatable one). Each is a `db.py` helper using the exact
+    same atomic conditional-`UPDATE ... WHERE status = 'scheduled'` pattern
+    `record_invite_attempt`/`transition_application` already use — race-safe
+    under concurrent duplicate requests, returns `None` on a no-op so the
+    route can distinguish "doesn't exist" (checked first, via a new
+    `get_interview_round` + `_get_own_interview_round`, which also confirms
+    the round belongs to the `application_id` in the URL — a mismatch reads
+    as 404, not a cross-application leak) from "exists but not
+    `scheduled`" (409, naming the round's actual current status). `complete`'s
+    request schema requires a valid `outcome` value before ever reaching the
+    DB — matching migration 0007's paired outcome/status `CHECK` constraint
+    at the API boundary, not just relying on the constraint to turn a bad
+    request into a raw 500. Omitting `notes` on `complete` leaves whatever
+    was recorded at scheduling time untouched (only overwritten when a
+    caller actually supplies a new value) rather than clobbering it with a
+    null. None of the three touch `Application.status`, `MatchResult`, or
+    the language gate — the same boundary milestone 33 already established.
+
+    **Verification**: RWS unit suite: 135 passed (was 123 — 12 new tests in
+    `test_interview_rounds.py` covering each action's success path, its
+    409-when-not-scheduled path with the correct current status named, its
+    404-for-unknown-round path, its 404-when-the-round-belongs-to-a-
+    different-application path, and `complete`'s 422-before-touching-the-db
+    for an invalid outcome value). Safe integration suite (`TEST_DATABASE_URL`
+    → `company_second_brain_test`, never the live database): the existing
+    96 + 9 tests still pass unchanged, plus 8 new real-Postgres tests in
+    `test_interview_rounds_integration.py` — a real reschedule persisting a
+    new `scheduled_at`, a real complete persisting `outcome`+`notes` (proof
+    the paired `CHECK` constraint is satisfied by the real `UPDATE`, not
+    just assumed), a real complete-without-notes preserving the
+    scheduling-time notes, a real cancel persisting `status='cancelled'`,
+    a real reschedule blocked after a real complete (409, "completed" named),
+    a real cancel blocked after a real cancel (409, "cancelled" named), a
+    real cross-application 404, and all three actions 404ing together for a
+    wholly unknown round/application pair — 113 total, up from 105. The DB
+    `CHECK`-constraint tests milestone 33 already wrote
+    (`test_check_constraint_rejects_completed_without_outcome`,
+    `..._rejects_outcome_set_while_still_scheduled`, etc.) already cover
+    this task's own "still gets rejected by the DB constraint even if
+    application-level validation is ever bypassed" verification bar — not
+    duplicated here. Confirmed via direct `psql` row counts that the live
+    demo database's `jobs`/`applications`/`match_results`/`interview_rounds`
+    counts (2/3/16/0) are exactly as before this session — deliberately
+    did **not** create a live round against real demo data for this pass:
+    every real-Postgres behavior (create, reschedule, complete, cancel, all
+    five `CHECK` constraints) is already proven against the disposable test
+    database, and this project has no delete endpoint for any resource by
+    design, so a live create here would have left a permanent, unrequested
+    change to visible demo state rather than a reversible smoke test.
+
 ---
 
 ## [NEXT]
 
-**VoiceHR invitation delivery UX + explicit resend/recovery flow.** Not
-started. Scoped by an earlier session's own explicit instruction not to
-build a large delivery subsystem up front — milestone 27 deliberately
-shipped only the minimum needed for automatic delivery to be correct and
-safe to retry (`invite_email_sent_at`/`invite_email_error`, the shared
-`deliver_invitation_email`, the existing explicit-resend route wired to use
-it). What it did *not* build, and what this next pass should look at:
-whether/how a recruiter should be able to see that a specific invite's email
-delivery failed (today it's visible only as a `502` at the moment of the
-click — there's no persisted-state indicator on the Applications page
-afterward, e.g. after a page reload), whether the existing `POST
-/interview/{token}/invite` explicit-resend route should be exposed through
-the recruiter frontend at all (or through a different mechanism), and
-whether `invite_email_error` needs to be surfaced anywhere recruiter-facing
-(currently VoiceHR-internal-only, by design). Inspect the current
-`ApplicationResponse`/`ApplicationsPage` shape first — there is no
-`invite_email_status` field on that response today, so this may need one,
-following the same "add only if actually required" discipline milestone 27
-itself used. **One environment fact still blocks a full manual walkthrough
-of the underlying feature**, independent of this next task's own scope:
-`RESEND_API_KEY` needs a real value before a live invite email can actually
-be observed arriving (see Known Limitations / Demo readiness above) — the
-demo data itself no longer needs regenerating, that part is done.
+**Interview Rounds frontend surface** (see `FRONTEND_HANDOFF.md`'s own
+`[NEXT]` for exact scope).
+
+Milestones 33-34 finished the entire backend feature — create, reschedule,
+complete, cancel, all four endpoints tested against both a mocked DB and
+real Postgres — and it is currently **invisible in the recruiter UI**: no
+page shows `interview_rounds`, and no page can call any of the four
+endpoints. That is a real, concrete frontend gap, not a manufactured one
+— the same backend-lands-first-then-gets-a-UI pattern this project already
+followed for the language gate (backend milestone 26, UI following in later
+milestones) and for VoiceHR resend (backend + UI same milestone, 29).
+`FRONTEND_HANDOFF.md`'s own `[NEXT]` used to say frontend work was done
+"until a real, concrete gap shows up" during a check of this file — this is
+that gap.
+
+What remains in Known Limitations above beyond this is external, not
+implementable here: VoiceHR's Gemini access needs Google support/billing
+action, and automatic invite emails need a real `RESEND_API_KEY`
+configured — neither is a code change. Everything else logged there (no
+pagination, Second Brain's missing test suite, the write-only
+`candidate_feedback` sink, VoiceHR's unauthenticated `admin.html`) is
+deliberately deferred per this project's own "no infra/refactor ahead of
+demonstrated need" rule, not a gap waiting on the next session.

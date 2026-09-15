@@ -57,3 +57,13 @@
   font-size: var(--font-size-base);
   color: var(--v2-text-muted);
 }
+
+/* Deliberately the same neutral, non-alarming treatment as assessmentFailedText's
+   own text color -- not the "failed" tone. Insufficient evidence is not a failure;
+   the badge above already carries the one visual distinction that matters (warning,
+   not danger). */
+.assessmentInsufficientText {
+  margin: 0;
+  font-size: var(--font-size-base);
+  color: var(--v2-text-muted);
+}

@@ -120,6 +120,7 @@ def test_multiple_applications_across_jobs_carry_correct_job_title_and_order(cli
         main, "list_all_applications",
         lambda db: [(newest, "Backend Engineer"), (middle, "Data Analyst"), (oldest, "Backend Engineer")],
     )
+    monkeypatch.setattr(main, "list_interview_rounds_for_application", lambda db, aid: [])
 
     test_client, recruiter_id = client
     resp = test_client.get("/v1/applications", headers=_auth_header(recruiter_id))
@@ -134,7 +135,7 @@ def test_multiple_applications_across_jobs_carry_correct_job_title_and_order(cli
         "application_id", "job_id", "match_result_id", "candidate_id", "status",
         "selected_at", "invite_attempt_number", "invited_at", "interview_status",
         "interview_assessment", "interview_completed_at", "decided_at", "job_title",
-        "language_gate",
+        "language_gate", "interview_rounds",
     }
 
 
@@ -146,6 +147,7 @@ def test_interview_assessment_and_status_pass_through(client, monkeypatch):
         interview_completed_at=datetime.now(timezone.utc),
     )
     monkeypatch.setattr(main, "list_all_applications", lambda db: [(application, "Backend Engineer")])
+    monkeypatch.setattr(main, "list_interview_rounds_for_application", lambda db, aid: [])
 
     test_client, recruiter_id = client
     resp = test_client.get("/v1/applications", headers=_auth_header(recruiter_id))
@@ -166,6 +168,7 @@ def test_job_scoped_applications_endpoint_still_works_and_has_no_job_title(clien
 
     monkeypatch.setattr(main, "get_job", lambda db, jid: SimpleNamespace(id=jid) if jid == job_id else None)
     monkeypatch.setattr(main, "list_applications_for_job", lambda db, jid: [application] if jid == job_id else [])
+    monkeypatch.setattr(main, "list_interview_rounds_for_application", lambda db, aid: [])
 
     test_client, recruiter_id = client
     resp = test_client.get(f"/v1/jobs/{job_id}/applications", headers=_auth_header(recruiter_id))
@@ -181,6 +184,7 @@ def test_job_scoped_applications_endpoint_still_works_and_has_no_job_title(clien
         "application_id", "job_id", "match_result_id", "candidate_id", "status",
         "selected_at", "invite_attempt_number", "invited_at", "interview_status",
         "interview_assessment", "interview_completed_at", "decided_at", "language_gate",
+        "interview_rounds",
     }
 
 

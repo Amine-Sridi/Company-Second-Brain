@@ -1,5 +1,6 @@
 import asyncio
 import json
+import threading
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 
@@ -420,8 +421,11 @@ def test_gemini_live_upstream_silence_triggers_watchdog(tmp_path):
 def test_websocket_session_completes_and_processes(client, db):
     token = create_interview(db, token="ws-token", status="active")
 
-    async def fake_pipeline(websocket, token, language, audio_path, *, candidate_name):
+    async def fake_pipeline(websocket, token, language, audio_path, *, candidate_name,
+                             resume_transcript=None, resume_duration_seconds=0.0):
         assert candidate_name == "Test User"
+        assert resume_transcript == []
+        assert resume_duration_seconds == 0.0
         await websocket.send_text('{"type":"ready"}')
         message = await websocket.receive()
         assert message["text"] == '{"type":"end"}'
@@ -445,3 +449,150 @@ def test_websocket_rejects_non_active_interview(client, db):
             websocket.receive()
         except Exception as exc:
             assert "1008" in str(exc) or "WebSocketDisconnect" in type(exc).__name__
+
+
+def test_websocket_rejects_completed_interview(client, db):
+    """A completed interview cannot be resumed -- covers the same 1008 path as the
+    pending case above, for the genuinely-finished terminal statuses."""
+    token = create_interview(db, token="completed-ws-token", status="completed")
+    with client.websocket_connect(f"/ws/interview/{token}") as websocket:
+        try:
+            websocket.receive()
+        except Exception as exc:
+            assert "1008" in str(exc) or "WebSocketDisconnect" in type(exc).__name__
+
+
+# ---------------------------------------------------------------------------
+# Reconnect: recoverable disconnect persists the transcript-so-far, and the next
+# connection attempt on the same interview picks it back up.
+# ---------------------------------------------------------------------------
+
+def test_recoverable_disconnect_persists_transcript_and_does_not_process(client, db):
+    token = create_interview(db, token="ws-token", status="active")
+
+    async def fake_pipeline(websocket, token, language, audio_path, *, candidate_name,
+                             resume_transcript=None, resume_duration_seconds=0.0):
+        return [{"role": "user", "text": "partial answer", "timestamp": 3}], 45.0, "browser_disconnect"
+
+    with patch("backend.api.routes.session.run_sarah_pipeline", new=fake_pipeline), \
+         patch("backend.api.routes.session.process_interview", new=AsyncMock()) as process:
+        with client.websocket_connect(f"/ws/interview/{token}"):
+            pass
+
+    # A recoverable failure must never reach process_interview -- no evaluation, no
+    # report, no webhook for a session that never actually concluded.
+    process.assert_not_awaited()
+    row = db.execute("SELECT * FROM interviews WHERE token = ?", (token,)).fetchone()
+    assert row["status"] == "pending"
+    assert row["retry_count"] == 1
+    assert json.loads(row["pending_transcript"]) == [
+        {"role": "user", "text": "partial answer", "timestamp": 3}
+    ]
+    assert row["pending_duration_seconds"] == 45.0
+
+
+def test_reconnect_forwards_pending_transcript_and_merges_result(client, db):
+    """The next connection attempt on the same (still-pending, now reactivated)
+    interview must load the prior leg's transcript/duration and pass them through --
+    and the merged result (built by the pipeline itself; see gemini_live.py) is what
+    reaches process_interview, not just the new leg's own turns."""
+    token = create_interview(db, token="ws-token", status="active", retry_count=1)
+    db.execute(
+        "UPDATE interviews SET pending_transcript = ?, pending_duration_seconds = ? WHERE token = ?",
+        (json.dumps([{"role": "user", "text": "partial answer", "timestamp": 3}]), 45.0, token),
+    )
+    db.commit()
+
+    captured = {}
+
+    async def fake_pipeline(websocket, token, language, audio_path, *, candidate_name,
+                             resume_transcript=None, resume_duration_seconds=0.0):
+        captured["resume_transcript"] = resume_transcript
+        captured["resume_duration_seconds"] = resume_duration_seconds
+        await websocket.send_text('{"type":"ready"}')
+        await websocket.receive()
+        merged = list(resume_transcript) + [{"role": "user", "text": "second leg", "timestamp": 1}]
+        return merged, resume_duration_seconds + 30.0, "completed"
+
+    with patch("backend.api.routes.session.run_sarah_pipeline", new=fake_pipeline), \
+         patch("backend.api.routes.session.process_interview", new=AsyncMock()) as process:
+        with client.websocket_connect(f"/ws/interview/{token}") as websocket:
+            assert websocket.receive_json() == {"type": "ready"}
+            websocket.send_text('{"type":"end"}')
+
+    assert captured["resume_transcript"] == [{"role": "user", "text": "partial answer", "timestamp": 3}]
+    assert captured["resume_duration_seconds"] == 45.0
+    process.assert_awaited_once()
+    call_args = process.call_args.args
+    merged_transcript, merged_duration = call_args[1], call_args[3]
+    assert merged_transcript == [
+        {"role": "user", "text": "partial answer", "timestamp": 3},
+        {"role": "user", "text": "second leg", "timestamp": 1},
+    ]
+    assert merged_duration == 75.0
+
+
+def test_disconnect_beyond_retry_budget_leaves_interview_active(client, db):
+    """Once the shared reconnect budget is exhausted, a further disconnect must not
+    reset status again -- the interview simply stays 'active' and unreachable rather
+    than looping forever, and never gets a report (see deps.py for the /start-side
+    half of this same bound)."""
+    from backend.database import MAX_INTERVIEW_RECONNECTS
+
+    token = create_interview(db, token="ws-token", status="active", retry_count=MAX_INTERVIEW_RECONNECTS)
+
+    async def fake_pipeline(websocket, token, language, audio_path, *, candidate_name,
+                             resume_transcript=None, resume_duration_seconds=0.0):
+        return [{"role": "user", "text": "one more try", "timestamp": 1}], 10.0, "browser_disconnect"
+
+    with patch("backend.api.routes.session.run_sarah_pipeline", new=fake_pipeline), \
+         patch("backend.api.routes.session.process_interview", new=AsyncMock()) as process:
+        with client.websocket_connect(f"/ws/interview/{token}"):
+            pass
+
+    process.assert_not_awaited()
+    row = db.execute("SELECT * FROM interviews WHERE token = ?", (token,)).fetchone()
+    assert row["status"] == "active"
+    assert row["retry_count"] == MAX_INTERVIEW_RECONNECTS
+    assert row["pending_transcript"] is None
+
+
+# ---------------------------------------------------------------------------
+# Single-owner guard: two simultaneous sockets cannot independently own one
+# interview.
+# ---------------------------------------------------------------------------
+
+def test_second_concurrent_websocket_for_same_interview_is_rejected(client, db):
+    token = create_interview(db, token="concurrent-token", status="active")
+    entered = threading.Event()
+    release = threading.Event()
+
+    async def slow_pipeline(websocket, token, language, audio_path, *, candidate_name,
+                             resume_transcript=None, resume_duration_seconds=0.0):
+        entered.set()
+        await websocket.send_text('{"type":"ready"}')
+        while not release.is_set():
+            await asyncio.sleep(0.01)
+        await websocket.receive()
+        return [{"role": "user", "text": "hi", "timestamp": 1}], 5.0, "completed"
+
+    with patch("backend.api.routes.session.run_sarah_pipeline", new=slow_pipeline), \
+         patch("backend.api.routes.session.process_interview", new=AsyncMock()) as process:
+        with client.websocket_connect(f"/ws/interview/{token}") as first:
+            assert first.receive_json() == {"type": "ready"}
+            assert entered.wait(timeout=2), "first connection's pipeline never started"
+
+            # A second connection attempt for the exact same token, while the first
+            # is still bridging it, must be rejected immediately -- never allowed to
+            # start its own concurrent pipeline.
+            with client.websocket_connect(f"/ws/interview/{token}") as second:
+                message = second.receive_json()
+                assert message["type"] == "already_active"
+
+            release.set()
+            first.send_text('{"type":"end"}')
+
+    process.assert_awaited_once()
+    row = db.execute("SELECT * FROM interviews WHERE token = ?", (token,)).fetchone()
+    # The rejected second connection never touched interview state.
+    assert row["retry_count"] == 0

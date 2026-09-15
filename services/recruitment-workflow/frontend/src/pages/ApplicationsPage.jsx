@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { Link, useParams } from "react-router-dom";
 import { getJobs } from "../api/jobs.js";
-import { getApplications, invite, accept, reject } from "../api/applications.js";
+import { getApplications, invite, resendInvite, accept, reject } from "../api/applications.js";
 import { ApiError } from "../api/client.js";
 import { useCandidateIdentity } from "../hooks/useCandidateIdentity.js";
 import { usePolling } from "../hooks/usePolling.js";
@@ -10,21 +10,33 @@ import StatusBadge from "../components/StatusBadge.jsx";
 import EmptyState from "../components/EmptyState.jsx";
 import AssessmentPanel from "../components/AssessmentPanel.jsx";
 import { STATUS_LABELS, STATUS_TONE } from "../constants/applicationStatus.js";
-import { LANGUAGE_GATE_LABELS, LANGUAGE_GATE_TONE, describeLanguageGate } from "../constants/language.js";
+import {
+  EVALUATION_STATUS_LABELS,
+  LANGUAGE_GATE_LABELS,
+  LANGUAGE_GATE_TONE,
+  describeLanguageGate,
+} from "../constants/language.js";
 import styles from "./ApplicationsPage.module.css";
 
 const POLL_INTERVAL_MS = 7000;
 
-const INTERVIEW_STATUS_LABELS = {
-  completed: "Completed",
-  inconclusive: "Inconclusive",
-  failed: "Failed",
-};
+// application.interview_status is RWS's own coarse field (db.py: only ever
+// "completed"/"inconclusive"/"failed", never "insufficient_evidence" -- that finer
+// distinction lives one level down, inside interview_assessment.evaluation_status,
+// shown via AssessmentPanel). Reuses the same label wording as
+// EVALUATION_STATUS_LABELS for the three values both fields share, rather than a
+// second, separately-maintained copy of identical text.
+const INTERVIEW_STATUS_LABELS = EVALUATION_STATUS_LABELS;
 
-// Statuses RWS itself accepts an invite/resend-invite call for (main.py:
-// invite_application). Showing the button only here is a UX hint that mirrors this
-// rule -- the backend's own check is what's actually authoritative (§22).
-const INVITABLE_STATUSES = new Set(["selected", "invited"]);
+// Status RWS itself accepts an initial invite/retry call for (main.py:
+// invite_application, "selected" branch). Once "invited", further re-sends go
+// through the separate explicit resend endpoint instead (RESENDABLE_STATUSES below)
+// -- showing the right button for the right status is a UX hint that mirrors the
+// backend's own rules; the backend's own check is what's actually authoritative (§22).
+const INVITABLE_STATUSES = new Set(["selected"]);
+
+// Status RWS itself accepts an explicit resend call for (main.py: resend_invite).
+const RESENDABLE_STATUSES = new Set(["invited"]);
 
 // Statuses RWS itself accepts an accept/reject decision for (db.py:
 // _DECIDABLE_STATUSES). "accepted"/"rejected" are terminal -- once a status leaves
@@ -152,9 +164,25 @@ function ApplicationRow({ application, onUpdated }) {
   const identity = useCandidateIdentity(application.candidate_id);
   const [inviting, setInviting] = useState(false);
   const [inviteError, setInviteError] = useState(null);
+  // Ephemeral, component-scoped only -- RWS deliberately does not persist "last
+  // attempt failed" as a workflow status (a transient email failure leaves the
+  // application in "selected" with no new field to distinguish "never attempted"
+  // from "attempted and failed"; see handoff.md). Naturally reverts to a plain
+  // "Invite" button on reload, which is correct: reload means re-reading real
+  // backend state, and this label is deliberately not part of it.
+  const [lastInviteFailed, setLastInviteFailed] = useState(false);
+  const [resending, setResending] = useState(false);
+  const [resendError, setResendError] = useState(null);
+  const [resendSuccess, setResendSuccess] = useState(false);
   const [deciding, setDeciding] = useState(null); // null | "accept" | "reject"
   const [decideError, setDecideError] = useState(null);
   const [expanded, setExpanded] = useState(false);
+
+  useEffect(() => {
+    if (!resendSuccess) return undefined;
+    const timer = setTimeout(() => setResendSuccess(false), 4000);
+    return () => clearTimeout(timer);
+  }, [resendSuccess]);
 
   const displayName =
     identity.status === "ready"
@@ -164,7 +192,7 @@ function ApplicationRow({ application, onUpdated }) {
         : `Candidate ${application.candidate_id.slice(0, 8)}…`;
 
   const canInvite = INVITABLE_STATUSES.has(application.status);
-  const inviteLabel = application.status === "invited" ? "Resend Invite" : "Invite";
+  const canResend = RESENDABLE_STATUSES.has(application.status);
   const canDecide = DECIDABLE_STATUSES.has(application.status);
   const hasAssessment = application.interview_assessment != null;
   // RWS itself is the real authority (a 422 naming the reason is the backstop --
@@ -173,11 +201,13 @@ function ApplicationRow({ application, onUpdated }) {
   const gate = application.language_gate ?? { status: "not_required" };
   const languageGateBlocksAccept = gate.status === "pending" || gate.status === "failed" || gate.status === "needs_review";
   const canAccept = canDecide && !languageGateBlocksAccept;
-  // A decision (accept/reject) and an invite both mutate the same application row --
-  // disabling every action while any one is in flight avoids firing two conflicting
-  // requests for the same row at once. This is a UX safeguard only; RWS's own
-  // per-endpoint checks (409s) remain the real authority regardless.
-  const rowBusy = inviting || deciding !== null;
+  // A decision (accept/reject), an invite, and a resend all mutate/target the same
+  // application row -- disabling every action while any one is in flight avoids
+  // firing two conflicting requests for the same row at once, and is the first layer
+  // (alongside RWS's own server-side cooldown on resend) against double-click spam.
+  // This is a UX safeguard only; RWS's own per-endpoint checks (409s/429) remain the
+  // real authority regardless.
+  const rowBusy = inviting || resending || deciding !== null;
 
   async function handleInvite() {
     if (rowBusy || !canInvite) return;
@@ -187,12 +217,37 @@ function ApplicationRow({ application, onUpdated }) {
       // Real POST /v1/applications/{id}/invite. RWS itself gates this on the
       // application's current status (409 otherwise), looks up the candidate's
       // contact server-side, and calls VoiceHR -- none of that is duplicated here.
+      // While still "selected", this same call is also how the recruiter retries a
+      // previously failed send: RWS/VoiceHR reuse the same interview/token via their
+      // own idempotency key, so this never creates a duplicate interview.
       const updated = await invite(application.application_id);
+      setLastInviteFailed(false);
       onUpdated(updated);
     } catch (err) {
-      setInviteError(err instanceof ApiError ? err.message : "Failed to send invitation.");
+      setLastInviteFailed(true);
+      setInviteError(err instanceof ApiError ? err.message : "Invitation not sent.");
     } finally {
       setInviting(false);
+    }
+  }
+
+  async function handleResend() {
+    if (rowBusy || !canResend) return;
+    setResending(true);
+    setResendError(null);
+    setResendSuccess(false);
+    try {
+      // Real POST /v1/applications/{id}/resend-invite. Intentionally sends another
+      // email on the same VoiceHR interview/token -- never creates a new
+      // application/interview, and a failure here never reverts this application
+      // from "invited" (RWS itself enforces both; see main.py: resend_invite).
+      const updated = await resendInvite(application.application_id);
+      onUpdated(updated);
+      setResendSuccess(true);
+    } catch (err) {
+      setResendError(err instanceof ApiError ? err.message : "Failed to resend invitation.");
+    } finally {
+      setResending(false);
     }
   }
 
@@ -286,14 +341,34 @@ function ApplicationRow({ application, onUpdated }) {
         <td onClick={(event) => event.stopPropagation()}>
           <div className={styles.actions}>
             {canInvite && (
-              <button
-                type="button"
-                className={styles.inviteButton}
-                onClick={handleInvite}
-                disabled={rowBusy}
-              >
-                {inviting ? "Sending…" : inviteLabel}
-              </button>
+              <div className={styles.inviteGroup}>
+                {lastInviteFailed && !inviting && (
+                  <span className={styles.inviteFailedText}>Invitation not sent</span>
+                )}
+                <button
+                  type="button"
+                  className={styles.inviteButton}
+                  onClick={handleInvite}
+                  disabled={rowBusy}
+                >
+                  {inviting ? "Sending…" : lastInviteFailed ? "Retry" : "Invite"}
+                </button>
+              </div>
+            )}
+            {canResend && (
+              <div className={styles.inviteGroup}>
+                <span className={styles.inviteSentText}>
+                  {resendSuccess && !resending ? "Invitation resent" : "Invitation sent"}
+                </span>
+                <button
+                  type="button"
+                  className={styles.inviteButton}
+                  onClick={handleResend}
+                  disabled={rowBusy}
+                >
+                  {resending ? "Sending…" : "Resend invitation"}
+                </button>
+              </div>
             )}
             {canDecide && (
               <>
@@ -336,6 +411,16 @@ function ApplicationRow({ application, onUpdated }) {
           <td colSpan={5}>
             <div className={styles.error} role="alert">
               {inviteError}
+            </div>
+          </td>
+        </tr>
+      )}
+
+      {resendError && (
+        <tr>
+          <td colSpan={5}>
+            <div className={styles.error} role="alert">
+              {resendError}
             </div>
           </td>
         </tr>

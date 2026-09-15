@@ -1,9 +1,11 @@
 import json
 import os
 import tempfile
+from datetime import datetime
 from unittest.mock import AsyncMock, patch
 
 import pytest
+from fastapi import HTTPException
 
 from tests.conftest import (
     TEST_ADMIN_PASSWORD,
@@ -119,6 +121,144 @@ def test_get_report_includes_duration_recording_and_transcript(client, db):
         "available": True,
     }
     assert data["transcript"] == transcript
+
+
+# ---------------------------------------------------------------------------
+# Assessment contract (VoiceHR interview quality benchmark + recruiter-facing
+# assessment explanation): structured dimension payload, insufficient-evidence
+# pass-through, pronunciation always null, no hidden reasoning, backward
+# compatibility with reports stored before this rubric pass.
+# ---------------------------------------------------------------------------
+
+def test_get_report_structured_dimension_payload_roundtrip(client, db):
+    """Every real rubric dimension survives a full write (INSERT via the same
+    columns processing.py writes) -> read (get_report) roundtrip, under both its
+    long-form rubric key and its short legacy alias."""
+    token = create_interview(db, token="dimension-roundtrip-token")
+    row = db.execute("SELECT id FROM interviews WHERE token = ?", (token,)).fetchone()
+    db.execute(
+        """INSERT INTO reports (interview_id, report_token, overall_score, cefr_level, confidence,
+           inconclusive, fluency_score, vocabulary_score, grammar_score, pronunciation_score,
+           comprehension_score, interaction_score, strengths, concerns, evidence,
+           candidate_speaking_time, word_count, evaluation_status, created_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+        (row["id"], "dimension-report", 78, "B2", "High", 0,
+         74, 68, 71, None, 80, 66,
+         json.dumps([]), json.dumps([]), json.dumps([]), 300, 500, "completed",
+         datetime.utcnow().isoformat()),
+    )
+    db.commit()
+
+    response = client.get("/api/report/dimension-report")
+    assert response.status_code == 200
+    dims = response.json()["dimensions"]
+    assert dims["fluency_coherence"] == 74 and dims["fluency"] == 74
+    assert dims["vocabulary_range"] == 68 and dims["vocabulary"] == 68
+    assert dims["grammar_language_control"] == 71 and dims["grammar"] == 71
+    assert dims["comprehension_relevance"] == 80 and dims["comprehension"] == 80
+    assert dims["interaction_spontaneity"] == 66 and dims["interaction"] == 66
+
+
+def test_get_report_pronunciation_always_null_even_if_stored_nonnull(client, db):
+    """A legacy row that happens to have a stale non-null pronunciation_score (e.g.
+    scored before this rubric pass existed) must still render null -- the contract
+    ("never assessed without genuine audio evidence") is enforced at read time, not
+    just by what the current evaluator happens to write."""
+    token = create_interview(db, token="pronunciation-legacy-token")
+    row = db.execute("SELECT id FROM interviews WHERE token = ?", (token,)).fetchone()
+    # create_report's own default (74) simulates exactly this stale-legacy-value case.
+    report_token = create_report(db, row["id"], report_token="pronunciation-legacy-report")
+
+    stored = db.execute(
+        "SELECT pronunciation_score FROM reports WHERE report_token = ?", (report_token,)
+    ).fetchone()
+    assert stored["pronunciation_score"] == 74  # confirms the DB really does hold a stale non-null value
+
+    response = client.get(f"/api/report/{report_token}")
+    dims = response.json()["dimensions"]
+    assert dims["pronunciation_intelligibility"] is None
+    assert dims["pronunciation"] is None
+
+
+def test_get_report_old_stored_report_is_backward_compatible(client, db):
+    """A report row created before interaction_score/evaluation_status existed in
+    their current form (create_report's own helper never sets either) must still
+    render successfully, with graceful nulls/defaults rather than a KeyError or a
+    fabricated value."""
+    token = create_interview(db, token="legacy-report-token")
+    row = db.execute("SELECT id FROM interviews WHERE token = ?", (token,)).fetchone()
+    report_token = create_report(db, row["id"], report_token="legacy-report")
+
+    response = client.get(f"/api/report/{report_token}")
+    assert response.status_code == 200
+    data = response.json()
+    assert data["dimensions"]["interaction_spontaneity"] is None
+    assert data["dimensions"]["interaction"] is None
+    # evaluation_status defaults to 'completed' at the DB level (schema default) for
+    # a row this old -- still a valid, renderable state, not a crash.
+    assert data["evaluation_status"] == "completed"
+    assert data["sufficient_evidence"] is True
+
+
+def test_get_report_insufficient_evidence_survives_the_full_pipeline(client, db):
+    """process_interview -> reports table -> get_report(), end to end, for an
+    insufficient-evidence outcome -- not just a unit test of evaluator.py in
+    isolation. Confirms cefr/overall stay null and evaluation_status/
+    sufficient_evidence correctly reach the report a recruiter (or RWS, via the
+    identical row) actually reads."""
+    from backend.services.processing import process_interview
+    import asyncio
+
+    token = create_interview(db, token="insufficient-pipeline-token", external_reference_id="app-99")
+    scores = {
+        "overall_score": None, "cefr_level": None, "confidence": "Low",
+        "fluency_score": 40, "vocabulary_score": 38, "grammar_score": 35,
+        "pronunciation_score": None, "comprehension_score": 20, "interaction_score": 30,
+        "strengths": [], "concerns": [{"text": "Answers were consistently off-topic", "timestamp": "01:00"}],
+        "evidence": [], "candidate_speaking_time": 200, "word_count": 300,
+        "evaluation_status": "insufficient_evidence",
+    }
+    with patch("backend.services.processing.evaluate", new=AsyncMock(return_value=scores)), \
+         patch("backend.services.processing.notify_and_record_interview_result", new=AsyncMock()) as mock_notify:
+        asyncio.run(process_interview(
+            token, [{"role": "user", "text": "off topic", "timestamp": 5}] * 5,
+            "storage/recordings/x.webm", 420, "completed",
+        ))
+
+    row = db.execute(
+        "SELECT r.* FROM reports r JOIN interviews i ON r.interview_id = i.id WHERE i.token = ?", (token,)
+    ).fetchone()
+    assert row["evaluation_status"] == "insufficient_evidence"
+    assert row["overall_score"] is None
+    assert row["cefr_level"] is None
+    assert bool(row["inconclusive"]) is True
+
+    response = client.get(f"/api/report/{row['report_token']}")
+    data = response.json()
+    assert data["evaluation_status"] == "insufficient_evidence"
+    assert data["sufficient_evidence"] is False
+    assert data["cefr_level"] is None
+    assert data["overall_score"] is None
+    mock_notify.assert_called_once()
+    # notify_and_record_interview_result(conn, interview_id, external_reference_id,
+    # scores, inconclusive, language=...) -- args[4] is the combined inconclusive
+    # signal (pre-check OR insufficient_evidence) processing.py derives and passes
+    # through to RWS's webhook helper.
+    assert mock_notify.call_args.args[4] is True
+
+
+def test_get_report_never_exposes_a_hidden_reasoning_field(client, db):
+    """The response is built from a fixed, explicit key set (report.py: get_report) --
+    nothing does a catch-all `**row` spread that could leak an unexpected column."""
+    token = create_interview(db, token="no-hidden-fields-token")
+    row = db.execute("SELECT id FROM interviews WHERE token = ?", (token,)).fetchone()
+    report_token = create_report(db, row["id"], report_token="no-hidden-fields-report")
+
+    response = client.get(f"/api/report/{report_token}")
+    data = response.json()
+    for disallowed in ("reasoning", "chain_of_thought", "internal_notes", "raw_response", "thinking", "prompt"):
+        assert disallowed not in data
+        assert disallowed not in data.get("dimensions", {})
 
 
 def test_admin_reports_empty(client, db):
@@ -388,3 +528,101 @@ def test_rws_recording_does_not_escape_storage(client, db):
 
     response = client.get("/api/rws/interviews/app-rws-escape/recording", headers=_RWS_AUTH)
     assert response.status_code == 404
+
+
+# ---------------------------------------------------------------------------
+# RWS-facing explicit resend endpoint (service-key auth, reuses the existing
+# interview/token -- never creates a new one, unlike POST /api/invite).
+# mock_email_delivery (conftest.py, autouse) makes a plain send below "succeed"
+# without touching the network; tests that exercise failure override it again.
+# ---------------------------------------------------------------------------
+
+def test_rws_resend_invite_without_api_key_returns_401(client, db):
+    response = client.post("/api/rws/interviews/app-123/resend-invite")
+    assert response.status_code == 401
+
+
+def test_rws_resend_invite_wrong_api_key_returns_401(client, db):
+    response = client.post(
+        "/api/rws/interviews/app-123/resend-invite", headers={"x-api-key": "wrong-key"}
+    )
+    assert response.status_code == 401
+
+
+def test_rws_resend_invite_unknown_external_reference_id_returns_404(client, db):
+    response = client.post("/api/rws/interviews/unknown-app-id/resend-invite", headers=_RWS_AUTH)
+    assert response.status_code == 404
+
+
+def test_rws_resend_invite_success_reuses_same_interview_and_never_leaks_token(client, db, monkeypatch):
+    import backend.api.routes.interview as interview_module
+
+    call_count = {"n": 0}
+
+    async def _count_and_succeed(to, subject, body):
+        call_count["n"] += 1
+
+    monkeypatch.setattr(interview_module, "_send_email", _count_and_succeed)
+
+    token = create_interview(
+        db, token="resend-token", email="resend@example.com", external_reference_id="app-resend-1"
+    )
+    db.execute(
+        "UPDATE interviews SET invite_email_sent_at = ? WHERE token = ?",
+        (datetime.utcnow().isoformat(), token),
+    )
+    db.commit()
+
+    response = client.post("/api/rws/interviews/app-resend-1/resend-invite", headers=_RWS_AUTH)
+    assert response.status_code == 200
+    body = response.json()
+    assert body == {"status": "sent"}
+    assert "token" not in body and "link" not in body and "interview_link" not in body
+    assert call_count["n"] == 1
+
+    rows = db.execute(
+        "SELECT * FROM interviews WHERE external_reference_id = ?", ("app-resend-1",)
+    ).fetchall()
+    assert len(rows) == 1  # no new interview was created
+    assert rows[0]["token"] == token
+
+
+def test_rws_resend_invite_sends_even_though_already_delivered(client, db, monkeypatch):
+    """An explicit resend always attempts delivery, unlike POST /api/invite's own
+    first-send-and-retry-on-failure logic -- mirrors the token-keyed explicit resend
+    route's own contract (interview.py: send_invitation_email)."""
+    import backend.api.routes.interview as interview_module
+
+    call_count = {"n": 0}
+
+    async def _count_and_succeed(to, subject, body):
+        call_count["n"] += 1
+
+    monkeypatch.setattr(interview_module, "_send_email", _count_and_succeed)
+
+    token = create_interview(
+        db, token="already-sent-token", email="already@example.com", external_reference_id="app-resend-2"
+    )
+    db.execute(
+        "UPDATE interviews SET invite_email_sent_at = ? WHERE token = ?",
+        (datetime.utcnow().isoformat(), token),
+    )
+    db.commit()
+
+    response = client.post("/api/rws/interviews/app-resend-2/resend-invite", headers=_RWS_AUTH)
+    assert response.status_code == 200
+    assert call_count["n"] == 1
+
+
+def test_rws_resend_invite_failure_returns_502(client, db, monkeypatch):
+    import backend.api.routes.interview as interview_module
+
+    async def _fail(to, subject, body):
+        raise HTTPException(status_code=502, detail="Email send failed: provider rejected request")
+
+    monkeypatch.setattr(interview_module, "_send_email", _fail)
+
+    create_interview(db, token="resend-fail-token", external_reference_id="app-resend-3")
+
+    response = client.post("/api/rws/interviews/app-resend-3/resend-invite", headers=_RWS_AUTH)
+    assert response.status_code == 502
