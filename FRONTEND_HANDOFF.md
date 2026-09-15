@@ -7,9 +7,9 @@ knowledge graph. It does **not** cover backend implementation, system-wide
 architecture, or cross-service demo readiness — those live in the repo-root
 `handoff.md`; this file must never contradict it.
 
-**Status: feature-complete for everything built so far; one new backend
-feature has no frontend surface yet** (see `[NEXT]` at the end). Every
-planned page, the full V2 dark visual redesign, an
+**Status: feature-complete, including the full interview-rounds lifecycle
+UI** (see `[NEXT]` at the end — a UX/integration audit, not new
+functionality). Every planned page, the full V2 dark visual redesign, an
 optional 3D graph mode, and the VoiceHR language eligibility gate/assessment
 UI are built and have each been confirmed rendering correctly in a real
 browser (not just build-verified) at least once.
@@ -129,7 +129,8 @@ this table adds only the frontend-specific consumption notes.
 | All candidates | `GET /v1/candidates` | `CandidatesPage` |
 | Candidate knowledge | `GET /v1/candidates/{id}/knowledge` | `CandidateDetailPage` |
 | Select / invite / resend / accept / reject | `POST /v1/matches/{id}/select`, `/v1/applications/{id}/invite\|resend-invite\|accept\|reject` | `api/applications.js`; every backend `409`/`422`/`429`/`502` rendered verbatim, no special-cased wording. `accept`'s `422` when the language eligibility gate blocks it is rendered the same generic way — the frontend also disables the button itself as a UX hint (see below), but RWS's own check is the real authority. `resend-invite` (new) is a separate call from `invite`, only shown/enabled once `"invited"` — see below |
-| Applications (scoped / global) | `GET /v1/jobs/{id}/applications`, `GET /v1/applications` | `ApplicationsPage` / `InterviewsPage` |
+| Applications (scoped / global) | `GET /v1/jobs/{id}/applications`, `GET /v1/applications` | `ApplicationsPage` / `InterviewsPage`; each row's `interview_rounds` array is rendered by `ApplicationsPage` (new — see below), unused elsewhere |
+| Schedule / reschedule / complete / cancel interview round | `POST /v1/applications/{id}/interview-rounds`, `.../{round_id}/reschedule\|complete\|cancel` | `api/applications.js`'s `createInterviewRound`/`rescheduleInterviewRound`/`completeInterviewRound`/`cancelInterviewRound`; `ApplicationsPage` only — see below |
 | Interview report / recording | `GET /v1/interviews/{id}/report\|recording` | `ReportDetailPage`; recording played via a same-origin blob URL, RWS's proxy rewrite confirmed live — never a direct VoiceHR URL |
 | Knowledge graph | `GET /v1/graph/candidates-jobs` | `GraphPage`/`MatchGraph`/`MatchGraph3D`; see below |
 
@@ -235,12 +236,131 @@ helpers), never scoring logic.
 
 ---
 
+## Interview rounds UI (full lifecycle)
+
+Renders RWS's own post-VoiceHR interview-rounds feature (`handoff.md`
+milestones 33-34) — a round's `status`/`outcome` are RWS's recorded facts,
+never computed or second-guessed here; `constants/interviewRounds.js` holds
+only display vocabulary (`ROUND_TYPE_LABELS`, `ROUND_OUTCOME_LABELS`,
+`roundStatusLabel`/`roundStatusTone`/`describeRound`/
+`describeScheduleBlockedReason`/`toDatetimeLocalInputValue`), the same
+"labels and tones only" rule `constants/language.js` already follows for
+the language gate. Covered by 18 Node-test-runner cases in
+`constants/interviewRounds.test.js` (same zero-new-dependency convention as
+`language.test.js`).
+
+- **`ApplicationsPage` only** (per this task's explicit scope — not
+  `CandidateDetailPage`, unlike the original `[NEXT]` draft's broader
+  suggestion; see `[NEXT]` for what's still deferred). A new "Interview
+  rounds" column sits between "Language screening" and the actions column,
+  bumping every expandable row's `colSpan` from 5 to 6 accordingly.
+- **Display**: each existing round renders as a `StatusBadge`
+  (`variant="glass"`, matching every other badge on this page) labeled
+  `"<Type>: <Status or Outcome>"` (e.g. `"Technical: Scheduled"`,
+  `"Managerial: Pass"`), toned `scheduled → primary`, `cancelled →
+  neutral`, completed `pass/fail/needs_review → success/danger/warning` —
+  the same tone vocabulary the language gate already uses. Hovering a badge
+  shows `describeRound()`'s one-line summary (type, interviewer, and —
+  only while still scheduled — when). Zero rounds renders a plain `—`, the
+  same empty-cell convention `Interview`/`Language screening` already use.
+- **Schedule action**: a "Schedule interview" button, always visible,
+  toggling an inline form (round type select, interviewer name, a native
+  `datetime-local` input, optional notes) in the same cell — no modal, no
+  new route, matching this page's own existing inline-actions-in-a-table-
+  cell pattern (invite/resend/accept/reject all work the same way already).
+  On submit, `POST /v1/applications/{id}/interview-rounds` returns only the
+  new `InterviewRoundResponse` (not the whole updated application) — the
+  frontend appends it onto the row's already-loaded `interview_rounds`
+  array locally rather than re-fetching, since nothing else about the
+  application changes when a round is created. Verified this is real
+  persistence, not just optimistic local state, via a hard page reload
+  after scheduling.
+- **Gating**: `describeScheduleBlockedReason()` mirrors
+  `create_interview_round_endpoint`'s own two checks exactly (application
+  not `accepted`/`rejected`; language gate not `pending`/`failed`/
+  `needs_review`) — the button stays visible but `disabled`, with the
+  blocking reason as its `title` (reusing `describeLanguageGate()` for the
+  gate case), the same disabled-with-tooltip convention the Accept button
+  already uses for the identical gate check. RWS's own `422` remains the
+  real authority regardless.
+- **Live-verified** (real browser, real backend, two fresh "Smoketest"
+  jobs — never the pre-existing demo applications, since this project has
+  no delete endpoint for any resource): a real `POST /v1/jobs` → real
+  qualified match → real `select` → real `POST .../interview-rounds` round
+  trip on an application with no language requirement (button enabled,
+  schedule succeeds, badge appears, survives a hard reload); a second job
+  with a language requirement produces a `pending` gate and a real
+  `disabled` button with the exact `describeLanguageGate()` text as its
+  title. Desktop (1400px) and mobile (390px) both screenshotted — the table
+  scrolls horizontally on narrow viewports exactly as it already did before
+  this column existed (no new overflow). Zero new console errors; the only
+  console/network errors seen (`/v1/candidates/0a699701-.../identity` 404s)
+  are the same pre-existing, already-documented orphaned-candidate lookup
+  this document and `handoff.md` both call out repeatedly — confirmed by
+  reproducing them independently of this change (visiting Reports/
+  Interviews with no interview-rounds interaction at all still produces
+  them). Dashboard/Candidates/Jobs/Reports/Interviews all screenshotted
+  and visually unaffected.
+- **Lifecycle actions, only ever shown for a `status === "scheduled"`
+  round** — a `completed`/`cancelled` round is a closed record with zero
+  action buttons, matching RWS's own "terminal" framing exactly (`db.py`'s
+  own state machine has no path back to `scheduled`). Each round manages
+  its own action/form/loading/error state independently
+  (`InterviewRoundItem`, a new sub-component of `ApplicationRow`) — acting
+  on one round never disturbs a sibling round, an in-flight "Schedule
+  interview" for a new round, or accept/reject/invite on the same
+  application, since these all target different sub-resources (a specific
+  round vs. the application itself) with nothing to corrupt by running
+  independently.
+  - **Reschedule**: reveals a `datetime-local` input pre-filled with the
+    round's current `scheduled_at` (`toDatetimeLocalInputValue()`, the
+    exact inverse of the `new Date(value).toISOString()` conversion the
+    schedule form's own submit already does) + Save/Cancel, same inline-
+    form visual pattern the schedule form uses. Calls
+    `rescheduleInterviewRound`; the round's `status` stays `"scheduled"`.
+  - **Complete**: reveals an outcome select (`pass`/`fail`/`needs_review`),
+    optional notes, and Save/Cancel. Calls `completeInterviewRound`; the
+    round's badge updates to the recorded outcome (e.g. `"Managerial: Needs
+    review"`) and every action button disappears for it, permanently.
+  - **Cancel**: a single button, guarded by the same native
+    `window.confirm()` this page's own Reject button already uses (both
+    terminal, both irreversible). Calls `cancelInterviewRound`; the badge
+    updates to `"<Type>: Cancelled"` and every action disappears.
+  - **Error handling**: RWS's `409`/`404`/`422` render verbatim in a
+    `role="alert"` banner scoped to that specific round (not the whole
+    row), the same no-special-casing convention every other action on this
+    page already follows.
+- **Live-verified** (real browser, real backend, one fresh "Smoketest"
+  application across two passes — never the pre-existing demo data):
+  scheduled three rounds via the existing (unaffected) schedule UI, then
+  rescheduled one (form correctly pre-filled with its current
+  `scheduled_at`, badge stayed `"Scheduled"`, survived a hard reload),
+  completed a second with outcome `needs_review` (badge became `"Managerial:
+  Needs review"`, notes persisted, zero action buttons remained, survived a
+  hard reload), and cancelled a third (badge became `"Technical:
+  Cancelled"`, zero action buttons remained, survived a hard reload) — the
+  one round left `"scheduled"` throughout kept its full set of three action
+  buttons the entire time. A direct API call confirmed RWS still rejects
+  (`409`, naming the round's real current status) a second `complete` call
+  on an already-completed round, proving the backend contract independent
+  of whatever the UI currently shows. Mobile (390px) screenshotted — same
+  horizontal-scroll behavior the table already had, no new overflow. Zero
+  new console errors (the only ones seen are the same pre-existing
+  `/v1/candidates/0a699701-.../identity` 404, reproduced independently of
+  this change in the prior slice's own verification).
+- **`InterviewsPage` untouched** — same "VoiceHR language gate separate"
+  precedent as above.
+
+---
+
 ## Known limitations
 
-- **No frontend surface for interview rounds yet** — `handoff.md`'s
-  milestones 33-34 built the full backend (create/reschedule/complete/
-  cancel, `interview_rounds` embedded on every `Application` read), but no
-  page displays it and no page can call any of its endpoints. See `[NEXT]`.
+- **Interview rounds (display, schedule, reschedule, complete, cancel) only
+  exist on `ApplicationsPage`**, not `CandidateDetailPage`'s own
+  applications table — a deliberate scope narrowing across both this
+  feature's slices (the original `[NEXT]` draft suggested both surfaces);
+  revisit only if a real need for the second surface shows up. See
+  `[NEXT]` for the audit that will decide whether that's a real gap.
 - **`LoginPage` still renders the original V1 light theme** — deliberate, a
   pre-auth screen never in scope for the V2 redesign.
 - **`--v2-*` and `--color-*` remain two separate token sets in
@@ -464,58 +584,118 @@ checking the actual source; use this only to orient, not to cite.
     errors (the one console/network error seen, a `/v1/candidates/.../identity`
     404, is the same pre-existing, already-documented gap `handoff.md` and
     milestone 16 both call out — not caused by this change).
+18. **Interview rounds UI, first slice: display + schedule.** Real frontend
+    work driving the "Interview rounds UI (display + schedule)" section
+    above — backend milestones 33-34 in `handoff.md` landed first, this
+    closes the resulting frontend gap the same way the language gate's own
+    UI followed its backend (milestone 13). New `constants/
+    interviewRounds.js` (label/tone maps + `describeScheduleBlockedReason`,
+    15 new Node-test-runner cases) and `api/applications.js`'s
+    `createInterviewRound`, both consumed only by `ApplicationsPage` — a
+    deliberate scope narrowing from the original `[NEXT]` draft, which also
+    suggested `CandidateDetailPage`; this task's own instructions scoped it
+    to `ApplicationsPage` alone. Live-verified against two freshly-created
+    "Smoketest" jobs (never the pre-existing demo applications — this
+    project has no delete endpoint for any resource, so touching real demo
+    rows would have left a permanent, unrequested change): a real schedule
+    on a `not_required`-gate application succeeded, persisted across a hard
+    reload, and rendered the correct badge; a second job with a language
+    requirement produced a real `pending` gate and a real disabled button
+    with the correct tooltip. One harmless byproduct: an initial job-
+    creation attempt used a longer, more natural-sounding job description
+    than `scripts/seed_demo_data.py`'s own proven-safe phrasing and got
+    zero qualified matches for the same reason that script's own comment
+    already documents (Gemini extracted a requirement — "Backend
+    Development" — nothing in the candidate pool's skill lists literally
+    has); the corrected retry used that script's exact working phrasing
+    instead. Both smoketest job rows (the failed attempt and the working
+    one) remain in the Jobs list as harmless clutter, the same precedent
+    already set by the pre-existing "Backend Engineer (Demo)" row — no
+    delete capability exists, by design.
+19. **Interview rounds UI, second slice: reschedule/complete/cancel.**
+    Closes the lifecycle gap milestone 18 deliberately left open. New
+    `InterviewRoundItem` sub-component (`ApplicationsPage.jsx`) gives each
+    `"scheduled"` round its own independent Reschedule/Complete/Cancel
+    actions and form/loading/error state — a `completed`/`cancelled` round
+    renders with zero action buttons, permanently, matching RWS's own
+    terminal state machine. Three new `api/applications.js` functions
+    (`rescheduleInterviewRound`/`completeInterviewRound`/
+    `cancelInterviewRound`) and one new `constants/interviewRounds.js`
+    helper (`toDatetimeLocalInputValue`, the exact inverse of the
+    conversion the schedule form's submit already used, now needed to
+    pre-fill the Reschedule form with a round's current `scheduled_at`) —
+    18 Node-test-runner cases total in that file now (was 15). Live-
+    verified end to end against one fresh "Smoketest" application (three
+    rounds scheduled through the already-existing, unaffected schedule UI,
+    then one of each: rescheduled, completed with a `needs_review` outcome
+    and notes, and cancelled with the confirm-guard) — every transition
+    rendered the correct badge, left zero action buttons behind for the
+    round that changed, left the still-`"scheduled"` round's three buttons
+    untouched, and survived a hard reload each time (real persistence, not
+    optimistic local state). A direct API call independently confirmed RWS
+    still 409s a `complete` call on an already-completed round regardless
+    of what the UI currently shows. The interview-rounds feature (backend
+    milestones 33-34, frontend milestones 18-19) is now complete end to end.
 
 ---
 
 ## [NEXT]
 
-**Interview Rounds surface, first slice: display + schedule (no
-reschedule/complete/cancel UI yet).**
+**Post-VoiceHR interview rounds UX audit + final workflow integration.**
 
-`handoff.md`'s milestones 33-34 built the entire backend feature — every
-`ApplicationResponse` (both `GET .../applications` routes, `select`,
-`accept`/`reject`, `invite`, `resend-invite`) now embeds
-`interview_rounds: InterviewRoundResponse[]`
-(`{id, application_id, round_type, status, outcome, interviewer_name,
-scheduled_at, notes, created_by, created_at, updated_at}`), and
-`POST /v1/applications/{id}/interview-rounds` (body:
-`{round_type: "technical"|"managerial", interviewer_name, scheduled_at,
-notes?}`) schedules one — but nothing in this frontend reads or writes
-either yet. `src/api/applications.js` needs a `createInterviewRound`
-function alongside its existing `selectCandidate`/`inviteApplication`/etc.
+Milestones 18-19 built the interview-rounds feature in two functional
+slices (display+schedule, then reschedule/complete/cancel), each verified
+in isolation against a purpose-built "Smoketest" scenario. What has never
+been checked is the feature *as part of the one continuous workflow a
+recruiter (and the jury demo) actually experiences* — select → invite →
+VoiceHR interview → language gate clears → schedule a round → complete it
+→ accept/reject. This task is that check, not new functionality: an audit
+that either confirms the integration is solid or finds and fixes concrete
+UX gaps, in the same spirit as milestone 12's own whole-system readiness
+audit.
 
-Scope for this slice, deliberately smaller than the full feature (defer
-reschedule/complete/cancel UI to the step after this one, matching how the
-backend itself landed create before lifecycle actions):
+Concrete scope:
 
-- **Display**: on `ApplicationsPage` (where `language_gate`'s `StatusBadge`
-  already renders per row) and `CandidateDetailPage`'s applications table,
-  add a compact rounds summary per application — e.g. a `StatusBadge` per
-  round (`variant="glass"`, tone mapping `scheduled → neutral`,
-  `completed`+`pass → success`, `completed`+`fail → danger`,
-  `completed`+`needs_review → warning`, `cancelled → neutral`), or a short
-  "2 rounds" label that expands to the list on click. Reuse
-  `describeLanguageGate`'s pattern in `constants/language.js` as the model
-  for a new small `constants/interviewRounds.js` (label/tone maps,
-  `round_type` → "Technical"/"Managerial").
-- **Schedule action**: a small form (round type select, interviewer name
-  text input, date/time picker, optional notes) — a modal or inline
-  expansion, recruiter's choice of pattern already used elsewhere in this
-  codebase (check `ResumeUploadPage`/`JobsListPage`'s existing forms for the
-  established style before inventing a new one). Visible/enabled only when
-  `language_gate.status` is `"passed"` or `"not_required"` and
-  `application.status` is not `"accepted"`/`"rejected"` — mirroring the
-  backend's own two gates so the UI never offers an action the API would
-  422/reject, with a disabled-with-tooltip state (not hidden) otherwise,
-  matching this project's existing convention for gated actions.
-- **Verification bar**: real-browser Playwright pass showing the summary
-  rendering for an application with zero rounds (nothing shown, no broken
-  layout), one scheduled round, and a completed round with each outcome
-  tone: zero new console errors, no regression to the existing
-  `language_gate` badge/tooltip it sits next to.
+- **One continuous real-browser walkthrough**, screenshotted at each step,
+  covering the full chain above on a single application (real select, real
+  invite, a real or synthetic completed interview so the language gate
+  clears, real schedule, real complete, real accept) — every prior
+  verification pass tested pieces in isolation; this is the first time the
+  whole chain runs end to end in one sitting.
+- **Decide `CandidateDetailPage`, for real this time.** Deferred twice now
+  (milestones 18 and 19) as "a deliberate scope narrowing" without ever
+  actually checking whether a recruiter reviewing one candidate's full
+  history across jobs would expect to see that candidate's interview
+  rounds there. Either implement the same read-only (or full) surface
+  there, or write down the concrete reason it's correctly out of scope —
+  not a further deferral.
+- **Check whether `DashboardPage`'s "Recent activity" or pipeline
+  breakdown should reflect interview-round activity at all** (e.g., a
+  round scheduled/completed today) — likely no (rounds are advisory, not a
+  pipeline stage), but this has never been explicitly decided, only
+  silently skipped.
+- **Re-read `handoff.md`'s "Demo readiness" / demo sequence text** and
+  confirm it still accurately describes what the app can now do — the
+  documented jury walkthrough predates this feature; decide whether
+  scheduling/completing a round belongs in the demoed sequence or is
+  correctly left out (e.g., because VoiceHR's Gemini access is still
+  denied, so a *fully* real completed interview before scheduling isn't
+  demoable end to end — confirm this constraint still holds and document
+  the actual demo-safe path).
+- **A final whole-system regression pass**: every route, both graph modes,
+  desktop and mobile, confirming the two new sub-components on
+  `ApplicationsPage` haven't regressed anything verified in earlier
+  milestones (cross-links, polling, the language-gate column, invite/
+  resend/accept/reject) — the kind of full-surface check milestone 12 did
+  once for the whole app, now due again after two feature slices landed on
+  top of it.
+- **Confirm reduced-motion/focus-ring behavior** for the new buttons/
+  selects/inputs is inherited correctly from `global.css`'s shared rules
+  (§ Architecture/invariants) rather than assumed — this feature never
+  added any animation or custom focus style of its own, so it should
+  already be correct, but has never actually been checked directly.
 
-Do **not** build reschedule/complete/cancel UI in this slice, do not add a
-new route, and do not touch `InterviewsPage` (still VoiceHR-only, unrelated
-to this feature — see "Deliberately not touched" precedent elsewhere in
-this document for why mixing the two would blur "VoiceHR language gate
-separate").
+This is explicitly a verification/integration task, not a request for more
+UI surface — if the audit finds nothing wrong, say so plainly (per this
+project's own "verification is part of implementation, don't claim success
+without having checked" rule) rather than inventing work to fill it.

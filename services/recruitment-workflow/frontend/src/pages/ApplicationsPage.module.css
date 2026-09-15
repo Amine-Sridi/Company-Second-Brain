@@ -259,3 +259,150 @@
   font-weight: 600;
   white-space: nowrap;
 }
+
+.roundsCell {
+  min-width: 200px;
+}
+
+.roundsList {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: var(--spacing-2);
+  margin-bottom: var(--spacing-2);
+}
+
+.roundsList:empty {
+  margin-bottom: 0;
+}
+
+.roundItem {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: var(--spacing-1);
+}
+
+.roundActions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--spacing-1);
+}
+
+.roundActionButton {
+  border: 1px solid var(--v2-border-strong);
+  background: var(--v2-surface);
+  color: var(--v2-text-muted);
+  border-radius: var(--v2-radius);
+  padding: 2px var(--spacing-2);
+  font-size: var(--font-size-xs);
+  font-weight: 500;
+  white-space: nowrap;
+}
+
+.roundActionButton:hover:not(:disabled) {
+  border-color: var(--v2-cyan);
+  color: var(--v2-cyan);
+}
+
+.roundActionButton:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.roundCancelButton {
+  border: 1px solid rgba(251, 113, 133, 0.35);
+  background: var(--v2-surface);
+  color: var(--v2-danger);
+  border-radius: var(--v2-radius);
+  padding: 2px var(--spacing-2);
+  font-size: var(--font-size-xs);
+  font-weight: 500;
+  white-space: nowrap;
+}
+
+.roundCancelButton:hover:not(:disabled) {
+  background: var(--v2-danger-bg);
+}
+
+.roundCancelButton:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.scheduleRoundButton {
+  border: 1px solid var(--v2-border-strong);
+  background: var(--v2-surface);
+  color: var(--v2-cyan);
+  border-radius: var(--v2-radius);
+  padding: var(--spacing-1) var(--spacing-2);
+  font-size: var(--font-size-sm);
+  font-weight: 500;
+  white-space: nowrap;
+}
+
+.scheduleRoundButton:hover:not(:disabled) {
+  border-color: var(--v2-cyan);
+}
+
+.scheduleRoundButton:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.scheduleRoundCancelButton {
+  border: 1px solid var(--v2-border-strong);
+  background: var(--v2-surface);
+  color: var(--v2-text-muted);
+  border-radius: var(--v2-radius);
+  padding: var(--spacing-1) var(--spacing-2);
+  font-size: var(--font-size-sm);
+  font-weight: 500;
+}
+
+.scheduleRoundCancelButton:hover:not(:disabled) {
+  border-color: var(--v2-border-strong);
+  color: var(--v2-text);
+}
+
+.scheduleRoundCancelButton:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.scheduleForm {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-1);
+  min-width: 200px;
+  max-width: 260px;
+}
+
+.scheduleFormSelect,
+.scheduleFormInput {
+  padding: var(--spacing-1) var(--spacing-2);
+  border: 1px solid var(--v2-border-strong);
+  border-radius: var(--v2-radius);
+  background: var(--v2-bg-inset);
+  font-size: var(--font-size-sm);
+  font-family: inherit;
+  color: var(--v2-text);
+  width: 100%;
+}
+
+.scheduleFormTextarea {
+  padding: var(--spacing-1) var(--spacing-2);
+  border: 1px solid var(--v2-border-strong);
+  border-radius: var(--v2-radius);
+  background: var(--v2-bg-inset);
+  font-size: var(--font-size-sm);
+  font-family: inherit;
+  color: var(--v2-text);
+  width: 100%;
+  resize: vertical;
+}
+
+.scheduleFormActions {
+  display: flex;
+  gap: var(--spacing-2);
+}

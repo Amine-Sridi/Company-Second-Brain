@@ -95,3 +95,85 @@ export function accept(applicationId) {
 export function reject(applicationId) {
   return request(`/v1/applications/${applicationId}/reject`, { method: "POST" });
 }
+
+/**
+ * Schedules a new post-VoiceHR technical/managerial interview round. RWS itself
+ * enforces both preconditions -- the application must not already be
+ * accepted/rejected, and the language eligibility gate must not be
+ * pending/failed/needs_review (422 naming which, mirroring accept's own gate) --
+ * this frontend only disables the triggering button as a UX hint
+ * (constants/interviewRounds.js: describeScheduleBlockedReason), never a
+ * substitute for RWS's own check (§22).
+ *
+ * @param {string} applicationId
+ * @param {object} payload
+ * @param {"technical"|"managerial"} payload.roundType
+ * @param {string} payload.interviewerName
+ * @param {string} payload.scheduledAt - ISO 8601 datetime string
+ * @param {string} [payload.notes]
+ * @returns {Promise<object>} InterviewRoundResponse (status: "scheduled")
+ */
+export function createInterviewRound(applicationId, { roundType, interviewerName, scheduledAt, notes }) {
+  return request(`/v1/applications/${applicationId}/interview-rounds`, {
+    method: "POST",
+    body: {
+      round_type: roundType,
+      interviewer_name: interviewerName,
+      scheduled_at: scheduledAt,
+      ...(notes ? { notes } : {}),
+    },
+  });
+}
+
+/**
+ * Updates an existing round's scheduled_at. RWS itself only allows this while
+ * the round is "scheduled" (409, naming its current status, otherwise) and
+ * never touches Application.status or the round's own round_type/
+ * interviewer_name/notes.
+ *
+ * @param {string} applicationId
+ * @param {string} roundId
+ * @param {object} payload
+ * @param {string} payload.scheduledAt - ISO 8601 datetime string
+ * @returns {Promise<object>} InterviewRoundResponse (status stays "scheduled")
+ */
+export function rescheduleInterviewRound(applicationId, roundId, { scheduledAt }) {
+  return request(`/v1/applications/${applicationId}/interview-rounds/${roundId}/reschedule`, {
+    method: "POST",
+    body: { scheduled_at: scheduledAt },
+  });
+}
+
+/**
+ * Records a round's outcome. RWS itself requires a valid outcome (422
+ * otherwise -- Literal["pass", "fail", "needs_review"]) and only allows this
+ * while the round is "scheduled" (409, naming its current status, otherwise);
+ * never touches Application.status. Omitting notes leaves whatever was
+ * recorded at scheduling time untouched -- RWS's own rule (db.py:
+ * complete_interview_round), not re-implemented here.
+ *
+ * @param {string} applicationId
+ * @param {string} roundId
+ * @param {object} payload
+ * @param {"pass"|"fail"|"needs_review"} payload.outcome
+ * @param {string} [payload.notes]
+ * @returns {Promise<object>} InterviewRoundResponse (status: "completed")
+ */
+export function completeInterviewRound(applicationId, roundId, { outcome, notes }) {
+  return request(`/v1/applications/${applicationId}/interview-rounds/${roundId}/complete`, {
+    method: "POST",
+    body: { outcome, ...(notes ? { notes } : {}) },
+  });
+}
+
+/**
+ * Cancels a round. RWS itself only allows this while the round is "scheduled"
+ * (409, naming its current status, otherwise) -- terminal, no un-cancel.
+ *
+ * @param {string} applicationId
+ * @param {string} roundId
+ * @returns {Promise<object>} InterviewRoundResponse (status: "cancelled")
+ */
+export function cancelInterviewRound(applicationId, roundId) {
+  return request(`/v1/applications/${applicationId}/interview-rounds/${roundId}/cancel`, { method: "POST" });
+}

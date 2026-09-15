@@ -1,7 +1,17 @@
 import { useEffect, useState } from "react";
 import { Link, useParams } from "react-router-dom";
 import { getJobs } from "../api/jobs.js";
-import { getApplications, invite, resendInvite, accept, reject } from "../api/applications.js";
+import {
+  getApplications,
+  invite,
+  resendInvite,
+  accept,
+  reject,
+  createInterviewRound,
+  rescheduleInterviewRound,
+  completeInterviewRound,
+  cancelInterviewRound,
+} from "../api/applications.js";
 import { ApiError } from "../api/client.js";
 import { useCandidateIdentity } from "../hooks/useCandidateIdentity.js";
 import { usePolling } from "../hooks/usePolling.js";
@@ -16,6 +26,15 @@ import {
   LANGUAGE_GATE_TONE,
   describeLanguageGate,
 } from "../constants/language.js";
+import {
+  ROUND_TYPE_LABELS,
+  ROUND_OUTCOME_LABELS,
+  roundStatusLabel,
+  roundStatusTone,
+  describeRound,
+  describeScheduleBlockedReason,
+  toDatetimeLocalInputValue,
+} from "../constants/interviewRounds.js";
 import styles from "./ApplicationsPage.module.css";
 
 const POLL_INTERVAL_MS = 7000;
@@ -141,6 +160,7 @@ export default function ApplicationsPage() {
                 <th>Status</th>
                 <th>Interview</th>
                 <th>Language screening</th>
+                <th>Interview rounds</th>
                 <th aria-label="Actions" />
               </tr>
             </thead>
@@ -177,6 +197,13 @@ function ApplicationRow({ application, onUpdated }) {
   const [deciding, setDeciding] = useState(null); // null | "accept" | "reject"
   const [decideError, setDecideError] = useState(null);
   const [expanded, setExpanded] = useState(false);
+  const [schedulingOpen, setSchedulingOpen] = useState(false);
+  const [roundType, setRoundType] = useState("technical");
+  const [interviewerName, setInterviewerName] = useState("");
+  const [scheduledAt, setScheduledAt] = useState("");
+  const [roundNotes, setRoundNotes] = useState("");
+  const [scheduling, setScheduling] = useState(false);
+  const [scheduleError, setScheduleError] = useState(null);
 
   useEffect(() => {
     if (!resendSuccess) return undefined;
@@ -201,13 +228,20 @@ function ApplicationRow({ application, onUpdated }) {
   const gate = application.language_gate ?? { status: "not_required" };
   const languageGateBlocksAccept = gate.status === "pending" || gate.status === "failed" || gate.status === "needs_review";
   const canAccept = canDecide && !languageGateBlocksAccept;
-  // A decision (accept/reject), an invite, and a resend all mutate/target the same
-  // application row -- disabling every action while any one is in flight avoids
-  // firing two conflicting requests for the same row at once, and is the first layer
-  // (alongside RWS's own server-side cooldown on resend) against double-click spam.
-  // This is a UX safeguard only; RWS's own per-endpoint checks (409s/429) remain the
-  // real authority regardless.
-  const rowBusy = inviting || resending || deciding !== null;
+  const rounds = application.interview_rounds ?? [];
+  // Mirrors main.py's create_interview_round_endpoint's own two gates (application
+  // not accepted/rejected, language gate not blocking) -- see
+  // constants/interviewRounds.js. RWS's own 422 is the real authority; this only
+  // keeps the button from ever looking clickable when it would be rejected anyway.
+  const scheduleBlockedReason = describeScheduleBlockedReason(application);
+  const canSchedule = scheduleBlockedReason === null;
+  // A decision (accept/reject), an invite, a resend, and scheduling a round all
+  // mutate/target the same application row -- disabling every action while any one
+  // is in flight avoids firing two conflicting requests for the same row at once,
+  // and is the first layer (alongside RWS's own server-side cooldown on resend)
+  // against double-click spam. This is a UX safeguard only; RWS's own per-endpoint
+  // checks (409s/422s/429s) remain the real authority regardless.
+  const rowBusy = inviting || resending || deciding !== null || scheduling;
 
   async function handleInvite() {
     if (rowBusy || !canInvite) return;
@@ -278,6 +312,43 @@ function ApplicationRow({ application, onUpdated }) {
     }
   }
 
+  function resetScheduleForm() {
+    setSchedulingOpen(false);
+    setRoundType("technical");
+    setInterviewerName("");
+    setScheduledAt("");
+    setRoundNotes("");
+    setScheduleError(null);
+  }
+
+  async function handleSchedule(event) {
+    event.preventDefault();
+    if (rowBusy || !canSchedule) return;
+    setScheduling(true);
+    setScheduleError(null);
+    try {
+      // Real POST /v1/applications/{id}/interview-rounds. RWS itself enforces both
+      // preconditions (application not accepted/rejected, language gate not
+      // blocking -- 422 naming which) and never touches Application.status;
+      // it returns only the new InterviewRoundResponse, not the whole updated
+      // application, so the round is appended onto this row's own already-loaded
+      // list locally rather than re-fetching everything (nothing else about the
+      // application changes when a round is created).
+      const newRound = await createInterviewRound(application.application_id, {
+        roundType,
+        interviewerName: interviewerName.trim(),
+        scheduledAt: new Date(scheduledAt).toISOString(),
+        notes: roundNotes.trim() || undefined,
+      });
+      onUpdated({ ...application, interview_rounds: [...rounds, newRound] });
+      resetScheduleForm();
+    } catch (err) {
+      setScheduleError(err instanceof ApiError ? err.message : "Failed to schedule interview round.");
+    } finally {
+      setScheduling(false);
+    }
+  }
+
   return (
     <>
       <tr
@@ -336,6 +407,98 @@ function ApplicationRow({ application, onUpdated }) {
             >
               {LANGUAGE_GATE_LABELS[gate.status] ?? gate.status}
             </StatusBadge>
+          )}
+        </td>
+        <td onClick={(event) => event.stopPropagation()} className={styles.roundsCell}>
+          <div className={styles.roundsList}>
+            {rounds.length === 0 && !schedulingOpen && (
+              <span className={styles.interviewStatusEmpty}>—</span>
+            )}
+            {rounds.map((round) => (
+              <InterviewRoundItem
+                key={round.id}
+                applicationId={application.application_id}
+                round={round}
+                onRoundUpdated={(updatedRound) =>
+                  onUpdated({
+                    ...application,
+                    interview_rounds: rounds.map((r) => (r.id === updatedRound.id ? updatedRound : r)),
+                  })
+                }
+              />
+            ))}
+          </div>
+
+          {!schedulingOpen ? (
+            <button
+              type="button"
+              className={styles.scheduleRoundButton}
+              onClick={() => setSchedulingOpen(true)}
+              disabled={rowBusy || !canSchedule}
+              title={scheduleBlockedReason ?? undefined}
+            >
+              Schedule interview
+            </button>
+          ) : (
+            <form className={styles.scheduleForm} onSubmit={handleSchedule}>
+              <select
+                className={styles.scheduleFormSelect}
+                value={roundType}
+                onChange={(event) => setRoundType(event.target.value)}
+                disabled={scheduling}
+                aria-label="Interview type"
+              >
+                {Object.entries(ROUND_TYPE_LABELS).map(([value, label]) => (
+                  <option key={value} value={value}>
+                    {label}
+                  </option>
+                ))}
+              </select>
+              <input
+                type="text"
+                className={styles.scheduleFormInput}
+                placeholder="Interviewer name"
+                value={interviewerName}
+                onChange={(event) => setInterviewerName(event.target.value)}
+                disabled={scheduling}
+                required
+              />
+              <input
+                type="datetime-local"
+                className={styles.scheduleFormInput}
+                value={scheduledAt}
+                onChange={(event) => setScheduledAt(event.target.value)}
+                disabled={scheduling}
+                required
+                aria-label="Scheduled date and time"
+              />
+              <textarea
+                className={styles.scheduleFormTextarea}
+                placeholder="Notes (optional)"
+                value={roundNotes}
+                onChange={(event) => setRoundNotes(event.target.value)}
+                disabled={scheduling}
+                rows={2}
+              />
+              <div className={styles.scheduleFormActions}>
+                <button type="submit" className={styles.scheduleRoundButton} disabled={scheduling}>
+                  {scheduling ? "Scheduling…" : "Save"}
+                </button>
+                <button
+                  type="button"
+                  className={styles.scheduleRoundCancelButton}
+                  onClick={resetScheduleForm}
+                  disabled={scheduling}
+                >
+                  Cancel
+                </button>
+              </div>
+              {scheduleError && (
+                <div className={styles.error} role="alert">
+                  {scheduleError}
+                </div>
+              )}
+            </form>
           )}
         </td>
         <td onClick={(event) => event.stopPropagation()}>
@@ -408,7 +571,7 @@ function ApplicationRow({ application, onUpdated }) {
 
       {inviteError && (
         <tr>
-          <td colSpan={5}>
+          <td colSpan={6}>
             <div className={styles.error} role="alert">
               {inviteError}
             </div>
@@ -418,7 +581,7 @@ function ApplicationRow({ application, onUpdated }) {
 
       {resendError && (
         <tr>
-          <td colSpan={5}>
+          <td colSpan={6}>
             <div className={styles.error} role="alert">
               {resendError}
             </div>
@@ -428,7 +591,7 @@ function ApplicationRow({ application, onUpdated }) {
 
       {decideError && (
         <tr>
-          <td colSpan={5}>
+          <td colSpan={6}>
             <div className={styles.error} role="alert">
               {decideError}
             </div>
@@ -438,11 +601,223 @@ function ApplicationRow({ application, onUpdated }) {
 
       {expanded && hasAssessment && (
         <tr>
-          <td colSpan={5}>
+          <td colSpan={6}>
             <AssessmentPanel assessment={application.interview_assessment} />
           </td>
         </tr>
       )}
     </>
+  );
+}
+
+/**
+ * One round's badge plus its own lifecycle actions -- Reschedule/Complete/Cancel,
+ * only ever shown for a "scheduled" round (db.py's own state machine: a
+ * completed/cancelled round is a closed record, never editable again). Each round
+ * owns its own form/loading/error state independently of its siblings and of the
+ * rest of the row, so acting on one round never disturbs another round, an
+ * in-flight "Schedule interview" for a new round, or accept/reject/invite --
+ * these all target different sub-resources (this specific round vs. the
+ * application itself), so there's nothing to corrupt by letting them run
+ * independently, unlike invite/resend/decide which all mutate the same
+ * Application row and do share one busy flag (see ApplicationRow's own rowBusy).
+ */
+function InterviewRoundItem({ applicationId, round, onRoundUpdated }) {
+  const [mode, setMode] = useState(null); // null | "reschedule" | "complete"
+  const [rescheduledAt, setRescheduledAt] = useState("");
+  const [outcome, setOutcome] = useState("pass");
+  const [completeNotes, setCompleteNotes] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [actionError, setActionError] = useState(null);
+  const [cancelling, setCancelling] = useState(false);
+
+  const isScheduled = round.status === "scheduled";
+
+  function openReschedule() {
+    setMode("reschedule");
+    setRescheduledAt(toDatetimeLocalInputValue(round.scheduled_at));
+    setActionError(null);
+  }
+
+  function openComplete() {
+    setMode("complete");
+    setOutcome("pass");
+    setCompleteNotes("");
+    setActionError(null);
+  }
+
+  function closeForm() {
+    setMode(null);
+    setActionError(null);
+  }
+
+  async function handleReschedule(event) {
+    event.preventDefault();
+    if (busy) return;
+    setBusy(true);
+    setActionError(null);
+    try {
+      // Real POST .../interview-rounds/{round_id}/reschedule. RWS itself only
+      // allows this from "scheduled" (409 naming the round's current status
+      // otherwise) and never touches Application.status.
+      const updated = await rescheduleInterviewRound(applicationId, round.id, {
+        scheduledAt: new Date(rescheduledAt).toISOString(),
+      });
+      onRoundUpdated(updated);
+      setMode(null);
+    } catch (err) {
+      setActionError(err instanceof ApiError ? err.message : "Failed to reschedule interview round.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function handleComplete(event) {
+    event.preventDefault();
+    if (busy) return;
+    setBusy(true);
+    setActionError(null);
+    try {
+      // Real POST .../interview-rounds/{round_id}/complete. RWS itself requires a
+      // valid outcome and only allows this from "scheduled" (409/422 otherwise);
+      // never touches Application.status or the language gate -- a round's
+      // outcome is informational only, it never blocks accept/reject.
+      const updated = await completeInterviewRound(applicationId, round.id, {
+        outcome,
+        notes: completeNotes.trim() || undefined,
+      });
+      onRoundUpdated(updated);
+      setMode(null);
+    } catch (err) {
+      setActionError(err instanceof ApiError ? err.message : "Failed to complete interview round.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function handleCancel() {
+    if (busy) return;
+    // Terminal, no undo -- same native confirm() guard ApplicationsPage's own
+    // Reject button already uses for the same reason.
+    if (!window.confirm("Cancel this interview round? This cannot be undone.")) return;
+    setCancelling(true);
+    setActionError(null);
+    try {
+      const updated = await cancelInterviewRound(applicationId, round.id);
+      onRoundUpdated(updated);
+    } catch (err) {
+      setActionError(err instanceof ApiError ? err.message : "Failed to cancel interview round.");
+    } finally {
+      setCancelling(false);
+    }
+  }
+
+  return (
+    <div className={styles.roundItem}>
+      <StatusBadge variant="glass" tone={roundStatusTone(round)} title={describeRound(round)}>
+        {ROUND_TYPE_LABELS[round.round_type] ?? round.round_type}: {roundStatusLabel(round)}
+      </StatusBadge>
+
+      {isScheduled && mode === null && (
+        <div className={styles.roundActions}>
+          <button
+            type="button"
+            className={styles.roundActionButton}
+            onClick={openReschedule}
+            disabled={cancelling}
+          >
+            Reschedule
+          </button>
+          <button
+            type="button"
+            className={styles.roundActionButton}
+            onClick={openComplete}
+            disabled={cancelling}
+          >
+            Complete
+          </button>
+          <button
+            type="button"
+            className={styles.roundCancelButton}
+            onClick={handleCancel}
+            disabled={cancelling}
+          >
+            {cancelling ? "Cancelling…" : "Cancel"}
+          </button>
+        </div>
+      )}
+
+      {mode === "reschedule" && (
+        <form className={styles.scheduleForm} onSubmit={handleReschedule}>
+          <input
+            type="datetime-local"
+            className={styles.scheduleFormInput}
+            value={rescheduledAt}
+            onChange={(event) => setRescheduledAt(event.target.value)}
+            disabled={busy}
+            required
+            aria-label="New scheduled date and time"
+          />
+          <div className={styles.scheduleFormActions}>
+            <button type="submit" className={styles.scheduleRoundButton} disabled={busy}>
+              {busy ? "Saving…" : "Save"}
+            </button>
+            <button
+              type="button"
+              className={styles.scheduleRoundCancelButton}
+              onClick={closeForm}
+              disabled={busy}
+            >
+              Cancel
+            </button>
+          </div>
+        </form>
+      )}
+
+      {mode === "complete" && (
+        <form className={styles.scheduleForm} onSubmit={handleComplete}>
+          <select
+            className={styles.scheduleFormSelect}
+            value={outcome}
+            onChange={(event) => setOutcome(event.target.value)}
+            disabled={busy}
+            aria-label="Interview outcome"
+          >
+            {Object.entries(ROUND_OUTCOME_LABELS).map(([value, label]) => (
+              <option key={value} value={value}>
+                {label}
+              </option>
+            ))}
+          </select>
+          <textarea
+            className={styles.scheduleFormTextarea}
+            placeholder="Notes (optional)"
+            value={completeNotes}
+            onChange={(event) => setCompleteNotes(event.target.value)}
+            disabled={busy}
+            rows={2}
+          />
+          <div className={styles.scheduleFormActions}>
+            <button type="submit" className={styles.scheduleRoundButton} disabled={busy}>
+              {busy ? "Saving…" : "Save"}
+            </button>
+            <button
+              type="button"
+              className={styles.scheduleRoundCancelButton}
+              onClick={closeForm}
+              disabled={busy}
+            >
+              Cancel
+            </button>
+          </div>
+        </form>
+      )}
+
+      {actionError && (
+        <div className={styles.error} role="alert">
+          {actionError}
+        </div>
+      )}
+    </div>
   );
 }
