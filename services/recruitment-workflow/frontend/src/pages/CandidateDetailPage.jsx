@@ -10,6 +10,7 @@ import StatusBadge from "../components/StatusBadge.jsx";
 import EmptyState from "../components/EmptyState.jsx";
 import MatchGraph, { EGO_GRAPH_LAYOUT } from "../components/MatchGraph.jsx";
 import { STATUS_LABELS, STATUS_TONE } from "../constants/applicationStatus.js";
+import { ROUND_TYPE_LABELS, roundStatusLabel, roundStatusTone, describeRound } from "../constants/interviewRounds.js";
 import styles from "./CandidateDetailPage.module.css";
 
 const INTERVIEW_STATUS_LABELS = {
@@ -205,6 +206,7 @@ export default function CandidateDetailPage() {
                     <th>Job</th>
                     <th>Status</th>
                     <th>Interview</th>
+                    <th>Interview rounds</th>
                     <th aria-label="Report" />
                   </tr>
                 </thead>
@@ -226,6 +228,24 @@ export default function CandidateDetailPage() {
                           INTERVIEW_STATUS_LABELS[application.interview_status] ?? application.interview_status
                         ) : (
                           <span className={styles.interviewStatusEmpty}>—</span>
+                        )}
+                      </td>
+                      <td className={styles.roundsCell}>
+                        {(application.interview_rounds ?? []).length === 0 ? (
+                          <span className={styles.interviewStatusEmpty}>—</span>
+                        ) : (
+                          <div className={styles.roundsList}>
+                            {application.interview_rounds.map((round) => (
+                              <StatusBadge
+                                key={round.id}
+                                variant="glass"
+                                tone={roundStatusTone(round)}
+                                title={describeRound(round)}
+                              >
+                                {ROUND_TYPE_LABELS[round.round_type] ?? round.round_type}: {roundStatusLabel(round)}
+                              </StatusBadge>
+                            ))}
+                          </div>
                         )}
                       </td>
                       <td>

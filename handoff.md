@@ -6,7 +6,8 @@ detail (routes, pages, components, visual design) lives in `FRONTEND_HANDOFF.md`
 instead — this file never duplicates it, only references it (per the two files'
 own long-standing division of labor).
 
-**Project status: feature-complete, with one new backend slice in progress**
+**Project status: feature-complete; the interview-rounds feature is now
+audited end to end, with one small frontend-only accessibility item left**
 (see `[NEXT]` at the end). Every backend service, the full recruiter frontend, and
 the 2D/3D knowledge graph are implemented and passed a final whole-system
 readiness audit (see "Demo readiness" below). A dedicated audit of VoiceHR's
@@ -49,7 +50,11 @@ language gate clears — as a parallel `interview_rounds` signal beside
 `Application`'s existing state machine, deliberately not a new set of
 `Application.status` values (the same relationship the language gate itself
 already has to that state machine); the first backend slice from that design
-— the table, the model, and creation — has now landed (milestone 33).
+— the table, the model, and creation — landed in milestone 33, the
+lifecycle actions (reschedule/complete/cancel) in milestone 34, and the
+feature's frontend counterpart landed and was audited end to end as a
+whole workflow across `FRONTEND_HANDOFF.md`'s milestones 18-20 — see that
+file for the full audit findings.
 
 **RESOLVED — the previous "demo backbone unusable" warning that used to live
 here.** Both blockers it described are now fixed: (1) the destructive
@@ -849,8 +854,22 @@ is *not* a "look at the great score" moment, so frame it as a resilience
 story (a technical evaluation failure still produces a usable, reviewable
 report) rather than a scoring showcase. VoiceHR's Gemini access is still
 denied by Google (see below either way), so a *fresh* interview cannot be
-conducted live regardless of the Resend key. → Accept → Reports → Knowledge
-Graph 2D (search + filter) → 3D.
+conducted live regardless of the Resend key. → **optional: Schedule a
+technical or managerial interview round on this exact application, then
+Complete it** — confirmed live this session that application
+`a2769e7b-...` is already schedule-ready with zero setup (`status:
+"interviewed"`, `language_gate.status: "not_required"`, no existing
+rounds), so this costs no Gemini/Resend quota and needs no workaround; a
+good moment to show the post-VoiceHR human-interview stage without
+implying the round's outcome affects the decision that follows (frame it
+as advisory input the recruiter weighs, not a gate). → Accept (the round's
+outcome, whatever it was set to, does not block this — the language gate
+still would, unchanged) → Reports → Knowledge Graph 2D (search + filter)
+→ 3D. **Not yet done**: no round has actually been scheduled on this
+application as of this session — the option above is a recommendation for
+whoever runs the demo to act on beforehand, not something scheduled during
+this audit (touching the curated demo application beyond what was asked
+wasn't this session's call to make).
 
 **Live AI vs. persisted data**: use live AI sparingly (one fresh resume
 upload or one `New Job` creation, if quota confidence is high that day);
@@ -917,6 +936,18 @@ no `.env` file changed since last verified boot.
    change a `MatchResult`. Editing a job's requirement later never changes an
    already-reported gate result either — each application snapshots the
    requirement at the moment it was selected.
+7b. *If a technical/managerial round comes back "Fail," does the recruiter
+   still have to reject the candidate?* — No, deliberately not. Unlike the
+   language gate (a deterministic compliance-style check that really does
+   block acceptance), a round's outcome is human judgment the recruiter
+   already recorded themselves — it's advisory, shown alongside the
+   decision, never enforced by the system. Auto-blocking a recruiter's own
+   final call on a verdict they typed in themselves would work against the
+   one rule that hasn't changed since day one: the recruiter is always the
+   final decision-maker. Verified live (post-VoiceHR audit, milestone 20 in
+   `FRONTEND_HANDOFF.md`): accepted an application with one round marked
+   "Pass" and a second cancelled outcome sitting right next to it — Accept
+   was never disabled by either.
 8. *How does the candidate actually receive their interview link?* — VoiceHR
    emails it to them automatically and securely, the moment a recruiter
    clicks Invite — RWS never sees or stores that link or the candidate's
@@ -1883,20 +1914,23 @@ re-verifying against current source, per every prior session's own discipline.
 
 ## [NEXT]
 
-**Interview Rounds frontend surface** (see `FRONTEND_HANDOFF.md`'s own
-`[NEXT]` for exact scope).
+**Frontend-only: app-wide dark-theme focus-ring audit** (see
+`FRONTEND_HANDOFF.md`'s own `[NEXT]` for exact scope — this file only
+cross-references it, per the two documents' own division of labor).
 
-Milestones 33-34 finished the entire backend feature — create, reschedule,
-complete, cancel, all four endpoints tested against both a mocked DB and
-real Postgres — and it is currently **invisible in the recruiter UI**: no
-page shows `interview_rounds`, and no page can call any of the four
-endpoints. That is a real, concrete frontend gap, not a manufactured one
-— the same backend-lands-first-then-gets-a-UI pattern this project already
-followed for the language gate (backend milestone 26, UI following in later
-milestones) and for VoiceHR resend (backend + UI same milestone, 29).
-`FRONTEND_HANDOFF.md`'s own `[NEXT]` used to say frontend work was done
-"until a real, concrete gap shows up" during a check of this file — this is
-that gap.
+The interview-rounds feature is now complete end to end and audited as a
+whole workflow: backend (milestones 33-34: create/reschedule/complete/
+cancel, tested against both a mocked DB and real Postgres) and frontend
+(milestones 18-20: display+schedule, then reschedule/complete/cancel, then
+a real-browser audit of the full select→invite→gate→schedule→complete→
+accept chain in one continuous session). That audit found and fixed two
+concrete UX gaps (a focus-ring color mismatch, a missing read-only view on
+`CandidateDetailPage`) and surfaced one broader, real, not-yet-fixed gap:
+the same focus-ring root cause almost certainly affects every other V2
+page's own inner content, not just the one page (`ApplicationsPage`) this
+pass actually Tab-tested. That's the honest next item — not a manufactured
+one, and not new feature work, just finishing a real accessibility check
+this project has now confirmed matters (found live, not theorized).
 
 What remains in Known Limitations above beyond this is external, not
 implementable here: VoiceHR's Gemini access needs Google support/billing

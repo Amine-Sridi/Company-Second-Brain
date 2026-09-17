@@ -406,3 +406,25 @@
   display: flex;
   gap: var(--spacing-2);
 }
+
+/* global.css's shared :focus-visible ring uses --color-primary (a light-theme
+   blue) -- confirmed live in a real browser (post-VoiceHR interview-rounds
+   audit) that every keyboard-focusable link/button in this page's own dark V2
+   content reads it as a mismatched, out-of-place ring, the exact same issue
+   already found and fixed for Sidebar's own links (Sidebar.module.css). Same
+   self-contained-override reasoning: this cannot affect any still-light
+   page's own focus ring. Scoped to links/buttons only, matching that same
+   precedent's own scope (not the text/date/select form inputs on this page,
+   whose global focus style is a subtler box-shadow, not a full outline). */
+.candidateName:focus-visible,
+.inlineLink:focus-visible,
+.inviteButton:focus-visible,
+.acceptButton:focus-visible,
+.rejectButton:focus-visible,
+.scheduleRoundButton:focus-visible,
+.scheduleRoundCancelButton:focus-visible,
+.roundActionButton:focus-visible,
+.roundCancelButton:focus-visible {
+  outline: 2px solid var(--v2-cyan);
+  outline-offset: 2px;
+}

@@ -7,9 +7,11 @@ knowledge graph. It does **not** cover backend implementation, system-wide
 architecture, or cross-service demo readiness — those live in the repo-root
 `handoff.md`; this file must never contradict it.
 
-**Status: feature-complete, including the full interview-rounds lifecycle
-UI** (see `[NEXT]` at the end — a UX/integration audit, not new
-functionality). Every planned page, the full V2 dark visual redesign, an
+**Status: feature-complete and audited**, including the full
+interview-rounds lifecycle UI and its integration into the rest of the
+recruiter workflow (see `[NEXT]` at the end for the one small, concrete,
+newly-discovered gap this audit surfaced). Every planned page, the full V2
+dark visual redesign, an
 optional 3D graph mode, and the VoiceHR language eligibility gate/assessment
 UI are built and have each been confirmed rendering correctly in a real
 browser (not just build-verified) at least once.
@@ -350,17 +352,57 @@ the language gate. Covered by 18 Node-test-runner cases in
   this change in the prior slice's own verification).
 - **`InterviewsPage` untouched** — same "VoiceHR language gate separate"
   precedent as above.
+- **`CandidateDetailPage` also shows interview rounds, read-only (milestone
+  20)** — its Applications table already fetched `interview_rounds` on
+  every row (the same `GET /v1/applications` `ApplicationsPage` uses), just
+  never rendered it; a recruiter reviewing one candidate's full history
+  across every job they've applied to had no way to see interview activity
+  without opening each job's own Applications page. Reuses
+  `ROUND_TYPE_LABELS`/`roundStatusTone`/`roundStatusLabel`/`describeRound`
+  exactly as `ApplicationsPage` does — same badges, same tones, same
+  tooltip — with zero action buttons (no Schedule/Reschedule/Complete/
+  Cancel here; those stay `ApplicationsPage`-only, by design, matching this
+  page's own existing read-only relationship to every other application
+  field it shows). Zero new API calls.
 
 ---
 
 ## Known limitations
 
-- **Interview rounds (display, schedule, reschedule, complete, cancel) only
-  exist on `ApplicationsPage`**, not `CandidateDetailPage`'s own
-  applications table — a deliberate scope narrowing across both this
-  feature's slices (the original `[NEXT]` draft suggested both surfaces);
-  revisit only if a real need for the second surface shows up. See
-  `[NEXT]` for the audit that will decide whether that's a real gap.
+- **Interview-round *actions* (schedule/reschedule/complete/cancel) only
+  exist on `ApplicationsPage`** — `CandidateDetailPage` shows the same
+  rounds read-only (milestone 20) but has no form/button for any of the
+  four actions, by design: this page has never had any application-mutating
+  action of its own (not even Accept/Reject), only cross-links and display,
+  so adding one action just for rounds would be inconsistent with how every
+  other field on this page already works. Revisit only if a real recruiter
+  workflow need for acting on a round from this specific page shows up.
+- **`JobDetailPage` has no interview-round summary, correctly** —
+  confirmed during the post-VoiceHR UX audit (milestone 20), not a silent
+  gap: this page never fetches `Application`s at all (only `MatchResult`s;
+  a match isn't an application until selected), and its existing "View
+  Applications" link already goes straight to the page with full round
+  detail. Adding a summary here would need a new API call plus match/
+  application reconciliation logic — not a small fix, and no concrete need
+  for it surfaced during the audit's real-browser walkthrough.
+- **`DashboardPage` doesn't reflect interview-round activity, correctly** —
+  also confirmed during milestone 20: rounds are advisory, not a pipeline
+  stage (the same reason they never gate `accept`/`reject`), so a
+  dashboard-level count or recent-activity entry for them wouldn't
+  correspond to any real funnel state worth surfacing at that level.
+- **Every V2 page's own inner content (links/buttons inside the page,
+  not the shared Sidebar/TopBar chrome) inherits `global.css`'s
+  light-theme `:focus-visible` ring** — found live on `ApplicationsPage`
+  during milestone 20's audit (candidate name link, Invite/Accept/Reject/
+  Resend, and the new round-lifecycle buttons all showed a light blue ring
+  against dark V2 chrome) and fixed there with a self-contained
+  `ApplicationsPage.module.css` override, the same pattern already used for
+  Sidebar's own links. **Not fixed anywhere else** — this audit only tested
+  keyboard focus on the one page its own feature lives on; every other V2
+  page's inner content has never actually been Tab-tested for this and
+  likely has the identical gap, since the root cause (`global.css`'s shared
+  rule, never overridden per-page except where explicitly noticed) is the
+  same everywhere. See `[NEXT]`.
 - **`LoginPage` still renders the original V1 light theme** — deliberate, a
   pre-auth screen never in scope for the V2 redesign.
 - **`--v2-*` and `--color-*` remain two separate token sets in
@@ -636,66 +678,135 @@ checking the actual source; use this only to orient, not to cite.
     still 409s a `complete` call on an already-completed round regardless
     of what the UI currently shows. The interview-rounds feature (backend
     milestones 33-34, frontend milestones 18-19) is now complete end to end.
+20. **Post-VoiceHR interview rounds UX audit + final workflow
+    integration.** Not a feature slice — a real-browser audit of the whole
+    chain milestones 18-19 only ever verified in pieces: resume match →
+    select → VoiceHR invite → VoiceHR language result → language gate
+    passes → schedule a round → reschedule/complete/cancel → recruiter
+    accept/reject, run start to finish in one continuous session on one
+    application. Since VoiceHR's Gemini access is still denied and
+    `RESEND_API_KEY` is still unset (both pre-existing, unrelated to this
+    audit), a truly live invite+interview still can't be demonstrated —
+    confirmed live (a real "Invite" click on a freshly-selected application
+    correctly 422'd: "Candidate contact information not found; cannot
+    invite to interview," the already-documented orphaned-candidate path,
+    not the `RESEND_API_KEY` 502 path this session expected going in — both
+    are pre-existing, gracefully-handled failure modes, and which one fires
+    just depends on which candidate a given job happens to match). Advanced
+    past that using this project's own already-established, sanctioned
+    technique for exactly this situation (`scripts/seed_demo_data.py`'s
+    `reconnect_voicehr_report`: a direct workflow-state-only DB write to
+    reach `"invited"`, then a real, correctly-HMAC-signed webhook replay) —
+    not a new technique invented for this audit, and applied only to a
+    fresh "Smoketest" application, never real demo data.
+
+    **Findings, classified, on the interview-rounds workflow specifically**
+    (full whole-app scope was not re-audited — see the one broader item
+    below):
+    - **MEDIUM, fixed**: `ApplicationsPage`'s own inner content (candidate
+      name link, Invite/Accept/Reject/Resend, and all four round-lifecycle
+      buttons) inherited `global.css`'s light-theme `:focus-visible` ring —
+      confirmed live via real keyboard Tab navigation (not just a
+      `.focus()` call, which gave a misleading initial reading). Same class
+      of bug already found and fixed for Sidebar's own links; fixed the
+      same way, a self-contained `ApplicationsPage.module.css` override.
+    - **MEDIUM, fixed**: `CandidateDetailPage`'s Applications table never
+      rendered `interview_rounds`, despite already fetching it on every
+      row — a recruiter reviewing one candidate across every job they've
+      applied to had no visibility into interview activity without opening
+      each job's own Applications page. Added read-only, reusing the exact
+      same badge/tone/tooltip helpers `ApplicationsPage` uses, zero new API
+      calls, zero action buttons (this page has never had a mutating
+      action of its own).
+    - **LOW, no change**: `JobDetailPage` correctly has no round summary
+      (never fetches `Application`s at all; "View Applications" already
+      links to full detail). `DashboardPage` correctly has no round
+      activity (rounds are advisory, not a pipeline stage). Terminology
+      (`"Interview"` vs `"Interview rounds"` columns, `"Pass"`/`"Fail"` vs
+      `"Meets requirement"` wording) read clearly during the live
+      walkthrough — no confusion observed, no change made. Mobile layout
+      and `prefers-reduced-motion` both confirmed correctly inherited, not
+      assumed (a real 390px screenshot, and a real computed-style check
+      showing `transition-duration` collapsing under reduced motion).
+    - **No workflow contradiction found**: `accept` is still blocked only
+      by the language gate, exactly as before this feature existed; round
+      outcomes never gate `accept` or `reject`; `reject` remains unblocked
+      by anything; scheduling itself is correctly blocked once
+      `accepted`/`rejected` (verified live — the button renders `disabled`
+      with the exact `describeScheduleBlockedReason()` text as its title,
+      confirmed via Playwright's own "element is not enabled" click-guard
+      rather than a successful click).
+    - **One broader item found, out of this audit's own scope**: the
+      focus-ring gap above is not specific to `ApplicationsPage` — its root
+      cause (`global.css`'s shared rule) is app-wide, and every other V2
+      page's own inner content has never actually been Tab-tested for it.
+      Logged as `[NEXT]` rather than fixed here, since fixing every page
+      would be a real, separate piece of work, not a small fix incidental
+      to this feature.
+    - **Demo-sequence finding, documented not executed**: the real curated
+      demo application `a2769e7b-f63b-4d73-8ac3-a2e443b3d46b` is already
+      schedule-ready today — `status: "interviewed"`,
+      `language_gate.status: "not_required"`, zero existing rounds —
+      confirmed via a live API check. The interview-rounds feature could be
+      added to the actual jury demo with zero setup cost (no Gemini/Resend
+      dependency at all), inserted between the existing "Report Detail" and
+      "Accept" steps. Deliberately **not executed** against this real,
+      curated application during this audit — populating what the jury
+      literally sees is a presentation decision for whoever runs the demo,
+      not a code fix; see `handoff.md`'s updated demo sequence text for the
+      exact recommendation.
+
+    **Verification**: `npm run build` clean; frontend tests 31/31 passing
+    (unchanged by this pass; no new test file — the audit's findings were
+    either UI-code fixes covered by the same real-browser pass, or
+    documentation-only decisions). RWS unit suite 135/135, safe integration
+    suite 113/113 (`TEST_DATABASE_URL` → `company_second_brain_test`, never
+    the live database) — both unchanged, since this audit made no backend
+    changes at all (none were needed; no real defect was found). Confirmed
+    via direct `psql` that the two specific curated demo applications
+    (`a2769e7b-...`, `3a6df887-...`) are exactly as they were before this
+    session — only this session's own disposable "Smoketest" data grew.
+    **Scope note**: this pass audited the interview-rounds workflow
+    specifically (the task actually given), not a full milestone-12-style
+    whole-app regression sweep of every route and both graph modes — the
+    walkthrough did pass through Dashboard/Candidates/Jobs/Reports/
+    Interviews incidentally with zero errors, but that's partial coverage,
+    not a claim of having re-verified everything milestone 12 once did.
 
 ---
 
 ## [NEXT]
 
-**Post-VoiceHR interview rounds UX audit + final workflow integration.**
+**App-wide dark-theme focus-ring audit.**
 
-Milestones 18-19 built the interview-rounds feature in two functional
-slices (display+schedule, then reschedule/complete/cancel), each verified
-in isolation against a purpose-built "Smoketest" scenario. What has never
-been checked is the feature *as part of the one continuous workflow a
-recruiter (and the jury demo) actually experiences* — select → invite →
-VoiceHR interview → language gate clears → schedule a round → complete it
-→ accept/reject. This task is that check, not new functionality: an audit
-that either confirms the integration is solid or finds and fixes concrete
-UX gaps, in the same spirit as milestone 12's own whole-system readiness
-audit.
+Milestone 20's post-VoiceHR audit found `ApplicationsPage`'s own inner
+content (not the shared Sidebar/TopBar chrome, which was already fixed
+long ago) inheriting `global.css`'s light-theme `:focus-visible` ring — a
+real, verified, keyboard-accessibility defect, fixed there. The same root
+cause (`global.css`'s one shared rule, `outline: 2px solid
+var(--color-primary)`, never overridden per-page except where someone
+happened to notice) almost certainly affects every other V2 page's own
+links/buttons too, but only `ApplicationsPage` was actually Tab-tested this
+session — the gap on every other page is inferred, not confirmed.
 
-Concrete scope:
+Concrete scope: real keyboard Tab-navigation (not `.focus()` — milestone
+20 found that gives a misleading reading; use real `page.keyboard.press
+("Tab")` in Playwright) through every one of the 11 post-login V2 pages'
+own interactive content — `DashboardPage`, `CandidatesPage`,
+`CandidateDetailPage`, `JobsListPage`, `JobDetailPage`, `ResumeUploadPage`,
+`InterviewsPage`, `ReportsPage`, `ReportDetailPage`, `GraphPage` (both 2D
+and 3D), and anywhere in `ApplicationsPage` this pass might have missed.
+For each page found with the same gap, add the identical self-contained
+`:focus-visible` override (`outline: 2px solid var(--v2-cyan); outline-
+offset: 2px;`) to that page's own `.module.css`, scoped to its own classes
+— the exact pattern already used twice now (Sidebar, `ApplicationsPage`).
+`LoginPage` is out of scope (still V1 light theme by design; `global.css`'s
+rule is already correct for it). Verify: `npm run build`, frontend tests,
+and a real-browser Tab-navigation pass per page confirming the ring is now
+`--v2-cyan` everywhere it fires.
 
-- **One continuous real-browser walkthrough**, screenshotted at each step,
-  covering the full chain above on a single application (real select, real
-  invite, a real or synthetic completed interview so the language gate
-  clears, real schedule, real complete, real accept) — every prior
-  verification pass tested pieces in isolation; this is the first time the
-  whole chain runs end to end in one sitting.
-- **Decide `CandidateDetailPage`, for real this time.** Deferred twice now
-  (milestones 18 and 19) as "a deliberate scope narrowing" without ever
-  actually checking whether a recruiter reviewing one candidate's full
-  history across jobs would expect to see that candidate's interview
-  rounds there. Either implement the same read-only (or full) surface
-  there, or write down the concrete reason it's correctly out of scope —
-  not a further deferral.
-- **Check whether `DashboardPage`'s "Recent activity" or pipeline
-  breakdown should reflect interview-round activity at all** (e.g., a
-  round scheduled/completed today) — likely no (rounds are advisory, not a
-  pipeline stage), but this has never been explicitly decided, only
-  silently skipped.
-- **Re-read `handoff.md`'s "Demo readiness" / demo sequence text** and
-  confirm it still accurately describes what the app can now do — the
-  documented jury walkthrough predates this feature; decide whether
-  scheduling/completing a round belongs in the demoed sequence or is
-  correctly left out (e.g., because VoiceHR's Gemini access is still
-  denied, so a *fully* real completed interview before scheduling isn't
-  demoable end to end — confirm this constraint still holds and document
-  the actual demo-safe path).
-- **A final whole-system regression pass**: every route, both graph modes,
-  desktop and mobile, confirming the two new sub-components on
-  `ApplicationsPage` haven't regressed anything verified in earlier
-  milestones (cross-links, polling, the language-gate column, invite/
-  resend/accept/reject) — the kind of full-surface check milestone 12 did
-  once for the whole app, now due again after two feature slices landed on
-  top of it.
-- **Confirm reduced-motion/focus-ring behavior** for the new buttons/
-  selects/inputs is inherited correctly from `global.css`'s shared rules
-  (§ Architecture/invariants) rather than assumed — this feature never
-  added any animation or custom focus style of its own, so it should
-  already be correct, but has never actually been checked directly.
-
-This is explicitly a verification/integration task, not a request for more
-UI surface — if the audit finds nothing wrong, say so plainly (per this
-project's own "verification is part of implementation, don't claim success
-without having checked" rule) rather than inventing work to fill it.
+If this audit finds every other page is somehow already correct (unlikely
+given the shared root cause, but not impossible if another page already has
+its own override this session didn't know about), say so plainly rather
+than inventing a fix — check first, per this project's own "verification
+is part of implementation" rule.

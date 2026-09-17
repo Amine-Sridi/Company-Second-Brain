@@ -216,6 +216,16 @@
   color: var(--v2-text-faint);
 }
 
+.roundsCell {
+  min-width: 140px;
+}
+
+.roundsList {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--spacing-1);
+}
+
 .inlineLink {
   color: var(--v2-cyan);
   font-weight: 500;
