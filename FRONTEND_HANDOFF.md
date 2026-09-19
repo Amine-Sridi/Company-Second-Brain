@@ -893,20 +893,27 @@ checking the actual source; use this only to orient, not to cite.
 ## [NEXT]
 
 **No outstanding frontend task.** Milestone 23 (the JD-repair-pass
-badge/note) is the most recent frontend change. Everything from milestone
-21's focus-ring audit still holds — no regression re-check was needed this
-session since milestone 23 touched only the same two pages milestone 22
-did, both already covered by that audit's own full Tab-navigation pass.
+badge/note) is still the most recent *frontend code change*. `handoff.md`'s
+own milestone 38 (post-match JD anomaly detection) shipped since then, but
+it needed zero frontend changes: its new warning is just another entry in
+the same `extraction_warnings` array `JobDetailPage`'s banner already
+iterates, and `"flagged"` is the same status `JobsListPage`'s "Needs review"
+badge already keys off — confirming the open question milestones 22-23 left
+behind (whether a future backend-side extraction/match warning could reuse
+this vocabulary with no new UI) resolved in the "reuses it" direction, at
+least for this case. Everything from milestone 21's focus-ring audit still
+holds — no regression re-check was needed for milestone 38 since it touched
+no frontend file at all (confirmed via a real-browser regression pass in
+`handoff.md`'s own milestone 38 entry, checking the pre-existing warning
+banner still renders correctly with the new backend code path wired in).
 
 The next backend-driven frontend need, if any, will come from
-`handoff.md`'s own `[NEXT]` (post-match JD anomaly detection — flagging a
-job whose *matching outcome* looks wrong, e.g. every candidate disqualified,
-even though its extraction validated cleanly). That feature's own design is
-still open-ended (see `handoff.md`), including whether it needs any new
-frontend surface at all or can reuse the existing `extraction_warnings`
-badge/banner vocabulary this file's milestones 22-23 already built — re-read
-`handoff.md`'s `[NEXT]` once that work actually starts rather than assuming
-either answer here.
+`handoff.md`'s own `[NEXT]` (a JD-extraction-reliability end-to-end audit —
+explicitly scoped as closing live-verification gaps and checking how
+milestones 36-38 compose, not new detection logic). That audit's own scope
+says no new code is expected unless it finds a real defect, so no new
+frontend surface is anticipated from it either — re-read `handoff.md`'s
+`[NEXT]` once that work actually starts rather than assuming this holds.
 
 Everything else on record is either a deliberate, already-documented,
 closed decision (the "V2 page panel" background duplication, the three

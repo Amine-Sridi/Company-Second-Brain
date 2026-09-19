@@ -63,9 +63,11 @@ from db import (
     reschedule_interview_round,
     set_job_language_requirement,
     transition_application,
+    update_job_description_extraction_metadata,
 )
 from explanation import get_or_create_explanation
 from clients import SecondBrainClientError
+from match_anomaly import MatchOutcome, detect_match_anomaly, merge_anomaly_warning
 from resume_intelligence_client import ResumeIntelligenceClientError
 from schemas import (
     ApplicationResponse,
@@ -581,6 +583,34 @@ async def submit_job(
         )
 
     match_responses.sort(key=lambda m: m.final_score, reverse=True)
+
+    # Post-match anomaly detection (see match_anomaly.py) -- runs once, after every
+    # MatchResult above is already scored and persisted. Purely observational: it
+    # only reads the outcomes already computed above, never rescales/rescoring,
+    # never touches a MatchResult row, never calls Gemini. A detected anomaly can
+    # only ever move extraction_status toward "flagged" (never away from it, and
+    # never past it into some other status) and only appends a warning that isn't
+    # already present -- see merge_anomaly_warning's own idempotency contract.
+    anomaly = detect_match_anomaly(
+        [
+            MatchOutcome(
+                semantic_score=m.semantic_score,
+                hard_gate_passed=m.hard_gate_passed,
+                qualified=m.qualified,
+            )
+            for m in match_responses
+        ]
+    )
+    if anomaly is not None:
+        extraction_status, extraction_warnings = merge_anomaly_warning(
+            extraction_status, extraction_warnings, anomaly
+        )
+        update_job_description_extraction_metadata(
+            db,
+            job_description.id,
+            extraction_status,
+            [w.to_dict() for w in extraction_warnings],
+        )
 
     return JobResponse(
         job_id=job.id,

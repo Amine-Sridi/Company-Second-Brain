@@ -468,6 +468,30 @@ def get_job_description_for_job(db: Session, job_id: uuid.UUID) -> Optional[JobD
     )
 
 
+def update_job_description_extraction_metadata(
+    db: Session,
+    job_description_id: uuid.UUID,
+    extraction_status: str,
+    extraction_warnings: list[dict],
+) -> None:
+    """
+    Updates only extraction_status/extraction_warnings on an already-persisted
+    JobDescription -- used by main.py's post-match anomaly check (match_anomaly.py)
+    to append a warning discovered only after that job's MatchResults already
+    exist. Never touches required_skills/preferred_skills/min_years_experience/
+    titles/raw_text/structuring_model, and never touches any MatchResult row at
+    all -- the same "extraction_status/extraction_warnings are observational
+    metadata, not part of what's reproduced" boundary jd_validation.py's own
+    columns already established (migration 0008).
+    """
+    db.execute(
+        update(JobDescription)
+        .where(JobDescription.id == job_description_id)
+        .values(extraction_status=extraction_status, extraction_warnings=extraction_warnings)
+    )
+    db.commit()
+
+
 def set_job_language_requirement(
     db: Session,
     job_id: uuid.UUID,

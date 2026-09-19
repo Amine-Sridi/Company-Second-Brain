@@ -405,6 +405,167 @@ def test_submit_job_phrase_like_required_skill_flags_but_still_creates_job(
 
 
 # ---------------------------------------------------------------------------
+# Post-match JD anomaly detection (match_anomaly.py) -- observational only,
+# never rescoring, never touching MatchResult, never calling Gemini
+# ---------------------------------------------------------------------------
+
+def test_submit_job_match_anomaly_flags_a_clean_extraction_when_everyone_fails_the_hard_gate(
+    client, auth_headers, db_session, mock_second_brain, mock_llm
+):
+    # "Quantum Flux Optimization" is short and skill-name-shaped enough that
+    # jd_validation.py's own phrase-like check never flags it (this stays "clean"
+    # at extraction time) -- but it's a Gemini-hallucinated skill no real
+    # candidate will ever have. 5 candidates, all genuinely relevant (semantic
+    # 0.7) but none with that exact skill -- the real anomaly this feature exists
+    # to catch, and it can only be seen after scoring has actually run.
+    mock_llm._structured = {
+        "required_skills": ["Quantum Flux Optimization"],
+        "preferred_skills": [],
+        "min_years_experience": None,
+        "titles": [],
+    }
+    candidates = [
+        make_candidate(skills=["Python", "Docker"], similarity_score=0.7) for _ in range(5)
+    ]
+    mock_second_brain.set_candidates(candidates)
+
+    resp = _submit_job(client, auth_headers, title="Anomalous Job", top_k=10)
+    assert resp.status_code == 200
+    body = resp.json()
+
+    assert body["extraction_status"] == "flagged"
+    anomaly_warnings = [w for w in body["extraction_warnings"] if w["field"] == "match_outcomes"]
+    assert len(anomaly_warnings) == 1
+    assert "0 of 5" in anomaly_warnings[0]["message"]
+    assert all(not m["qualified"] for m in body["matches"])
+    assert all(not m["hard_gate_passed"] for m in body["matches"])
+
+    from db import JobDescription
+
+    job_id = uuid.UUID(body["job_id"])
+    jd = db_session.query(JobDescription).filter(JobDescription.job_id == job_id).first()
+    assert jd.extraction_status == "flagged"
+    assert any(w["field"] == "match_outcomes" for w in jd.extraction_warnings)
+    # The reproducibility-critical fields (what was actually matched against)
+    # are untouched by the anomaly check -- only extraction_status/
+    # extraction_warnings changed.
+    assert jd.required_skills == ["Quantum Flux Optimization"]
+    assert jd.raw_text == "We need a backend engineer skilled in Python with 2+ years experience."
+
+
+def test_submit_job_match_anomaly_does_not_fire_for_low_semantic_relevance(
+    client, auth_headers, mock_second_brain, mock_llm
+):
+    # Same shape (5 candidates, all fail the hard gate, none qualify) but the
+    # retrieved pool just isn't relevant -- that alone explains 0 qualified, no
+    # JD problem implicated.
+    mock_llm._structured = {
+        "required_skills": ["Quantum Flux Optimization"],
+        "preferred_skills": [],
+        "min_years_experience": None,
+        "titles": [],
+    }
+    candidates = [make_candidate(skills=["Python"], similarity_score=0.2) for _ in range(5)]
+    mock_second_brain.set_candidates(candidates)
+
+    resp = _submit_job(client, auth_headers, title="Weak Retrieval Job", top_k=10)
+    assert resp.status_code == 200
+    body = resp.json()
+
+    assert body["extraction_status"] == "clean"
+    assert not any(w["field"] == "match_outcomes" for w in body["extraction_warnings"])
+
+
+def test_submit_job_match_anomaly_does_not_fire_when_a_candidate_passes_the_hard_gate(
+    client, auth_headers, mock_second_brain, mock_llm
+):
+    mock_llm._structured = {
+        "required_skills": ["Quantum Flux Optimization"],
+        "preferred_skills": [],
+        "min_years_experience": None,
+        "titles": [],
+    }
+    candidates = [make_candidate(skills=["Python"], similarity_score=0.7) for _ in range(4)]
+    candidates.append(make_candidate(skills=["Quantum Flux Optimization"], similarity_score=0.7))
+    mock_second_brain.set_candidates(candidates)
+
+    resp = _submit_job(client, auth_headers, title="One Real Match Job", top_k=10)
+    assert resp.status_code == 200
+    body = resp.json()
+
+    assert body["extraction_status"] == "clean"
+    assert not any(w["field"] == "match_outcomes" for w in body["extraction_warnings"])
+    assert any(m["hard_gate_passed"] for m in body["matches"])
+
+
+def test_submit_job_match_anomaly_does_not_fire_with_too_small_a_pool(
+    client, auth_headers, mock_second_brain, mock_llm
+):
+    mock_llm._structured = {
+        "required_skills": ["Quantum Flux Optimization"],
+        "preferred_skills": [],
+        "min_years_experience": None,
+        "titles": [],
+    }
+    # Only 3 candidates -- below match_anomaly.py's minimum sample size, even
+    # though every other condition (relevant, all fail the gate) is met.
+    candidates = [make_candidate(skills=["Python"], similarity_score=0.9) for _ in range(3)]
+    mock_second_brain.set_candidates(candidates)
+
+    resp = _submit_job(client, auth_headers, title="Small Pool Job", top_k=10)
+    assert resp.status_code == 200
+    body = resp.json()
+
+    assert body["extraction_status"] == "clean"
+    assert not any(w["field"] == "match_outcomes" for w in body["extraction_warnings"])
+
+
+def test_submit_job_match_anomaly_never_touches_persisted_match_result_scoring_fields(
+    client, auth_headers, db_session, mock_second_brain, mock_llm
+):
+    # The anomaly check runs after every MatchResult below is already persisted --
+    # confirms it never rescales/rewrites any of them: every scoring field in the
+    # DB matches exactly what the API response (computed by scoring.score_candidate,
+    # before match_anomaly.py ever runs) already said.
+    mock_llm._structured = {
+        "required_skills": ["Quantum Flux Optimization"],
+        "preferred_skills": [],
+        "min_years_experience": None,
+        "titles": [],
+    }
+    candidates = [
+        make_candidate(skills=["Python", "Docker"], similarity_score=0.7) for _ in range(5)
+    ]
+    mock_second_brain.set_candidates(candidates)
+
+    resp = _submit_job(client, auth_headers, title="Byte For Byte Job", top_k=10)
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["extraction_status"] == "flagged"  # the anomaly did fire
+
+    from db import MatchResult
+
+    job_id = uuid.UUID(body["job_id"])
+    persisted = {
+        str(m.candidate_id): m
+        for m in db_session.query(MatchResult).filter(MatchResult.job_id == job_id).all()
+    }
+    assert len(persisted) == len(body["matches"])
+    for match in body["matches"]:
+        row = persisted[match["candidate_id"]]
+        assert row.semantic_score == match["semantic_score"]
+        assert row.skill_score == match["skill_score"]
+        assert row.experience_score == match["experience_score"]
+        assert row.title_score == match["title_score"]
+        assert row.deterministic_score == match["deterministic_score"]
+        assert row.final_score == match["final_score"]
+        assert row.hard_gate_passed == match["hard_gate_passed"]
+        assert row.qualified == match["qualified"]
+        assert row.matched_requirements == match["matched_requirements"]
+        assert row.missing_requirements == match["missing_requirements"]
+
+
+# ---------------------------------------------------------------------------
 # Retrieval integration + hybrid scoring
 # ---------------------------------------------------------------------------
 
