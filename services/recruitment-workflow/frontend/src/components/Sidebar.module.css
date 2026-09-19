@@ -93,15 +93,11 @@
   color: var(--v2-text);
 }
 
-/* global.css's shared :focus-visible ring uses --color-primary (a light-theme
-   blue) -- confirmed live in a real browser (Phase 28) that this reads as a
-   mismatched, out-of-place ring against this component's dark --v2-* chrome.
-   Self-contained override, same reasoning as every other --v2-* rule in this
-   file: it cannot affect any still-light page's own focus ring. */
-.link:focus-visible {
-  outline: 2px solid var(--v2-cyan);
-  outline-offset: 2px;
-}
+/* No :focus-visible override needed here anymore -- global.css's shared rule now
+   defaults to --v2-cyan itself (app-wide dark-theme focus-ring audit), since every
+   post-login page runs V2. This component's own override (here since Phase 28, back
+   when the shared rule still defaulted to a light-theme blue) is redundant now, not
+   just harmless, so it's removed rather than left duplicating the shared default. */
 
 .linkActive {
   color: var(--v2-text);

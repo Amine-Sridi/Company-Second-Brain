@@ -7,11 +7,12 @@ knowledge graph. It does **not** cover backend implementation, system-wide
 architecture, or cross-service demo readiness — those live in the repo-root
 `handoff.md`; this file must never contradict it.
 
-**Status: feature-complete and audited**, including the full
-interview-rounds lifecycle UI and its integration into the rest of the
-recruiter workflow (see `[NEXT]` at the end for the one small, concrete,
-newly-discovered gap this audit surfaced). Every planned page, the full V2
-dark visual redesign, an
+**Status: feature-complete and audited, no outstanding frontend task**
+(see `[NEXT]` at the end — the one concrete gap two audits in a row
+surfaced, the focus-ring mismatch, is now closed app-wide; milestone 22
+added a small, real-browser-verified badge/banner for JD-extraction
+validation on top of that). Every planned
+page, the full V2 dark visual redesign, an
 optional 3D graph mode, and the VoiceHR language eligibility gate/assessment
 UI are built and have each been confirmed rendering correctly in a real
 browser (not just build-verified) at least once.
@@ -124,7 +125,7 @@ this table adds only the frontend-specific consumption notes.
 |---|---|---|
 | Login | `POST /v1/auth/login` | `api/auth.js` |
 | Upload resume | `POST /v1/resumes` | `api/resumes.js` |
-| List/create jobs | `GET`/`POST /v1/jobs` | `api/jobs.js`; create runs JD structuring + retrieval + scoring server-side, can take several seconds; both carry the optional `required_language`/`min_language_cefr` pair |
+| List/create jobs | `GET`/`POST /v1/jobs` | `api/jobs.js`; create runs JD structuring + retrieval + scoring server-side, can take several seconds; both carry the optional `required_language`/`min_language_cefr` pair, and (new, milestone 36) `extraction_status`/`extraction_warnings` — `JobsListPage`'s badge and `JobDetailPage`'s banner both read this same shape, no field mapping needed |
 | Set/clear job language requirement | `PATCH /v1/jobs/{id}/language-requirement` | `api/jobs.js`'s `setJobLanguageRequirement`; `JobDetailPage`'s inline edit form |
 | Ranked matches | `GET /v1/jobs/{id}/matches` | `explanation` lazily populated server-side; frontend never recomputes any score |
 | Candidate identity | `GET /v1/candidates/{id}/identity` | via `hooks/useCandidateIdentity.js`, session-scoped in-memory cache only |
@@ -390,19 +391,6 @@ the language gate. Covered by 18 Node-test-runner cases in
   stage (the same reason they never gate `accept`/`reject`), so a
   dashboard-level count or recent-activity entry for them wouldn't
   correspond to any real funnel state worth surfacing at that level.
-- **Every V2 page's own inner content (links/buttons inside the page,
-  not the shared Sidebar/TopBar chrome) inherits `global.css`'s
-  light-theme `:focus-visible` ring** — found live on `ApplicationsPage`
-  during milestone 20's audit (candidate name link, Invite/Accept/Reject/
-  Resend, and the new round-lifecycle buttons all showed a light blue ring
-  against dark V2 chrome) and fixed there with a self-contained
-  `ApplicationsPage.module.css` override, the same pattern already used for
-  Sidebar's own links. **Not fixed anywhere else** — this audit only tested
-  keyboard focus on the one page its own feature lives on; every other V2
-  page's inner content has never actually been Tab-tested for this and
-  likely has the identical gap, since the root cause (`global.css`'s shared
-  rule, never overridden per-page except where explicitly noticed) is the
-  same everywhere. See `[NEXT]`.
 - **`LoginPage` still renders the original V1 light theme** — deliberate, a
   pre-auth screen never in scope for the V2 redesign.
 - **`--v2-*` and `--color-*` remain two separate token sets in
@@ -410,8 +398,11 @@ the language gate. Covered by 18 Node-test-runner cases in
   (milestone 17). The two dead tokens that inspection found (`--color-hover-bg`,
   `--color-success-hover`, zero references anywhere) are gone; everything
   else in `--color-*` is still genuinely load-bearing (`LoginPage`'s own
-  styles plus `global.css`'s shared body/focus-ring defaults) and can't be
-  renamed onto `--v2-*`'s names without breaking `LoginPage`'s light theme.
+  styles, `global.css`'s shared body defaults for the pre-paint/no-JS case,
+  and — since milestone 21 — `LoginPage.module.css`'s own scoped revert of
+  `global.css`'s shared `:focus-visible` rules, which default to `--v2-cyan`
+  now that every *other* page is V2) and can't be renamed onto `--v2-*`'s
+  names without breaking `LoginPage`'s light theme.
   `--v2-*` can't be renamed onto `--color-*`'s names either: those exact
   names are read live via `getComputedStyle()` in `MatchGraph.jsx` and
   `MatchGraph3D.jsx`, so they're a public API, not free-floating internal
@@ -772,41 +763,127 @@ checking the actual source; use this only to orient, not to cite.
     walkthrough did pass through Dashboard/Candidates/Jobs/Reports/
     Interviews incidentally with zero errors, but that's partial coverage,
     not a claim of having re-verified everything milestone 12 once did.
+21. **App-wide dark-theme focus-ring audit — closed, via one shared token,
+    not ten scoped overrides.** Milestone 20 fixed the light-theme
+    `:focus-visible` ring on `ApplicationsPage` alone with a scoped
+    per-component override, the same pattern Sidebar's own earlier fix
+    used. Before repeating that pattern on the ten remaining pages, checked
+    whether a single shared fix was now safe instead — it was: every
+    post-login page runs V2 (`FRONTEND_HANDOFF.md`'s own "Current state"),
+    so the light-theme ring was never really the right *default* anymore,
+    just the one `global.css` had shipped with since before V2 existed.
+    Flipped both of `global.css`'s shared `:focus-visible` rules (the plain
+    `outline` rule for buttons/links/table-rows, and the `input`/
+    `textarea`/`select`-specific border+box-shadow rule) from
+    `--color-primary`/`--color-primary-bg` to `--v2-cyan`/`--v2-cyan-bg`,
+    then added one small, self-contained revert in `LoginPage.module.css`
+    (`.field input:focus-visible`, `.submitButton:focus-visible`) back to
+    the light-theme colors for exactly its own three focusable elements —
+    the same "scoped override, cannot affect any other page" reasoning
+    every previous fix used, just inverted: now it's the one *light* page
+    overriding a *dark* default, not the other way around. Removed the
+    three now-redundant per-component overrides this made obsolete
+    (`Sidebar.module.css`'s `.link:focus-visible`, `TopBar.module.css`'s
+    `.logoutButton:focus-visible` — an identical Phase-28-era fix this
+    session hadn't previously noticed, found only by grepping every
+    `:focus-visible` rule in the codebase before touching anything — and
+    `ApplicationsPage.module.css`'s milestone-20 override) rather than
+    leave them duplicating the new shared default. Left two other
+    already-correct, pre-existing overrides alone
+    (`MatchGraph.module.css`'s `.searchInput`, `JobsListPage.module.css`'s
+    `.field input`/`.field textarea`) since both are deliberately more
+    minimal than the new global default (border-color only, no glow
+    box-shadow) — matching them would be a visual change beyond fixing the
+    color, which this task's own "no layout/behavior changes" rule ruled
+    out.
+
+    **Verification**: `npm run build` clean (CSS bundle 71.77 kB → 71.38 kB,
+    a small reduction, not a redesign); frontend tests 31/31 unchanged (pure
+    CSS, no logic touched); Docker image rebuilt and the stack redeployed.
+    Real-browser Playwright pass, real `page.keyboard.press("Tab")` (not
+    `.focus()`, which milestone 20 already found gives a misleading
+    `:focus-visible` reading) through all 11 post-login routes plus a
+    second 2D→3D pass on `GraphPage` — Dashboard, Candidates, Candidate
+    Detail, Jobs, Job Detail, Resume Upload, Applications, Interviews,
+    Reports, Report Detail, Graph 2D, Graph 3D — every one of ~190 tabbed
+    elements across every page now resolves to `--v2-cyan`
+    (`rgb(63, 216, 232)`), zero remaining light-theme-blue occurrences
+    outside `LoginPage`. `LoginPage` itself independently confirmed still
+    exactly light-theme: its email/password inputs' `border-color` and
+    `box-shadow` and its submit button's `outline` all still resolve to
+    `--color-primary`/`--color-primary-bg` (`rgb(47, 95, 219)` /
+    `rgb(234, 240, 253)`), screenshotted for a visual check, not just a
+    computed-style assertion. Explicitly covered every category this task
+    named: buttons, links, a table-row interaction (`InterviewsPage`'s
+    expandable row, screenshotted with a visible cyan ring), form controls
+    (text/date/select/textarea inputs across `ApplicationsPage`/
+    `JobsListPage`/`ResumeUploadPage`), and 2D/3D graph controls
+    (`GraphControls`'s search input, screenshotted with a visible cyan
+    ring). Mobile (390px) `ApplicationsPage` re-checked — same pre-existing
+    horizontal-scroll behavior, no new overflow, cyan ring still correct at
+    that viewport. `prefers-reduced-motion` reconfirmed unaffected (a real
+    `reducedMotion: "reduce"` browser context, `transition-duration`
+    collapsing to ~0 on `LoginPage`'s own submit button) — this change never
+    touched `global.css`'s separate reduced-motion block. No backend
+    involvement at all (pure frontend CSS), so no backend regression suite
+    was re-run this session.
+22. **JD-extraction-validation UI: a badge and a banner, no new page or
+    confirmation step.** Backend companion to `handoff.md`'s milestone 36 —
+    `GET /v1/jobs` now carries `extraction_status`/`extraction_warnings` on
+    every job (see that file's API surface entry). Added a `StatusBadge`
+    (`variant="glass"`, `tone="warning"`, reusing the exact shared component
+    every other status pill in this app already uses) next to the job title
+    on `JobsListPage`, shown only when `extraction_status === "flagged"`;
+    `.jobTitle` picked up `display: flex` to lay the badge out inline with
+    the title text. Added a non-blocking warning banner to `JobDetailPage`,
+    shown under `LanguageRequirementSection` when a job is flagged, listing
+    every `extraction_warnings[].message` — styled with the same structural
+    pattern as the page's existing `.error` block, restyled with
+    `--v2-warning`/`--v2-warning-bg` tokens `StatusBadge`'s own warning tone
+    already uses elsewhere. No new route, no confirmation dialog, no change
+    to how a job is created — exactly this feature's own "minimal recruiter
+    intervention" design goal. `api/jobs.js` needed no change at all (its
+    `getJobs()`/`createJob()` already pass RWS's JSON straight through with
+    no field mapping).
+
+    **Verification**: `npm run build` clean; frontend's 31 Node tests
+    unchanged (pure logic tests, not touched by this UI-only change).
+    Real-browser Playwright pass against the actual running stack (not just
+    build-verified): logged in, submitted a real job with a deliberately
+    vague description through the real Gemini pipeline, confirmed it came
+    back `extraction_status: "flagged"`, then confirmed in the browser that
+    its Jobs-list card shows the "Needs review" badge while every other
+    (clean) job's card shows none, clicked into it, and confirmed the
+    warning banner rendered on `/jobs/{id}` with the exact warning message
+    from the API — screenshotted both, zero console/page errors either way.
 
 ---
 
 ## [NEXT]
 
-**App-wide dark-theme focus-ring audit.**
+**No outstanding frontend task.** Milestone 22 (the JD-extraction-validation
+badge/banner) is the most recent frontend change, real-browser-verified per
+above. Everything from milestone 21's focus-ring audit still holds — no
+regression re-check was needed this session since milestone 22 touched only
+`JobsListPage`/`JobDetailPage`, both already covered by that audit's own
+full Tab-navigation pass.
 
-Milestone 20's post-VoiceHR audit found `ApplicationsPage`'s own inner
-content (not the shared Sidebar/TopBar chrome, which was already fixed
-long ago) inheriting `global.css`'s light-theme `:focus-visible` ring — a
-real, verified, keyboard-accessibility defect, fixed there. The same root
-cause (`global.css`'s one shared rule, `outline: 2px solid
-var(--color-primary)`, never overridden per-page except where someone
-happened to notice) almost certainly affects every other V2 page's own
-links/buttons too, but only `ApplicationsPage` was actually Tab-tested this
-session — the gap on every other page is inferred, not confirmed.
+The next backend-driven frontend need, if any, will come from
+`handoff.md`'s own `[NEXT]` (an automatic JD-repair pass for flagged
+extractions) — the current design for that repair pass is backend-only (a
+second Gemini call before persistence, gated on validation failure), so no
+new frontend surface is expected from it, but re-check `handoff.md` once
+that work starts in case the repaired-vs-never-flagged distinction ends up
+needing its own UI treatment.
 
-Concrete scope: real keyboard Tab-navigation (not `.focus()` — milestone
-20 found that gives a misleading reading; use real `page.keyboard.press
-("Tab")` in Playwright) through every one of the 11 post-login V2 pages'
-own interactive content — `DashboardPage`, `CandidatesPage`,
-`CandidateDetailPage`, `JobsListPage`, `JobDetailPage`, `ResumeUploadPage`,
-`InterviewsPage`, `ReportsPage`, `ReportDetailPage`, `GraphPage` (both 2D
-and 3D), and anywhere in `ApplicationsPage` this pass might have missed.
-For each page found with the same gap, add the identical self-contained
-`:focus-visible` override (`outline: 2px solid var(--v2-cyan); outline-
-offset: 2px;`) to that page's own `.module.css`, scoped to its own classes
-— the exact pattern already used twice now (Sidebar, `ApplicationsPage`).
-`LoginPage` is out of scope (still V1 light theme by design; `global.css`'s
-rule is already correct for it). Verify: `npm run build`, frontend tests,
-and a real-browser Tab-navigation pass per page confirming the ring is now
-`--v2-cyan` everywhere it fires.
-
-If this audit finds every other page is somehow already correct (unlikely
-given the shared root cause, but not impossible if another page already has
-its own override this session didn't know about), say so plainly rather
-than inventing a fix — check first, per this project's own "verification
-is part of implementation" rule.
+Everything else on record is either a deliberate, already-documented,
+closed decision (the "V2 page panel" background duplication, the three
+shared components' unused non-`glass` branches, no pagination, native
+`<audio controls>` — see Known Limitations above, none of these are gaps
+waiting on a next session) or external and not implementable from this
+side: VoiceHR's Gemini access needs Google support/billing action, and
+automatic invite emails need a real `RESEND_API_KEY` configured — see
+`handoff.md`. Before starting new work here, re-audit both handoff
+documents' Known Limitations for anything that became real since this was
+written — don't treat this section's silence alone as proof there's
+nothing left, the same discipline this file has asked of itself before.

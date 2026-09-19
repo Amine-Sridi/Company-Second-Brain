@@ -43,6 +43,7 @@ from db import (
     get_db,
     get_interview_round,
     get_job,
+    get_job_description_for_job,
     get_latest_scoring_config,
     get_match_explanation,
     get_match_result,
@@ -92,6 +93,7 @@ from schemas import (
     ScoringConfigResponse,
     StructuredJobDescription,
 )
+from jd_validation import validate_and_normalize
 from language_gate import BLOCKING_STATUSES, compute_language_gate
 from scoring import CandidateScoringInput, JobRequirements, ScoringWeights, score_candidate
 from shared.llm import LLMProvider, LLMProviderError
@@ -331,8 +333,13 @@ def get_jobs(
             match_count=match_count,
             required_language=job.required_language,
             min_language_cefr=job.min_language_cefr,
+            # Defensive fallback only -- create_job_with_description always creates
+            # both rows atomically, so extraction_status is never actually None from
+            # the outer join below; matches the DB columns' own defaults if it ever were.
+            extraction_status=extraction_status or "clean",
+            extraction_warnings=extraction_warnings or [],
         )
-        for job, match_count in list_jobs_with_match_counts(db)
+        for job, extraction_status, extraction_warnings, match_count in list_jobs_with_match_counts(db)
     ]
 
 
@@ -359,6 +366,17 @@ async def submit_job(
     except LLMProviderError as exc:
         raise HTTPException(status_code=502, detail=f"JD structuring failed: {exc}")
 
+    # Deterministic validation, immediately after structuring and before anything is
+    # persisted or matched -- normalizes for clean storage/display and flags (never
+    # blocks) an extraction that looks unreliable. See jd_validation.py's own module
+    # docstring for why this never calls Gemini and never touches scoring.
+    validation = validate_and_normalize(
+        required_skills=structured.required_skills,
+        preferred_skills=structured.preferred_skills,
+        min_years_experience=structured.min_years_experience,
+        titles=structured.titles,
+    )
+
     if payload.scoring_config_version is not None:
         scoring_config = get_scoring_config_by_version(db, payload.scoring_config_version)
         if scoring_config is None:
@@ -376,13 +394,15 @@ async def submit_job(
         title=payload.title,
         threshold=payload.threshold,
         raw_text=payload.raw_description,
-        required_skills=structured.required_skills,
-        preferred_skills=structured.preferred_skills,
-        min_years_experience=structured.min_years_experience,
-        titles=structured.titles,
+        required_skills=validation.normalized.required_skills,
+        preferred_skills=validation.normalized.preferred_skills,
+        min_years_experience=validation.normalized.min_years_experience,
+        titles=validation.normalized.titles,
         structuring_model=settings.gemini_model,
         required_language=payload.required_language,
         min_language_cefr=payload.min_language_cefr,
+        extraction_status=validation.status,
+        extraction_warnings=[w.to_dict() for w in validation.warnings],
     )
 
     try:
@@ -402,11 +422,14 @@ async def submit_job(
         experience_weight=scoring_config.experience_weight,
         title_weight=scoring_config.title_weight,
     )
+    # Scoring uses the same normalized requirements just persisted onto
+    # JobDescription -- what was actually stored is exactly what's actually scored,
+    # the same reproducibility guarantee every other field on MatchResult already has.
     job_requirements = JobRequirements(
-        required_skills=structured.required_skills,
-        preferred_skills=structured.preferred_skills,
-        min_years_experience=structured.min_years_experience,
-        titles=structured.titles,
+        required_skills=validation.normalized.required_skills,
+        preferred_skills=validation.normalized.preferred_skills,
+        min_years_experience=validation.normalized.min_years_experience,
+        titles=validation.normalized.titles,
     )
 
     match_responses: list[MatchResultResponse] = []
@@ -484,14 +507,16 @@ async def submit_job(
         job_description_id=job_description.id,
         version=job_description.version,
         title=job.title,
-        required_skills=structured.required_skills,
-        preferred_skills=structured.preferred_skills,
-        min_years_experience=structured.min_years_experience,
-        titles=structured.titles,
+        required_skills=validation.normalized.required_skills,
+        preferred_skills=validation.normalized.preferred_skills,
+        min_years_experience=validation.normalized.min_years_experience,
+        titles=validation.normalized.titles,
         threshold=job.threshold,
         scoring_config_version=scoring_config.version,
         required_language=job.required_language,
         min_language_cefr=job.min_language_cefr,
+        extraction_status=validation.status,
+        extraction_warnings=[w.to_dict() for w in validation.warnings],
         matches=match_responses,
     )
 
@@ -519,6 +544,7 @@ def update_job_language_requirement(
         raise HTTPException(status_code=404, detail="Job not found")
 
     match_count = len(list_match_results_for_job(db, job_id))
+    job_description = get_job_description_for_job(db, job_id)
     return JobSummaryResponse(
         job_id=job.id,
         title=job.title,
@@ -526,6 +552,8 @@ def update_job_language_requirement(
         match_count=match_count,
         required_language=job.required_language,
         min_language_cefr=job.min_language_cefr,
+        extraction_status=job_description.extraction_status if job_description else "clean",
+        extraction_warnings=job_description.extraction_warnings if job_description else [],
     )
 
 

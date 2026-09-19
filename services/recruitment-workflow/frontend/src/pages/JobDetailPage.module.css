@@ -121,6 +121,21 @@
   border: 1px solid rgba(251, 113, 133, 0.3);
 }
 
+.extractionWarning {
+  background: var(--v2-warning-bg);
+  color: var(--v2-warning);
+  padding: var(--spacing-2) var(--spacing-3);
+  border-radius: var(--v2-radius);
+  font-size: var(--font-size-sm);
+  border: 1px solid var(--v2-warning);
+  margin-bottom: var(--spacing-3);
+}
+
+.extractionWarning ul {
+  margin: var(--spacing-1) 0 0;
+  padding-left: var(--spacing-4);
+}
+
 .tableWrapper {
   overflow-x: auto;
   background: var(--v2-surface);

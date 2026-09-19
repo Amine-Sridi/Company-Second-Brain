@@ -115,6 +115,12 @@ class JobDescription(Base):
     min_years_experience: Optional[float] = Column(Float, nullable=True)
     titles: list = Column(JSONB, nullable=False)
     structuring_model: str = Column(Text, nullable=False)
+    # Deterministic JD-extraction validation metadata (jd_validation.py) -- recorded
+    # once, immediately after structuring, never a correction of the four fields
+    # above. See alembic/versions/0008_jd_extraction_validation.py for why these are
+    # NOT NULL with a constant default rather than nullable.
+    extraction_status: str = Column(Text, nullable=False, server_default=text("'clean'"))
+    extraction_warnings: list = Column(JSONB, nullable=False, server_default=text("'[]'::jsonb"))
     created_at: datetime = Column(
         DateTime(timezone=True), server_default=text("now()"), nullable=False
     )
@@ -401,8 +407,20 @@ def create_job_with_description(
     structuring_model: str,
     required_language: Optional[str] = None,
     min_language_cefr: Optional[str] = None,
+    extraction_status: str = "clean",
+    extraction_warnings: Optional[list[dict]] = None,
 ) -> tuple[Job, JobDescription]:
-    """Create a new Job and its first (version 1) JobDescription in one transaction."""
+    """
+    Create a new Job and its first (version 1) JobDescription in one transaction.
+
+    required_skills/preferred_skills/min_years_experience/titles are expected to
+    already be normalized (jd_validation.normalize_extraction) by the caller --
+    this function persists exactly what it's given, the same "used for scoring
+    is exactly what's stored" reproducibility every other field here already has.
+    extraction_status/extraction_warnings default to the same "clean, no
+    warnings" values the DB column defaults use, so any caller that predates
+    jd_validation.py (e.g. an older test) still gets a valid row.
+    """
     job = Job(
         title=title,
         threshold=threshold,
@@ -421,6 +439,8 @@ def create_job_with_description(
         min_years_experience=min_years_experience,
         titles=titles,
         structuring_model=structuring_model,
+        extraction_status=extraction_status,
+        extraction_warnings=extraction_warnings if extraction_warnings is not None else [],
     )
     db.add(job_description)
     db.commit()
@@ -431,6 +451,21 @@ def create_job_with_description(
 
 def get_job(db: Session, job_id: uuid.UUID) -> Optional[Job]:
     return db.query(Job).filter(Job.id == job_id).first()
+
+
+def get_job_description_for_job(db: Session, job_id: uuid.UUID) -> Optional[JobDescription]:
+    """The one JobDescription for a job (version 1 always today -- see
+    list_jobs_with_match_counts's own docstring for why no version filter is
+    needed yet). Used wherever a single job's extraction_status/
+    extraction_warnings need to be re-read after creation (e.g. after the
+    language-requirement PATCH, which returns the same JobSummaryResponse shape
+    and must not silently reset those fields to their schema defaults)."""
+    return (
+        db.query(JobDescription)
+        .filter(JobDescription.job_id == job_id)
+        .order_by(JobDescription.version.desc())
+        .first()
+    )
 
 
 def set_job_language_requirement(
@@ -457,25 +492,43 @@ def set_job_language_requirement(
     return get_job(db, job_id)
 
 
-def list_jobs_with_match_counts(db: Session) -> list[tuple[Job, int]]:
+def list_jobs_with_match_counts(db: Session) -> list[tuple[Job, str, list, int]]:
     """
-    Every job, newest first, paired with how many MatchResults exist for it -- one
-    query (LEFT JOIN + GROUP BY), not N+1 and not a per-job subquery loop. No
-    pagination/filtering/search: recruiter-facing GET /v1/jobs is intentionally a
-    lightweight full list, not a browsing API (see FRONTEND_HANDOFF.md).
+    Every job, newest first, paired with its own JobDescription's extraction
+    status/warnings (jd_validation.py) and how many MatchResults exist for it --
+    one query, not N+1 and not a per-job subquery loop. No pagination/filtering/
+    search: recruiter-facing GET /v1/jobs is intentionally a lightweight full
+    list, not a browsing API (see FRONTEND_HANDOFF.md).
 
-    Grouping by Job.id (the primary key) and ordering by Job.created_at is valid
-    Postgres SQL without adding created_at to GROUP BY -- every other column of a
-    table is functionally dependent once grouped by its primary key.
+    Joins JobDescription on job_id without filtering to a specific version:
+    every job in this codebase has exactly one JobDescription today (version 1
+    always -- no code path here ever creates a second version, PATCH .../
+    language-requirement only touches Job). If that ever changes, this would
+    need to pick the latest version explicitly instead of grouping by
+    JobDescription.id too.
+
+    Grouping by Job.id/JobDescription.id (both primary keys) and ordering by
+    Job.created_at is valid Postgres SQL without adding created_at to GROUP BY
+    -- every other column of a table is functionally dependent once grouped by
+    its primary key.
     """
     rows = (
-        db.query(Job, func.count(MatchResult.id).label("match_count"))
+        db.query(
+            Job,
+            JobDescription.extraction_status,
+            JobDescription.extraction_warnings,
+            func.count(MatchResult.id).label("match_count"),
+        )
+        .outerjoin(JobDescription, JobDescription.job_id == Job.id)
         .outerjoin(MatchResult, MatchResult.job_id == Job.id)
-        .group_by(Job.id)
+        .group_by(Job.id, JobDescription.id)
         .order_by(Job.created_at.desc())
         .all()
     )
-    return [(job, match_count) for job, match_count in rows]
+    return [
+        (job, extraction_status, extraction_warnings, match_count)
+        for job, extraction_status, extraction_warnings, match_count in rows
+    ]
 
 
 def get_latest_scoring_config(db: Session) -> Optional[ScoringConfig]:

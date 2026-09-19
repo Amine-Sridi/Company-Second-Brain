@@ -6,9 +6,11 @@ detail (routes, pages, components, visual design) lives in `FRONTEND_HANDOFF.md`
 instead — this file never duplicates it, only references it (per the two files'
 own long-standing division of labor).
 
-**Project status: feature-complete; the interview-rounds feature is now
-audited end to end, with one small frontend-only accessibility item left**
-(see `[NEXT]` at the end). Every backend service, the full recruiter frontend, and
+**Project status: feature-complete; VoiceHR's Gemini access is restored
+after a long-standing external denial, and JD submission now deterministically
+flags suspicious Gemini extractions without a mandatory review step
+(milestone 36) — an automatic repair pass for those flags is next** (see
+`[NEXT]` at the end). Every backend service, the full recruiter frontend, and
 the 2D/3D knowledge graph are implemented and passed a final whole-system
 readiness audit (see "Demo readiness" below). A dedicated audit of VoiceHR's
 autonomous real-time candidate interview confirmed it was already fully built
@@ -53,8 +55,9 @@ already has to that state machine); the first backend slice from that design
 — the table, the model, and creation — landed in milestone 33, the
 lifecycle actions (reschedule/complete/cancel) in milestone 34, and the
 feature's frontend counterpart landed and was audited end to end as a
-whole workflow across `FRONTEND_HANDOFF.md`'s milestones 18-20 — see that
-file for the full audit findings.
+whole workflow across `FRONTEND_HANDOFF.md`'s milestones 18-21 (the last of
+which closed the one gap the audit itself surfaced, an app-wide
+dark-theme focus-ring fix) — see that file for the full audit findings.
 
 **RESOLVED — the previous "demo backbone unusable" warning that used to live
 here.** Both blockers it described are now fixed: (1) the destructive
@@ -89,7 +92,7 @@ embeddings, one role per schema, no cross-schema grants (verified live).
 | Service | Tests | Notes |
 |---|---|---|
 | Resume Intelligence | 86 passed | Runs in-container or on host. |
-| Recruitment Workflow (RWS) | 135 passed | `services/recruitment-workflow/tests/` — mocked-DB unit/route tests, host or in-container. +12 this session (milestone 34): reschedule/complete/cancel success, 409-wrong-state, 404-unknown-round, 404-cross-application, and complete's 422-before-the-db cases, all in `test_interview_rounds.py`. |
+| Recruitment Workflow (RWS) | 159 passed | `services/recruitment-workflow/tests/` — mocked-DB unit/route tests, host or in-container. +24 this session (milestone 36): 20 new pure-function tests in `test_jd_validation.py` (normalization + all 4 detection rules + edge cases at thresholds), plus 4 more across `test_jobs_list.py`/`test_language_requirement_workflow.py` covering `extraction_status`/`extraction_warnings` passthrough. |
 | VoiceHR | 205 passed | **Host only** — its Docker image deliberately ships without `pytest` (lean production image). +11 this session (milestone 32): 5 new `test_report.py` assessment-contract tests, `test_interview_quality.py` restructured onto the new `golden_cases.py`/`benchmark_runner.py` split (9→15 tests: 13 golden cases + 2 whole-benchmark checks). Also runnable standalone, no pytest: `cd services/voicehr && python -m tests.benchmark_runner`. |
 | Second Brain | none | No `tests/` directory exists. A pre-existing, accepted gap — its one real integration (Resume Intelligence → Second Brain ingest/embed) is instead covered by a live end-to-end smoke test (candidate ingested, embedded, retrieved, PII boundary confirmed via direct `psql`). |
 
@@ -105,10 +108,12 @@ changed about how this now has to be run. `tests/integration/test_db_safety.py`
 (13 passed, new this session) is a pure unit test of the guard itself, no DB
 needed. `test_resume_intelligence.py`/`test_second_brain.py` exist too but
 were not run this session (untouched by this session's changes).
-`test_recruitment_workflow.py` is 96 passed (was 88 before milestone 29's +8
-for the explicit resend flow) — re-confirmed green this session at the same
-count, since milestone 30 touched only VoiceHR, which this suite doesn't
-cover. **`tests/integration/test_interview_rounds_integration.py` (17
+`test_recruitment_workflow.py` is 99 passed (was 96 before milestone 36's +3
+for JD-extraction-validation coverage: a clean extraction reports
+`extraction_status: "clean"`, a total-under-extraction is flagged but still
+persists and matches normally against a real retrieved candidate, and a
+phrase-like required skill is flagged but the job is still created rather
+than rejected). **`tests/integration/test_interview_rounds_integration.py` (17
 passed, milestones 33-34 combined)** — real Postgres, run against the
 disposable `company_second_brain_test` database per the test-isolation
 invariant below, never the live demo database. Covers what the RWS-local
@@ -204,6 +209,41 @@ idempotency key, and that the retry attempted delivery again (not skipped).
 The success path (email actually arriving) is covered thoroughly by mocked
 unit tests but was **not** exercised live this session — no real
 `RESEND_API_KEY` is configured in this environment (see Known limitations).
+
+**This session (deterministic JD-extraction validation, milestone 36)**: JD
+submission's real failure mode — Gemini extracting `required_skills` as
+phrase-like text (e.g. `"building and deploying REST APIs"`) that can never
+exact-match under the hard gate, or under-extracting everything so almost
+every candidate qualifies on semantic score alone — is now caught
+deterministically, without adding a mandatory recruiter-review step. A new
+pure module, `jd_validation.py` (no DB/HTTP/LLM calls, mirrors `scoring.py`'s
+own discipline), normalizes the structured JD (trim/dedupe/drop
+required-preferred overlap — provably scoring-neutral, since
+`compute_skill_score` targets `required ∪ preferred` as a set union) and
+checks it against 4 deterministic rules, run immediately after Gemini
+structuring and before persistence/matching. A flagged extraction is never
+blocked or held for review — it's persisted and matched exactly like a clean
+one; `extraction_status`/`extraction_warnings` (new columns on
+`JobDescription`, migration `0008`) just make the flag visible. Frontend: a
+"Needs review" badge on the Jobs list, a non-blocking warning banner on the
+Job Detail page — no confirmation step, no new required user action. Ran the
+full stack live end to end against the real running containers (not just
+tests): migration `0008` applied to both the live and disposable test
+databases (confirmed all 8 pre-existing `job_descriptions` rows backfilled to
+`clean`/`[]` with zero errors), then a real job submitted through the actual
+Gemini pipeline with a deliberately vague description — Gemini genuinely
+under-extracted everything, the job came back `extraction_status: "flagged"`
+with the expected warning message, and 5 real `MatchResult`s were still
+created and returned (not blocked), confirmed identically via `GET
+/v1/jobs`, the exact endpoint the frontend reads. The new UI strings
+("Needs review", "extraction looks suspicious") were confirmed present in
+the actual built frontend bundle the container serves, and then confirmed
+rendering correctly in a real Chromium browser (Playwright, cached binary on
+this machine): logged in, navigated to `/jobs`, the flagged job shows the
+"Needs review" badge next to its title while every other (clean) job shows
+none, clicked into it, and the warning banner rendered on `/jobs/{id}` with
+the exact warning message from the API — zero console/page errors
+throughout.
 
 ---
 
@@ -457,9 +497,9 @@ not carried forward from memory.
 | `GET /health` | none | |
 | `POST /v1/auth/login` | none | Issues the recruiter JWT. |
 | `POST /v1/resumes` | JWT | Forwards to Resume Intelligence with the service key; browser never sees it. |
-| `GET /v1/jobs` | JWT | `match_count` via one `LEFT JOIN`, no pagination. Each row also carries `required_language`/`min_language_cefr` (both `null` if the job has no requirement). |
-| `POST /v1/jobs` | JWT | JD structuring (Gemini) → Second Brain retrieval → scoring → persists one `MatchResult` per candidate. Optional `required_language`/`min_language_cefr` (both or neither) set the job's language eligibility requirement — recruiter-set only, Gemini never sees these fields. |
-| `PATCH /v1/jobs/{job_id}/language-requirement` | JWT | Configures or clears (both null) an existing job's language requirement. Never touches any already-created `Application`'s own snapshot. |
+| `GET /v1/jobs` | JWT | `match_count` via one `LEFT JOIN`, no pagination. Each row also carries `required_language`/`min_language_cefr` (both `null` if the job has no requirement). **New this session (milestone 36)**: each row also carries `extraction_status` (`"clean"`/`"flagged"`) and `extraction_warnings` (list of `{field, message}`), read from the job's `JobDescription` via an outer join — falls back to `"clean"`/`[]` defensively if that join has no match (shouldn't happen; `create_job_with_description` always creates both atomically). |
+| `POST /v1/jobs` | JWT | JD structuring (Gemini) → deterministic validation/normalization (`jd_validation.py`) → Second Brain retrieval → scoring → persists one `MatchResult` per candidate. Optional `required_language`/`min_language_cefr` (both or neither) set the job's language eligibility requirement — recruiter-set only, Gemini never sees these fields. **New this session (milestone 36)**: the structured JD is normalized (trim/dedupe/required-preferred-overlap-removal — scoring-neutral, since `compute_skill_score` targets `required ∪ preferred`) and checked against 4 deterministic rules (phrase-like required skills, total under-extraction, experience >25 years, >6 title variants) before being persisted or matched. A flagged extraction is never blocked — it's saved and matched exactly like a clean one, just with `extraction_status: "flagged"` and `extraction_warnings` in the response for recruiter visibility. The response's `required_skills`/`preferred_skills`/`titles`/`min_years_experience` are the *normalized* values (what was actually persisted and matched), not Gemini's raw output. |
+| `PATCH /v1/jobs/{job_id}/language-requirement` | JWT | Configures or clears (both null) an existing job's language requirement. Never touches any already-created `Application`'s own snapshot. **New this session (milestone 36)**: response now re-reads and surfaces the job's real `extraction_status`/`extraction_warnings` (via `get_job_description_for_job`) instead of hardcoding `"clean"`/`[]`. |
 | `GET /v1/jobs/{job_id}/matches` | JWT | Lazily generates+caches `explanation` per match on first read. |
 | `POST /v1/scoring-configs` | service key | Admin/system action, not recruiter-facing. |
 | `GET /v1/candidates/{id}/identity` | JWT | Transient proxy to Resume Intelligence; no `db` dependency. |
@@ -620,29 +660,43 @@ python services/recruitment-workflow/scripts/seed_demo_data.py --yes --job-title
 
 ---
 
-## Known limitations
-
-- **CRITICAL, external, not a code defect: VoiceHR's Gemini API key/project is
-  currently denied access by Google.** Discovered this session while live-
-  verifying the autonomous interview flow (see milestone 25): both a fresh
-  Gemini Live connect attempt and a plain-text evaluator call
-  (`POST /api/admin/reports/{token}/retry`) failed identically with
+- **RESOLVED 2026-09-19: VoiceHR's Gemini API key/project was denied access
+  by Google from milestone 25 onward; a user-provided key rotation that same
+  day fixed it.** Full arc, since the history matters for anyone who hits
+  this again: milestone 25 first found VoiceHR's `GEMINI_API_KEY` returning
   `403 PERMISSION_DENIED — "Your project has been denied access. Please
-  contact support."` (Live API surfaces it as a WebSocket close code 1008).
-  **Scope confirmed narrow**: RWS/Resume Intelligence/Second Brain use a
-  *different* `GEMINI_API_KEY` and were confirmed still fully working the same
-  session (a real job creation triggered a live JD-structuring + embedding
-  call successfully) — this is isolated to VoiceHR's own key/project, not a
-  system-wide outage. Nothing in this codebase can fix it; it requires action
-  in Google's console (billing/support) on whichever account owns that key.
-  **Demo impact is contained**: the existing demo plan already avoids a live
-  VoiceHR invite/interview (see "no in-product way to retrieve a VoiceHR
-  interview link" below) and uses an already-completed report instead — that
-  report was generated in an earlier session, before this access was denied,
-  so it remains valid to show. Do not attempt a fresh live VoiceHR interview
-  in front of the jury; if asked, the honest answer is "VoiceHR's Gemini
-  access is currently denied by Google, verified during my last audit — the
-  rest of the pipeline uses a separate key and is unaffected."
+  contact support."` on both a Live connect and a plain evaluator call. A
+  first key rotation the same day (2026-09-19) did **not** fix it — re-tested
+  the same way (a real `POST /api/admin/reports/{token}/retry` against the
+  one real stored report, plus raw `curl` calls straight to
+  `generativelanguage.googleapis.com` bypassing all app code) and got the
+  identical 403, even though the new key could list models fine (ruling out
+  "wrong model name") — conclusively a project-level denial that survives
+  rotating the key within that same project. A **second** key rotation,
+  minutes later, resolved it: the same `/retry` call returned a real `200`
+  with a genuine evaluation (`evaluation_status: "insufficient_evidence"` —
+  a real, correct rubric outcome for this transcript's short length, not an
+  error), confirmed independently with two raw, app-code-bypassing checks —
+  a `generateContent` call (`200`, real generated text) and, critically, a
+  **real Gemini Live session** using VoiceHR's own exact model
+  (`gemini-3.1-flash-live-preview`) and config shape (`AUDIO` response
+  modality, output transcription) via the `google-genai` SDK directly inside
+  the container: real audio bytes generated, output transcription read back
+  `"OK."` — the same capability the autonomous interview itself depends on,
+  not just the evaluator's plain-text path. **Scope, reconfirmed**:
+  RWS/Resume Intelligence/Second Brain's separate `GEMINI_API_KEY` was
+  unaffected throughout, on a different project. **What changed for the
+  demo**: a live VoiceHR invite/interview is a real option again, not just
+  the fallback of showing an already-completed report — see "Demo readiness"
+  below, updated accordingly. **One side effect worth knowing**: retrying
+  the one real stored report (`70f3068e-...`, interview_id 1, "Amine Sridi")
+  as part of this verification changed its stored `evaluation_status` from
+  `"failed"` (the old access-denied error, now cleared) to
+  `"insufficient_evidence"` (a real, working evaluation of that same short
+  transcript) — the report's `overall_score`/`cefr_level` are now `null`
+  instead of the old placeholder `85`/`"C1"`. This is a real, correct result
+  replacing a fake error, not data loss, but it changes what that report
+  shows in a live demo — see "Demo readiness."
 - **RESOLVED, two sessions ago's incident: every `recruitment.jobs`/
   `applications`/`match_results` row was wiped by an integration-test fixture
   run against the live Postgres by mistake.** Both halves are now fixed: the
@@ -801,28 +855,46 @@ python services/recruitment-workflow/scripts/seed_demo_data.py --yes --job-title
   `insufficient_evidence` webhook. The next session with real Gemini access
   should do exactly one controlled live interview and inspect the result
   before trusting this rubric's real-world behavior beyond what the mocked
-  tests already prove.
+  tests already prove. **Partially closed 2026-09-19**: Gemini access itself
+  is now restored (see Known Limitations' `RESOLVED` entry), and retrying
+  the one pre-existing real report against the new evaluator did produce a
+  genuine `insufficient_evidence` result (not a mocked one) — but that
+  retry ran the new rubric against an *old*, already-recorded short
+  transcript, not a fresh interview conducted through the new Section E
+  adaptive-questioning prompt end to end. The specific gap this bullet
+  named — a real candidate actually experiencing Section E, producing a
+  real `interaction_spontaneity` score — is still open; one controlled live
+  interview is now possible to actually run, just hasn't been yet.
 
 ---
 
 ## Demo readiness
 
-**Verdict: DEMO READY again, with one remaining known gap.** The
-whole-system audit that originally produced a DEMO READY verdict is still
-architecturally accurate (no code-level `CRITICAL`/`HIGH` defect). The demo
-data that was wiped is restored (see "Current demo data" under "Current
-state"), and the fixture responsible can no longer repeat the incident (see
-the test-isolation invariant). **What's still genuinely blocked**:
-`POST /v1/applications/{id}/invite` fails with a clean `502` whenever it's
-actually called, because VoiceHR's `RESEND_API_KEY` is unset and (since
-milestone 27) a successful email send is what makes an invite succeed at
-all. This does not block the demo sequence below — it already routes around
-a live invite by using the pre-reconnected, already-`interviewed`
-application for the Report Detail leg — but it does mean a *live* "Invite"
-click cannot be demonstrated until a real Resend key is configured and the
-`voicehr` container rebuilt/restarted. The infrastructure fix from the
-original audit (`restart: unless-stopped` on all four app containers) is
-still in place and still correct.
+**Verdict: DEMO READY, with one remaining known gap (not the one this
+section used to name).** The whole-system audit that originally produced a
+DEMO READY verdict is still architecturally accurate (no code-level
+`CRITICAL`/`HIGH` defect). The demo data that was wiped is restored (see
+"Current demo data" under "Current state"), and the fixture responsible can
+no longer repeat the incident (see the test-isolation invariant).
+**VoiceHR's Gemini access, the previous headline blocker, is resolved**
+(see Known Limitations' now-`RESOLVED` entry) — a live interview is a real
+option again, not just a fallback story. **What's still genuinely
+blocked**: `POST /v1/applications/{id}/invite` fails with a clean `502`
+whenever it's actually called, because VoiceHR's `RESEND_API_KEY` is
+*still* unset (confirmed empty this session, unrelated to and unaffected by
+the Gemini key change) and (since milestone 27) a successful email send is
+what makes an invite succeed at all. This does not block the demo sequence
+below — it already routes around a live invite by using the
+pre-reconnected, already-`interviewed` application for the Report Detail
+leg — but it does mean a *live* "Invite" click, and therefore a *live*
+candidate-facing interview reachable through the normal recruiter flow,
+cannot be demonstrated until a real Resend key is configured and the
+`voicehr` container rebuilt/restarted. (A live interview *could* still be
+demonstrated by handing the presenter a direct interview link bypassing the
+email step, if that's ever wanted — not built, not needed unless asked
+for.) The infrastructure fix from the original audit
+(`restart: unless-stopped` on all four app containers) is still in place
+and still correct.
 
 **AI / Gemini quota** — the three genuinely quota-consuming paths, for
 planning purposes: (1) `POST /v1/resumes` (one extraction call), (2)
@@ -842,19 +914,23 @@ re-run, so this is instant and free) → Applications → **Invite only if
 `RESEND_API_KEY` has been configured for the day** (otherwise skip this
 click and say so — see the verdict above); either way, continue to → Report
 Detail on application `a2769e7b-f63b-4d73-8ac3-a2e443b3d46b` (the
-already-`interviewed` one, reconnected to VoiceHR's real report this
-session). **Know before presenting it**: this specific report's own
-`evaluation_status` is `"failed"` (a leftover from an earlier session's retry
-attempt hitting the still-open Gemini-access-denial finding below, not
-something this session caused) — `AssessmentPanel` therefore shows a red
-"Failed" badge and hides the numeric scores entirely, even though the real
-transcript, strengths/concerns, and recording all render normally below it.
-This is honest, unmodified real data, not a bug in this restoration — but it
-is *not* a "look at the great score" moment, so frame it as a resilience
-story (a technical evaluation failure still produces a usable, reviewable
-report) rather than a scoring showcase. VoiceHR's Gemini access is still
-denied by Google (see below either way), so a *fresh* interview cannot be
-conducted live regardless of the Resend key. → **optional: Schedule a
+already-`interviewed` one, reconnected to VoiceHR's real report). **Know
+before presenting it — this changed since the last time this section was
+written**: this specific report's own `evaluation_status` is now
+`"insufficient_evidence"`, not `"failed"` — retrying it as part of
+re-confirming Gemini access (see Known Limitations' `RESOLVED` entry) ran a
+real, working evaluation against its real (short) transcript, and Gemini
+correctly determined there wasn't enough usable language evidence for a
+confident CEFR verdict, rather than erroring out. `AssessmentPanel`
+therefore shows the amber "Insufficient evidence" badge and the
+`INSUFFICIENT_EVIDENCE_EXPLANATION` text instead of a score, while the real
+transcript, strengths/concerns, and recording still render normally below
+it — this is the exact state milestone 31/32's own frontend work was built
+to handle gracefully, and now has a real (not synthetic) example to show.
+Frame it the same resilience-story way as before, just with the accurate
+current wording: the rubric correctly recognized a too-short interview
+instead of forcing a number onto it, and the report stays fully usable
+regardless. → **optional: Schedule a
 technical or managerial interview round on this exact application, then
 Complete it** — confirmed live this session that application
 `a2769e7b-...` is already schedule-ready with zero setup (`status:
@@ -922,13 +998,14 @@ no `.env` file changed since last verified boot.
 5. *Why SQLite for VoiceHR?* — A pre-existing system, deliberately
    unmigrated per project scope; its one real bug (a DB path outside the
    persisted volume) was found and fixed, and re-verified live.
-6. *Can you run a live candidate interview right now?* — No: VoiceHR's own
-   Gemini API key is currently denied access by Google (an external,
-   non-code issue found during this project's last audit — see Known
-   Limitations). The rest of the AI pipeline (JD structuring, embeddings,
-   match explanations) uses a separate key and is confirmed unaffected; the
-   demo instead shows an already-completed interview report generated before
-   that access was denied.
+6. *Can you run a live candidate interview right now?* — The Gemini side is
+   fixed (see Known Limitations' `RESOLVED` entry — verified with a real
+   Gemini Live session generating real audio, not just a text call), but
+   the *recruiter-facing* invite path still can't send the interview email
+   live, because VoiceHR's `RESEND_API_KEY` is unset — a separate, unrelated
+   setting. The honest answer either way: "the AI half is confirmed working
+   again; only the email-delivery credential for actually reaching a
+   candidate is still missing," not "the AI is broken."
 7. *Does the language interview affect the resume match score?* — No,
    deliberately. `final_score`/`qualified` come only from `scoring.py`
    (resume matching); the language gate is a separate, later, deterministic
@@ -1909,34 +1986,114 @@ re-verifying against current source, per every prior session's own discipline.
     database, and this project has no delete endpoint for any resource by
     design, so a live create here would have left a permanent, unrequested
     change to visible demo state rather than a reversible smoke test.
+35. **VoiceHR's Gemini access denial (open since milestone 25) is
+    resolved.** Not code work — the user rotated VoiceHR's `GEMINI_API_KEY`
+    to a key from a working project. Verified thoroughly, not assumed: the
+    container was force-recreated to guarantee the new key was actually
+    loaded (checked via `printenv`, not inferred), then re-ran the exact
+    historical verification (a real `POST /api/admin/reports/{token}/retry`
+    against the one real stored report) plus two new checks that bypass all
+    of this codebase's own code entirely — a raw `curl generateContent` call
+    straight to `generativelanguage.googleapis.com` (`200`, real generated
+    text) and a real Gemini Live session via the `google-genai` SDK using
+    VoiceHR's own exact model (`gemini-3.1-flash-live-preview`) and config
+    shape (`AUDIO` response modality, output transcription) — real audio
+    bytes generated, transcription read back correctly. A *first* rotation
+    that same day had not fixed it (same 403, isolated via the same
+    raw-`curl` technique to a project-level denial, not a key- or
+    model-specific one — documented, then superseded, in Known
+    Limitations); the second rotation did. Retrying the one real stored
+    report as part of this check changed its stored result from the old
+    `"failed"` (access-denied error) to a genuine `"insufficient_evidence"`
+    — a real, correct rubric outcome for that transcript's actual length,
+    not an error and not data loss, but a change worth knowing about before
+    presenting that report (see "Demo readiness," updated accordingly).
+    **Not done this session**: an actual fresh end-to-end live interview
+    through the real candidate-facing flow (mic, WebSocket session
+    lifecycle, the new Section E adaptive-questioning prompt from milestone
+    31) — only the raw Gemini connectivity was verified, deliberately
+    scoped to answering "does the key work now," not "does the whole
+    autonomous interview experience still work end to end." See milestone
+    36's own `[NEXT]` — the VoiceHR live-interview check below was
+    deliberately deferred behind it, not dropped.
+36. **Deterministic JD-extraction validation (no mandatory recruiter
+    review).** New pure module `jd_validation.py`, run immediately after
+    Gemini's JD structuring and before persistence/matching: normalizes
+    (trim/dedupe/drop required-preferred overlap — scoring-neutral) then
+    checks 4 rules (phrase-like required skills, total under-extraction,
+    experience >25 years, >6 title variants). New `JobDescription` columns
+    `extraction_status`/`extraction_warnings` (migration `0008`, applied live
+    to both the demo and test databases this session — all 8 pre-existing
+    rows backfilled to `clean`/`[]` cleanly). A flagged extraction is never
+    blocked, only made visible — surfaced via `GET /v1/jobs`'s existing
+    response, no new endpoint. Frontend: a "Needs review" badge on the Jobs
+    list, a non-blocking warning banner on Job Detail, no confirmation step.
+    Live-verified end to end against the real running stack, real Gemini,
+    real Postgres: a deliberately vague JD came back genuinely flagged by
+    Gemini's own under-extraction, with 5 real `MatchResult`s still created.
+    159 RWS unit tests passed (+24), 99 repo-root integration tests passed
+    (+3), frontend build and its 31 Node tests passed, new UI strings
+    confirmed present in the built bundle actually served by the container,
+    and both the badge (Jobs list) and banner (Job Detail) confirmed
+    rendering correctly in a real Chromium browser (Playwright, cached
+    binary on this machine) — flagged job shows the badge, every clean job
+    doesn't, the banner shows the exact warning message, zero console
+    errors. See `[NEXT]`.
 
 ---
 
 ## [NEXT]
 
-**Frontend-only: app-wide dark-theme focus-ring audit** (see
-`FRONTEND_HANDOFF.md`'s own `[NEXT]` for exact scope — this file only
-cross-references it, per the two documents' own division of labor).
+**Automatic JD repair pass for flagged extractions.**
 
-The interview-rounds feature is now complete end to end and audited as a
-whole workflow: backend (milestones 33-34: create/reschedule/complete/
-cancel, tested against both a mocked DB and real Postgres) and frontend
-(milestones 18-20: display+schedule, then reschedule/complete/cancel, then
-a real-browser audit of the full select→invite→gate→schedule→complete→
-accept chain in one continuous session). That audit found and fixed two
-concrete UX gaps (a focus-ring color mismatch, a missing read-only view on
-`CandidateDetailPage`) and surfaced one broader, real, not-yet-fixed gap:
-the same focus-ring root cause almost certainly affects every other V2
-page's own inner content, not just the one page (`ApplicationsPage`) this
-pass actually Tab-tested. That's the honest next item — not a manufactured
-one, and not new feature work, just finishing a real accessibility check
-this project has now confirmed matters (found live, not theorized).
+Milestone 36 added deterministic detection and normalization for bad JD
+extractions (phrase-like required skills, total under-extraction, suspicious
+experience, too many title variants) but takes no corrective action beyond
+flagging — a flagged job is persisted and matched exactly as extracted,
+warnings visible only via the badge/banner. The natural next slice (named as
+the deferred follow-up in this feature's own design) is a single, optional
+Gemini repair pass: when `validate_and_normalize` returns `"flagged"`, make
+one repair attempt (e.g. a tighter re-prompt asking Gemini to re-extract only
+the flagged field(s) as clean skill names instead of phrases) before falling
+back to persisting the flagged extraction as-is if the repair attempt also
+fails validation or the LLM call itself fails. Concrete scope to work out
+when starting this: where the repair call lives (`main.py`'s `submit_job`,
+after the first `validate_and_normalize` call, gated on `status == "flagged"`
+only), what the repair prompt asks for (likely just the offending field(s),
+not a full re-structuring), how many attempts (one, per the original design
+note — no retry loop), and whether a repaired-then-still-flagged result gets
+a distinct status (e.g. keep `"flagged"` but note in a warning that repair
+was attempted) or stays indistinguishable from a never-repaired flag. Must
+preserve every invariant milestone 36 established: repair happens before
+persistence/matching (never retroactively touches an already-created
+`MatchResult`), and the LLM still never decides `final_score`/`qualified`/
+scoring outcomes — repair only changes what gets validated and matched
+against, not how matching itself works.
 
-What remains in Known Limitations above beyond this is external, not
-implementable here: VoiceHR's Gemini access needs Google support/billing
-action, and automatic invite emails need a real `RESEND_API_KEY`
-configured — neither is a code change. Everything else logged there (no
-pagination, Second Brain's missing test suite, the write-only
-`candidate_feedback` sink, VoiceHR's unauthenticated `admin.html`) is
-deliberately deferred per this project's own "no infra/refactor ahead of
-demonstrated need" rule, not a gap waiting on the next session.
+Separately, unrelated to this feature and still genuinely blocking a *live*
+recruiter-initiated invite: `RESEND_API_KEY` is still unset. Not a code
+task — needs a real key configured in `services/voicehr/.env` and the
+`voicehr` container rebuilt/restarted.
+
+Also still open, deliberately deferred behind the repair pass above:
+milestone 35's own follow-up, a real fresh end-to-end VoiceHR interview.
+Milestone 35 confirmed VoiceHR's Gemini access itself works again (a real
+Live session generating real audio, a real evaluator call producing a real
+result) — but only at the raw connectivity level. Two things have never been
+observed together since milestone 31's rubric rewrite: a *fresh* interview
+actually reaching the new Section E adaptive follow-up question, and a real
+transcript producing the new `interaction_spontaneity` dimension score.
+Concrete scope when picked up: with a working RWS invite (or, since
+`RESEND_API_KEY` is unset, VoiceHR's own direct interview link/admin surface
+as a fallback — see VoiceHR's README), conduct one real, controlled
+interview end to end in a real browser — mic permissions, the full
+five-section flow including Section E, a real completion — then check the
+resulting report: does `interaction_spontaneity` get a real score, does the
+rest of the rubric look sane, does the webhook reach RWS correctly, does the
+language gate compute correctly against it.
+
+Everything else in Known Limitations above (no pagination, Second Brain's
+missing test suite, the write-only `candidate_feedback` sink, VoiceHR's
+unauthenticated `admin.html`) remains deliberately deferred per this
+project's own "no infra/refactor ahead of demonstrated need" rule, not a gap
+waiting on the next session.

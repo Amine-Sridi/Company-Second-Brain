@@ -102,7 +102,7 @@ def test_multiple_jobs_newest_first_with_match_counts(client, monkeypatch):
     # route must pass that ordering through unchanged, not re-sort or reverse it.
     monkeypatch.setattr(
         main, "list_jobs_with_match_counts",
-        lambda db: [(newest, 5), (middle, 0), (oldest, 2)],
+        lambda db: [(newest, "clean", [], 5), (middle, "clean", [], 0), (oldest, "clean", [], 2)],
     )
 
     test_client, recruiter_id = client
@@ -114,12 +114,13 @@ def test_multiple_jobs_newest_first_with_match_counts(client, monkeypatch):
     assert [row["match_count"] for row in body] == [5, 0, 2]
     assert set(body[0].keys()) == {
         "job_id", "title", "created_at", "match_count", "required_language", "min_language_cefr",
+        "extraction_status", "extraction_warnings",
     }
 
 
 def test_job_with_no_matches_reports_zero(client, monkeypatch):
     job = _fake_job("Lonely Job", datetime.now(timezone.utc))
-    monkeypatch.setattr(main, "list_jobs_with_match_counts", lambda db: [(job, 0)])
+    monkeypatch.setattr(main, "list_jobs_with_match_counts", lambda db: [(job, "clean", [], 0)])
 
     test_client, recruiter_id = client
     resp = test_client.get("/v1/jobs", headers={"Authorization": f"Bearer {_recruiter_jwt(recruiter_id)}"})
@@ -130,7 +131,7 @@ def test_job_with_no_matches_reports_zero(client, monkeypatch):
 
 def test_job_with_no_language_requirement_returns_null_pair(client, monkeypatch):
     job = _fake_job("No Requirement Job", datetime.now(timezone.utc))
-    monkeypatch.setattr(main, "list_jobs_with_match_counts", lambda db: [(job, 0)])
+    monkeypatch.setattr(main, "list_jobs_with_match_counts", lambda db: [(job, "clean", [], 0)])
 
     test_client, recruiter_id = client
     resp = test_client.get("/v1/jobs", headers={"Authorization": f"Bearer {_recruiter_jwt(recruiter_id)}"})
@@ -146,7 +147,7 @@ def test_job_with_language_requirement_returns_both_fields(client, monkeypatch):
         "English B2 Job", datetime.now(timezone.utc),
         required_language="en", min_language_cefr="B2",
     )
-    monkeypatch.setattr(main, "list_jobs_with_match_counts", lambda db: [(job, 0)])
+    monkeypatch.setattr(main, "list_jobs_with_match_counts", lambda db: [(job, "clean", [], 0)])
 
     test_client, recruiter_id = client
     resp = test_client.get("/v1/jobs", headers={"Authorization": f"Bearer {_recruiter_jwt(recruiter_id)}"})
@@ -161,7 +162,7 @@ def test_response_model_forbids_extra_fields_from_leaking(client, monkeypatch):
     # JobSummaryResponse is deliberately narrow (no requirements/threshold/matches);
     # this pins that the route builds JobSummaryResponse rather than e.g. JobResponse.
     job = _fake_job("Some Job", datetime.now(timezone.utc))
-    monkeypatch.setattr(main, "list_jobs_with_match_counts", lambda db: [(job, 1)])
+    monkeypatch.setattr(main, "list_jobs_with_match_counts", lambda db: [(job, "clean", [], 1)])
 
     test_client, recruiter_id = client
     resp = test_client.get("/v1/jobs", headers={"Authorization": f"Bearer {_recruiter_jwt(recruiter_id)}"})
@@ -171,3 +172,49 @@ def test_response_model_forbids_extra_fields_from_leaking(client, monkeypatch):
     assert "threshold" not in row
     assert "matches" not in row
     assert "required_skills" not in row
+
+
+# ---------------------------------------------------------------------------
+# extraction_status / extraction_warnings passthrough (jd_validation.py)
+# ---------------------------------------------------------------------------
+
+def test_flagged_job_reports_extraction_status_and_warnings(client, monkeypatch):
+    job = _fake_job("Flagged Job", datetime.now(timezone.utc))
+    warnings = [{"field": "required_skills", "message": "looks like a phrase, not a skill name"}]
+    monkeypatch.setattr(main, "list_jobs_with_match_counts", lambda db: [(job, "flagged", warnings, 3)])
+
+    test_client, recruiter_id = client
+    resp = test_client.get("/v1/jobs", headers={"Authorization": f"Bearer {_recruiter_jwt(recruiter_id)}"})
+
+    assert resp.status_code == 200
+    row = resp.json()[0]
+    assert row["extraction_status"] == "flagged"
+    assert row["extraction_warnings"] == warnings
+
+
+def test_clean_job_reports_clean_status_and_no_warnings(client, monkeypatch):
+    job = _fake_job("Clean Job", datetime.now(timezone.utc))
+    monkeypatch.setattr(main, "list_jobs_with_match_counts", lambda db: [(job, "clean", [], 3)])
+
+    test_client, recruiter_id = client
+    resp = test_client.get("/v1/jobs", headers={"Authorization": f"Bearer {_recruiter_jwt(recruiter_id)}"})
+
+    assert resp.status_code == 200
+    row = resp.json()[0]
+    assert row["extraction_status"] == "clean"
+    assert row["extraction_warnings"] == []
+
+
+def test_missing_job_description_falls_back_to_clean_defensively(client, monkeypatch):
+    # An outer join with no matching JobDescription row (shouldn't happen in practice --
+    # create_job_with_description always creates both atomically) still must not 500.
+    job = _fake_job("Orphaned Job", datetime.now(timezone.utc))
+    monkeypatch.setattr(main, "list_jobs_with_match_counts", lambda db: [(job, None, None, 0)])
+
+    test_client, recruiter_id = client
+    resp = test_client.get("/v1/jobs", headers={"Authorization": f"Bearer {_recruiter_jwt(recruiter_id)}"})
+
+    assert resp.status_code == 200
+    row = resp.json()[0]
+    assert row["extraction_status"] == "clean"
+    assert row["extraction_warnings"] == []

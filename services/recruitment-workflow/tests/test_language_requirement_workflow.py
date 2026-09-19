@@ -142,6 +142,7 @@ def test_patch_language_requirement_sets_and_returns_it(client, monkeypatch):
     )
     monkeypatch.setattr(main, "set_job_language_requirement", lambda db, jid, lang, cefr: updated_job)
     monkeypatch.setattr(main, "list_match_results_for_job", lambda db, jid: [object(), object()])
+    monkeypatch.setattr(main, "get_job_description_for_job", lambda db, jid: None)
 
     resp = test_client.patch(
         f"/v1/jobs/{job_id}/language-requirement",
@@ -154,6 +155,8 @@ def test_patch_language_requirement_sets_and_returns_it(client, monkeypatch):
     assert body["required_language"] == "en"
     assert body["min_language_cefr"] == "B2"
     assert body["match_count"] == 2
+    assert body["extraction_status"] == "clean"
+    assert body["extraction_warnings"] == []
 
 
 def test_patch_language_requirement_rejects_unpaired_fields(client):
@@ -187,6 +190,7 @@ def test_patch_language_requirement_can_clear_it(client, monkeypatch):
     )
     monkeypatch.setattr(main, "set_job_language_requirement", lambda db, jid, lang, cefr: cleared_job)
     monkeypatch.setattr(main, "list_match_results_for_job", lambda db, jid: [])
+    monkeypatch.setattr(main, "get_job_description_for_job", lambda db, jid: None)
 
     resp = test_client.patch(
         f"/v1/jobs/{job_id}/language-requirement",
@@ -195,6 +199,34 @@ def test_patch_language_requirement_can_clear_it(client, monkeypatch):
     )
     assert resp.status_code == 200
     assert resp.json()["required_language"] is None
+
+
+def test_patch_language_requirement_preserves_a_real_flagged_extraction_status(client, monkeypatch):
+    # The PATCH response must reflect this job's *actual* extraction_status/
+    # extraction_warnings (re-read from JobDescription), not silently reset them
+    # to the JobSummaryResponse schema's own "clean"/[] defaults.
+    test_client, recruiter_id = client
+    job_id = uuid.uuid4()
+    updated_job = SimpleNamespace(
+        id=job_id, title="Backend Engineer", created_at=datetime.now(timezone.utc),
+        required_language="en", min_language_cefr="B2",
+    )
+    warnings = [{"field": "titles", "message": "7 target title variants were extracted"}]
+    flagged_job_description = SimpleNamespace(extraction_status="flagged", extraction_warnings=warnings)
+    monkeypatch.setattr(main, "set_job_language_requirement", lambda db, jid, lang, cefr: updated_job)
+    monkeypatch.setattr(main, "list_match_results_for_job", lambda db, jid: [])
+    monkeypatch.setattr(main, "get_job_description_for_job", lambda db, jid: flagged_job_description)
+
+    resp = test_client.patch(
+        f"/v1/jobs/{job_id}/language-requirement",
+        headers=_auth_header(recruiter_id),
+        json={"required_language": "en", "min_language_cefr": "B2"},
+    )
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["extraction_status"] == "flagged"
+    assert body["extraction_warnings"] == warnings
 
 
 # ---------------------------------------------------------------------------

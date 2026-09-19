@@ -75,6 +75,18 @@ export default function JobDetailPage() {
 
       {job && <LanguageRequirementSection job={job} onUpdated={setJob} />}
 
+      {job && job.extraction_status === "flagged" && (
+        <div className={styles.extractionWarning} role="alert">
+          <strong>This job description's extraction looks suspicious.</strong> Matching still
+          ran normally, but you may want to review the requirements below.
+          <ul>
+            {job.extraction_warnings.map((warning, index) => (
+              <li key={index}>{warning.message}</li>
+            ))}
+          </ul>
+        </div>
+      )}
+
       {loading && <p className={styles.status}>Loading candidates…</p>}
 
       {!loading && error && (

@@ -197,6 +197,9 @@
 }
 
 .jobTitle {
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-2);
   font-weight: 600;
   font-size: var(--font-size-lg);
   color: var(--v2-text);

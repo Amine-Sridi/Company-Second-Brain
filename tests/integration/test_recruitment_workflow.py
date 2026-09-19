@@ -214,6 +214,77 @@ def test_submit_job_llm_failure_returns_502(client_failing_llm, auth_headers, mo
 
 
 # ---------------------------------------------------------------------------
+# JD extraction validation (jd_validation.py) -- flagged extractions still work
+# ---------------------------------------------------------------------------
+
+def test_submit_job_clean_extraction_reports_clean_status(client, auth_headers, mock_second_brain):
+    # mock_llm's default structured JD (Python/Docker/2yrs/Software Engineer) is
+    # well-formed and must not be flagged.
+    mock_second_brain.set_candidates([])
+    resp = _submit_job(client, auth_headers)
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["extraction_status"] == "clean"
+    assert body["extraction_warnings"] == []
+
+
+def test_submit_job_flagged_extraction_still_persists_and_matches_normally(
+    client, auth_headers, db_session, mock_second_brain, mock_llm
+):
+    # A deliberately bad extraction (total under-extraction -- everything empty)
+    # must still be saved and matched automatically, not blocked pending review.
+    mock_llm._structured = {
+        "required_skills": [],
+        "preferred_skills": [],
+        "min_years_experience": None,
+        "titles": [],
+    }
+    candidate = make_candidate(skills=["Python", "Docker"], years_of_experience=4.0, similarity_score=0.9)
+    mock_second_brain.set_candidates([candidate])
+
+    resp = _submit_job(client, auth_headers, title="Flagged Job")
+    assert resp.status_code == 200
+    body = resp.json()
+
+    assert body["extraction_status"] == "flagged"
+    assert len(body["extraction_warnings"]) == 1
+    assert body["extraction_warnings"][0]["field"] == "extraction"
+    # Job creation is not blocked and matching still runs against retrieved candidates.
+    assert len(body["matches"]) == 1
+
+    from db import JobDescription
+
+    job_id = uuid.UUID(body["job_id"])
+    jd = db_session.query(JobDescription).filter(JobDescription.job_id == job_id).first()
+    assert jd is not None
+    assert jd.extraction_status == "flagged"
+    assert jd.extraction_warnings == body["extraction_warnings"]
+
+
+def test_submit_job_phrase_like_required_skill_flags_but_still_creates_job(
+    client, auth_headers, db_session, mock_second_brain, mock_llm
+):
+    # A phrase-like required skill can never exact-match any candidate under the
+    # hard gate -- this must be flagged for recruiter visibility, not silently
+    # accepted or rejected outright.
+    mock_llm._structured = {
+        "required_skills": ["building and deploying REST APIs"],
+        "preferred_skills": [],
+        "min_years_experience": 2.0,
+        "titles": ["Backend Engineer"],
+    }
+    mock_second_brain.set_candidates([])
+
+    resp = _submit_job(client, auth_headers, title="Phrase-like Job")
+    assert resp.status_code == 200
+    body = resp.json()
+
+    assert body["extraction_status"] == "flagged"
+    assert body["required_skills"] == ["building and deploying REST APIs"]
+    assert any(w["field"] == "required_skills" for w in body["extraction_warnings"])
+
+
+# ---------------------------------------------------------------------------
 # Retrieval integration + hybrid scoring
 # ---------------------------------------------------------------------------
 

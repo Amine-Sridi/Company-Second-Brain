@@ -103,6 +103,18 @@ class MatchResultResponse(BaseModel):
     explanation: Optional[str] = None
 
 
+class ExtractionWarningResponse(BaseModel):
+    """One flagged concern about a JD extraction (jd_validation.py) -- an
+    observation for a recruiter to optionally act on, never a correction: the
+    field it names still holds whatever was actually extracted and used for
+    matching."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    field: str
+    message: str
+
+
 class JobResponse(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -118,6 +130,8 @@ class JobResponse(BaseModel):
     scoring_config_version: int
     required_language: Optional[str] = None
     min_language_cefr: Optional[str] = None
+    extraction_status: Literal["clean", "flagged"] = "clean"
+    extraction_warnings: list[ExtractionWarningResponse] = Field(default_factory=list)
     matches: list[MatchResultResponse]
 
 
@@ -125,7 +139,11 @@ class JobSummaryResponse(BaseModel):
     """Lightweight row for the recruiter-facing GET /v1/jobs list -- deliberately not
     JobResponse: no requirements/threshold/matches, just enough to identify a job and
     jump into it (plus the language requirement, which Job Detail/List both display).
-    match_count is the number of persisted MatchResults for the job."""
+    match_count is the number of persisted MatchResults for the job.
+    extraction_status/extraction_warnings (jd_validation.py) are what
+    `JobsListPage`'s badge and `JobDetailPage`'s banner both read -- both pages
+    get this from this same list response, RWS has no dedicated
+    `GET /v1/jobs/{id}` (see FRONTEND_HANDOFF.md)."""
 
     model_config = ConfigDict(extra="forbid")
 
@@ -135,6 +153,8 @@ class JobSummaryResponse(BaseModel):
     match_count: int = Field(ge=0)
     required_language: Optional[str] = None
     min_language_cefr: Optional[str] = None
+    extraction_status: Literal["clean", "flagged"] = "clean"
+    extraction_warnings: list[ExtractionWarningResponse] = Field(default_factory=list)
 
 
 # ---------------------------------------------------------------------------

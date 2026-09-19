@@ -4,6 +4,7 @@ import { getJobs, createJob } from "../api/jobs.js";
 import { ApiError } from "../api/client.js";
 import PageHeader from "../components/PageHeader.jsx";
 import EmptyState from "../components/EmptyState.jsx";
+import StatusBadge from "../components/StatusBadge.jsx";
 import { CEFR_LEVELS, LANGUAGE_LABELS, formatLanguageRequirement } from "../constants/language.js";
 import styles from "./JobsListPage.module.css";
 
@@ -241,7 +242,18 @@ export default function JobsListPage() {
                 className={styles.jobCard}
                 onClick={() => navigate(`/jobs/${job.job_id}`)}
               >
-                <span className={styles.jobTitle}>{job.title}</span>
+                <span className={styles.jobTitle}>
+                  {job.title}
+                  {job.extraction_status === "flagged" && (
+                    <StatusBadge
+                      variant="glass"
+                      tone="warning"
+                      title="Gemini's extraction of this job description looked suspicious (e.g. empty, phrase-like skills) -- review it on the job page."
+                    >
+                      Needs review
+                    </StatusBadge>
+                  )}
+                </span>
                 <span className={styles.jobMeta}>
                   {job.match_count} candidate{job.match_count === 1 ? "" : "s"} matched
                   {" · "}
