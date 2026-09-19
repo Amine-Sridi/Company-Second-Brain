@@ -93,7 +93,7 @@ from schemas import (
     ScoringConfigResponse,
     StructuredJobDescription,
 )
-from jd_validation import validate_and_normalize
+from jd_validation import ExtractionWarning, validate_and_normalize
 from language_gate import BLOCKING_STATUSES, compute_language_gate
 from scoring import CandidateScoringInput, JobRequirements, ScoringWeights, score_candidate
 from shared.llm import LLMProvider, LLMProviderError
@@ -228,6 +228,48 @@ async def structure_job_description(
         "titles: job title variants this role matches (e.g. ['Backend Engineer', "
         "'Software Engineer']).\n\n"
         f"Job description:\n{raw_description}"
+    )
+    return await llm.generate_structured(
+        prompt, StructuredJobDescription, model=settings.gemini_model
+    )
+
+
+async def repair_structured_extraction(
+    llm: LLMProvider,
+    raw_description: str,
+    first_extraction: StructuredJobDescription,
+    warnings: list[ExtractionWarning],
+) -> StructuredJobDescription:
+    """
+    The one automatic repair attempt for a flagged extraction (see
+    jd_validation.py's module docstring for why this lives here, not there).
+    Called at most once per submission, only when validate_and_normalize's first
+    pass returns "flagged" -- never a retry loop, never called again if this
+    itself fails or the repaired result still validates badly (main.py's
+    submit_job handles both by falling back to the original extraction).
+
+    The prompt is deliberately a *targeted fix*, not a re-structuring from
+    scratch: it gives Gemini the original JD, exactly what it extracted the
+    first time, and the exact deterministic warnings that extraction triggered,
+    then asks it to correct only those specific problems. This is meant to
+    reduce the odds of the second attempt introducing a new, different problem
+    that a from-scratch re-extraction risks.
+    """
+    warning_lines = "\n".join(f"- ({w.field}) {w.message}" for w in warnings)
+    prompt = (
+        "You previously extracted structured hiring requirements from the job "
+        "description below, but automated validation found specific problems "
+        "with that extraction. Fix ONLY the problems listed -- do not change "
+        "anything else, and do not invent requirements the job description "
+        "does not actually support.\n\n"
+        f"Job description:\n{raw_description}\n\n"
+        "Your first extraction:\n"
+        f"required_skills: {first_extraction.required_skills}\n"
+        f"preferred_skills: {first_extraction.preferred_skills}\n"
+        f"min_years_experience: {first_extraction.min_years_experience}\n"
+        f"titles: {first_extraction.titles}\n\n"
+        f"Validation problems to fix:\n{warning_lines}\n\n"
+        "Return a corrected extraction in the same structure."
     )
     return await llm.generate_structured(
         prompt, StructuredJobDescription, model=settings.gemini_model
@@ -377,6 +419,44 @@ async def submit_job(
         titles=structured.titles,
     )
 
+    # One automatic repair attempt if (and only if) the first pass was flagged --
+    # never for an already-clean extraction (zero extra Gemini calls on the happy
+    # path), and never more than once (no retry loop). A repair failure (LLM
+    # unreachable, quota exhausted, malformed response -- generate_structured wraps
+    # all of these in LLMProviderError) must never block job creation: the original,
+    # already-normalized "flagged" extraction is what gets persisted and matched, the
+    # exact same outcome as if no repair pass existed at all. Same fallback if the
+    # repair attempt's own output still fails validation -- a repair that doesn't
+    # actually fix anything is worth no more trust than the first attempt.
+    extraction_status = validation.status
+    extraction_warnings = validation.warnings
+    normalized = validation.normalized
+
+    if validation.status == "flagged":
+        try:
+            repaired_structured = await repair_structured_extraction(
+                llm, payload.raw_description, structured, validation.warnings
+            )
+        except LLMProviderError:
+            repaired_structured = None
+
+        if repaired_structured is not None:
+            repaired_validation = validate_and_normalize(
+                required_skills=repaired_structured.required_skills,
+                preferred_skills=repaired_structured.preferred_skills,
+                min_years_experience=repaired_structured.min_years_experience,
+                titles=repaired_structured.titles,
+            )
+            if repaired_validation.status == "clean":
+                extraction_status = "repaired"
+                extraction_warnings = repaired_validation.warnings
+                normalized = repaired_validation.normalized
+            # else: the repair attempt still validates badly -- fall through and
+            # persist the original (pre-repair) normalized extraction as "flagged",
+            # per this feature's own "persist original/normalized result as
+            # flagged" rule. The failed repair attempt itself is discarded, not
+            # persisted anywhere.
+
     if payload.scoring_config_version is not None:
         scoring_config = get_scoring_config_by_version(db, payload.scoring_config_version)
         if scoring_config is None:
@@ -394,15 +474,15 @@ async def submit_job(
         title=payload.title,
         threshold=payload.threshold,
         raw_text=payload.raw_description,
-        required_skills=validation.normalized.required_skills,
-        preferred_skills=validation.normalized.preferred_skills,
-        min_years_experience=validation.normalized.min_years_experience,
-        titles=validation.normalized.titles,
+        required_skills=normalized.required_skills,
+        preferred_skills=normalized.preferred_skills,
+        min_years_experience=normalized.min_years_experience,
+        titles=normalized.titles,
         structuring_model=settings.gemini_model,
         required_language=payload.required_language,
         min_language_cefr=payload.min_language_cefr,
-        extraction_status=validation.status,
-        extraction_warnings=[w.to_dict() for w in validation.warnings],
+        extraction_status=extraction_status,
+        extraction_warnings=[w.to_dict() for w in extraction_warnings],
     )
 
     try:
@@ -426,10 +506,10 @@ async def submit_job(
     # JobDescription -- what was actually stored is exactly what's actually scored,
     # the same reproducibility guarantee every other field on MatchResult already has.
     job_requirements = JobRequirements(
-        required_skills=validation.normalized.required_skills,
-        preferred_skills=validation.normalized.preferred_skills,
-        min_years_experience=validation.normalized.min_years_experience,
-        titles=validation.normalized.titles,
+        required_skills=normalized.required_skills,
+        preferred_skills=normalized.preferred_skills,
+        min_years_experience=normalized.min_years_experience,
+        titles=normalized.titles,
     )
 
     match_responses: list[MatchResultResponse] = []
@@ -507,16 +587,16 @@ async def submit_job(
         job_description_id=job_description.id,
         version=job_description.version,
         title=job.title,
-        required_skills=validation.normalized.required_skills,
-        preferred_skills=validation.normalized.preferred_skills,
-        min_years_experience=validation.normalized.min_years_experience,
-        titles=validation.normalized.titles,
+        required_skills=normalized.required_skills,
+        preferred_skills=normalized.preferred_skills,
+        min_years_experience=normalized.min_years_experience,
+        titles=normalized.titles,
         threshold=job.threshold,
         scoring_config_version=scoring_config.version,
         required_language=job.required_language,
         min_language_cefr=job.min_language_cefr,
-        extraction_status=validation.status,
-        extraction_warnings=[w.to_dict() for w in validation.warnings],
+        extraction_status=extraction_status,
+        extraction_warnings=[w.to_dict() for w in extraction_warnings],
         matches=match_responses,
     )
 

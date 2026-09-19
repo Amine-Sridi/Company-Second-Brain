@@ -147,12 +147,23 @@ class _MockLLMProvider:
     records every call in .generate_text_calls so tests can assert on call count
     (e.g. "repeated reads do not call Gemini again") without a real Gemini call.
     embed_text is unused by RWS.
+
+    Every generate_structured call is also recorded in .generate_structured_calls
+    (prompts, not responses) -- this is what the JD-repair-pass tests assert on
+    ("flagged -> exactly one repair call", "clean -> zero repair calls"), since
+    submit_job's first structuring call and its (at most one) repair call both go
+    through this same method. If repair_structured is given, the *second* call
+    (the repair attempt -- main.py's repair_structured_extraction) returns it
+    instead of structured; a third call is never made by submit_job, so this
+    provider doesn't need to handle it.
     """
 
-    def __init__(self, structured=None, explanation_text="Mock explanation."):
+    def __init__(self, structured=None, explanation_text="Mock explanation.", repair_structured=None):
         self._structured = structured
+        self._repair_structured = repair_structured
         self.explanation_text = explanation_text
         self.generate_text_calls = []
+        self.generate_structured_calls = []
 
     async def embed_text(self, text, *, model=None, dimensions=768):
         raise NotImplementedError
@@ -162,6 +173,9 @@ class _MockLLMProvider:
         return self.explanation_text
 
     async def generate_structured(self, prompt, schema, *, model=None):
+        self.generate_structured_calls.append(prompt)
+        if len(self.generate_structured_calls) > 1 and self._repair_structured is not None:
+            return schema(**self._repair_structured)
         if self._structured is not None:
             return schema(**self._structured)
         return schema(
@@ -176,6 +190,26 @@ class _FailingLLMProvider(_MockLLMProvider):
     async def generate_structured(self, prompt, schema, *, model=None):
         from shared.llm import LLMProviderError
         raise LLMProviderError("Simulated JD structuring failure")
+
+
+class _FailingRepairLLMProvider(_MockLLMProvider):
+    """First generate_structured call (the initial JD structuring) succeeds
+    normally, returning whatever `structured` this was constructed with (expected
+    to be a deliberately flagged extraction, so submit_job actually attempts a
+    repair); every call after that (the repair attempt) raises LLMProviderError --
+    simulating Gemini being unreachable, quota-exhausted, or otherwise failing
+    specifically on the repair call. Used to prove a repair failure never blocks
+    job creation: the job must still be created, with the original extraction
+    persisted as "flagged"."""
+
+    async def generate_structured(self, prompt, schema, *, model=None):
+        self.generate_structured_calls.append(prompt)
+        if len(self.generate_structured_calls) == 1:
+            if self._structured is not None:
+                return schema(**self._structured)
+            return schema(required_skills=[], preferred_skills=[], min_years_experience=None, titles=[])
+        from shared.llm import LLMProviderError
+        raise LLMProviderError("Simulated JD repair failure")
 
 
 class _FailingExplanationLLMProvider(_MockLLMProvider):
@@ -246,6 +280,42 @@ def client_failing_llm(db_session):
     app.dependency_overrides[get_llm_provider_optional] = lambda: failing
 
     with TestClient(app, raise_server_exceptions=True) as c:
+        yield c
+
+    app.dependency_overrides.clear()
+    settings.service_api_key = original_key
+    settings.webhook_hmac_secret = original_webhook_secret
+
+
+@pytest.fixture
+def client_failing_repair(db_session):
+    """
+    Like `client`, but the JD-repair-pass's own Gemini call always fails while the
+    initial JD structuring succeeds (returning a deliberately flagged extraction,
+    an empty one by default) -- for proving a repair failure never blocks job
+    creation. Exposes the provider as `c.failing_llm` (same attribute name
+    `client_failing_explanation` uses) so a test can inspect
+    `.generate_structured_calls` to confirm exactly one repair attempt was made.
+    """
+    from fastapi.testclient import TestClient
+    from main import app, settings, get_llm_provider, get_llm_provider_optional
+    from db import get_db
+
+    original_key = settings.service_api_key
+    original_webhook_secret = settings.webhook_hmac_secret
+    settings.service_api_key = _TEST_SERVICE_KEY
+    settings.webhook_hmac_secret = TEST_WEBHOOK_HMAC_SECRET
+
+    def _override_get_db():
+        yield db_session
+
+    failing = _FailingRepairLLMProvider()
+    app.dependency_overrides[get_db] = _override_get_db
+    app.dependency_overrides[get_llm_provider] = lambda: failing
+    app.dependency_overrides[get_llm_provider_optional] = lambda: failing
+
+    with TestClient(app, raise_server_exceptions=True) as c:
+        c.failing_llm = failing
         yield c
 
     app.dependency_overrides.clear()

@@ -253,6 +253,15 @@ export default function JobsListPage() {
                       Needs review
                     </StatusBadge>
                   )}
+                  {job.extraction_status === "repaired" && (
+                    <StatusBadge
+                      variant="glass"
+                      tone="accent"
+                      title="Gemini's first extraction looked suspicious; an automatic second attempt fixed it and passed validation. No action needed."
+                    >
+                      Auto-repaired
+                    </StatusBadge>
+                  )}
                 </span>
                 <span className={styles.jobMeta}>
                   {job.match_count} candidate{job.match_count === 1 ? "" : "s"} matched

@@ -136,6 +136,16 @@
   padding-left: var(--spacing-4);
 }
 
+.extractionRepairedNote {
+  background: var(--v2-violet-bg);
+  color: var(--v2-violet);
+  padding: var(--spacing-2) var(--spacing-3);
+  border-radius: var(--v2-radius);
+  font-size: var(--font-size-sm);
+  border: 1px solid rgba(167, 139, 250, 0.3);
+  margin-bottom: var(--spacing-3);
+}
+
 .tableWrapper {
   overflow-x: auto;
   background: var(--v2-surface);

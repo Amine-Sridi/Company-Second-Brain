@@ -10,10 +10,18 @@ matched -- normalizes the extraction for storage/display, then flags (never
 blocks) anything that looks unreliable.
 
 Deliberately narrow, per CLAUDE.md's "no infra ahead of demonstrated need": this
-module never calls Gemini itself (no automatic repair pass yet -- see
-handoff.md's `[NEXT]`), never re-scores anything, and never determines
-`final_score`/`qualified`/threshold comparisons -- `scoring.py` remains the only
-place those are decided, unchanged and untouched by this module.
+module never calls Gemini itself, never re-scores anything, and never
+determines `final_score`/`qualified`/threshold comparisons -- `scoring.py`
+remains the only place those are decided, unchanged and untouched by this
+module. The one automatic repair pass this project has (main.py's
+`repair_structured_extraction`, run when this module's own
+`validate_and_normalize` returns `"flagged"`) lives in main.py, not here, for
+exactly that reason: it calls Gemini, so it cannot live in the one module
+this codebase can point to and say "this cannot possibly call Gemini." This
+module still decides, on the repaired result, whether it's actually clean --
+`main.py` calls `validate_and_normalize` a second time on the repair
+attempt's output rather than trusting Gemini's own claim that it fixed
+anything.
 """
 from __future__ import annotations
 

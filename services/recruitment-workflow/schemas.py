@@ -130,7 +130,7 @@ class JobResponse(BaseModel):
     scoring_config_version: int
     required_language: Optional[str] = None
     min_language_cefr: Optional[str] = None
-    extraction_status: Literal["clean", "flagged"] = "clean"
+    extraction_status: Literal["clean", "flagged", "repaired"] = "clean"
     extraction_warnings: list[ExtractionWarningResponse] = Field(default_factory=list)
     matches: list[MatchResultResponse]
 
@@ -153,7 +153,7 @@ class JobSummaryResponse(BaseModel):
     match_count: int = Field(ge=0)
     required_language: Optional[str] = None
     min_language_cefr: Optional[str] = None
-    extraction_status: Literal["clean", "flagged"] = "clean"
+    extraction_status: Literal["clean", "flagged", "repaired"] = "clean"
     extraction_warnings: list[ExtractionWarningResponse] = Field(default_factory=list)
 
 

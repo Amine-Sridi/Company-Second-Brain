@@ -217,7 +217,7 @@ def test_submit_job_llm_failure_returns_502(client_failing_llm, auth_headers, mo
 # JD extraction validation (jd_validation.py) -- flagged extractions still work
 # ---------------------------------------------------------------------------
 
-def test_submit_job_clean_extraction_reports_clean_status(client, auth_headers, mock_second_brain):
+def test_submit_job_clean_extraction_reports_clean_status(client, auth_headers, mock_second_brain, mock_llm):
     # mock_llm's default structured JD (Python/Docker/2yrs/Software Engineer) is
     # well-formed and must not be flagged.
     mock_second_brain.set_candidates([])
@@ -226,6 +226,9 @@ def test_submit_job_clean_extraction_reports_clean_status(client, auth_headers, 
     body = resp.json()
     assert body["extraction_status"] == "clean"
     assert body["extraction_warnings"] == []
+    # A clean first extraction must never trigger the repair pass -- one Gemini
+    # call total, not two.
+    assert len(mock_llm.generate_structured_calls) == 1
 
 
 def test_submit_job_flagged_extraction_still_persists_and_matches_normally(
@@ -233,6 +236,10 @@ def test_submit_job_flagged_extraction_still_persists_and_matches_normally(
 ):
     # A deliberately bad extraction (total under-extraction -- everything empty)
     # must still be saved and matched automatically, not blocked pending review.
+    # mock_llm has no repair_structured configured, so the repair attempt's own
+    # call returns this same empty structured back -- still flagged after
+    # revalidation, so this also covers "the repair call itself doesn't fix
+    # anything -> falls back to flagged".
     mock_llm._structured = {
         "required_skills": [],
         "preferred_skills": [],
@@ -251,6 +258,9 @@ def test_submit_job_flagged_extraction_still_persists_and_matches_normally(
     assert body["extraction_warnings"][0]["field"] == "extraction"
     # Job creation is not blocked and matching still runs against retrieved candidates.
     assert len(body["matches"]) == 1
+    # A flagged first extraction must trigger exactly one repair attempt -- the
+    # initial structuring call plus one repair call, never a retry loop.
+    assert len(mock_llm.generate_structured_calls) == 2
 
     from db import JobDescription
 
@@ -259,6 +269,116 @@ def test_submit_job_flagged_extraction_still_persists_and_matches_normally(
     assert jd is not None
     assert jd.extraction_status == "flagged"
     assert jd.extraction_warnings == body["extraction_warnings"]
+
+
+def test_submit_job_repair_pass_fixes_a_flagged_extraction(
+    client, auth_headers, db_session, mock_second_brain, mock_llm
+):
+    # First extraction: a phrase-like required skill (flagged). Repair attempt
+    # returns a genuinely fixed extraction that passes deterministic validation
+    # cleanly -- final status must be "repaired", not "clean" (a repair did
+    # happen) and not "flagged" (the repair actually worked).
+    mock_llm._structured = {
+        "required_skills": ["building and deploying REST APIs"],
+        "preferred_skills": [],
+        "min_years_experience": 2.0,
+        "titles": ["Backend Engineer"],
+    }
+    mock_llm._repair_structured = {
+        "required_skills": ["REST APIs"],
+        "preferred_skills": [],
+        "min_years_experience": 2.0,
+        "titles": ["Backend Engineer"],
+    }
+    candidate = make_candidate(skills=["REST APIs"], years_of_experience=3.0, similarity_score=0.9)
+    mock_second_brain.set_candidates([candidate])
+
+    resp = _submit_job(client, auth_headers, title="Repaired Job")
+    assert resp.status_code == 200
+    body = resp.json()
+
+    assert body["extraction_status"] == "repaired"
+    assert body["extraction_warnings"] == []
+    # The repaired (not the original phrase-like) requirements are what's
+    # actually persisted and matched against.
+    assert body["required_skills"] == ["REST APIs"]
+    assert len(mock_llm.generate_structured_calls) == 2
+    # Scoring/matching continues normally against the repaired requirements: the
+    # candidate has the exact repaired required skill, so the hard gate passes
+    # and a real MatchResult is produced.
+    assert len(body["matches"]) == 1
+    assert body["matches"][0]["hard_gate_passed"] is True
+
+    from db import JobDescription
+
+    job_id = uuid.UUID(body["job_id"])
+    jd = db_session.query(JobDescription).filter(JobDescription.job_id == job_id).first()
+    assert jd is not None
+    assert jd.extraction_status == "repaired"
+    assert jd.required_skills == ["REST APIs"]
+    assert jd.extraction_warnings == []
+
+
+def test_submit_job_repair_pass_still_invalid_falls_back_to_original_flagged(
+    client, auth_headers, mock_second_brain, mock_llm
+):
+    # First extraction: a phrase-like required skill (flagged). The repair
+    # attempt returns a *different* phrase-like skill -- still fails validation,
+    # so the original (pre-repair) normalized extraction must be what's actually
+    # persisted, not the failed repair attempt's own output.
+    mock_llm._structured = {
+        "required_skills": ["building and deploying REST APIs"],
+        "preferred_skills": ["Docker"],
+        "min_years_experience": 2.0,
+        "titles": ["Backend Engineer"],
+    }
+    mock_llm._repair_structured = {
+        "required_skills": ["designing and maintaining backend systems"],
+        "preferred_skills": ["Docker"],
+        "min_years_experience": 2.0,
+        "titles": ["Backend Engineer"],
+    }
+    mock_second_brain.set_candidates([])
+
+    resp = _submit_job(client, auth_headers, title="Still Flagged After Repair")
+    assert resp.status_code == 200
+    body = resp.json()
+
+    assert body["extraction_status"] == "flagged"
+    # The original extraction is what's persisted, not the failed repair attempt.
+    assert body["required_skills"] == ["building and deploying REST APIs"]
+    assert any(w["field"] == "required_skills" for w in body["extraction_warnings"])
+    assert len(mock_llm.generate_structured_calls) == 2
+
+
+def test_submit_job_repair_pass_failure_does_not_block_job_creation(
+    client_failing_repair, auth_headers, db_session, mock_second_brain
+):
+    # The repair call itself fails (LLMProviderError -- unreachable/quota/etc);
+    # this must never block job creation. The default _FailingRepairLLMProvider
+    # structured extraction is empty (total under-extraction), so the job is
+    # created with the original, pre-repair "flagged" extraction persisted.
+    candidate = make_candidate(skills=["Python"], years_of_experience=3.0, similarity_score=0.9)
+    mock_second_brain.set_candidates([candidate])
+
+    resp = _submit_job(client_failing_repair, auth_headers, title="Repair Call Failed")
+    assert resp.status_code == 200
+    body = resp.json()
+
+    assert body["extraction_status"] == "flagged"
+    assert len(body["extraction_warnings"]) == 1
+    # Matching still ran normally despite the repair call failing.
+    assert len(body["matches"]) == 1
+
+    # Exactly one repair attempt was made (and it failed) -- no retry loop.
+    assert len(client_failing_repair.failing_llm.generate_structured_calls) == 2
+
+    from db import JobDescription
+
+    job_id = uuid.UUID(body["job_id"])
+    jd = db_session.query(JobDescription).filter(JobDescription.job_id == job_id).first()
+    assert jd is not None
+    assert jd.extraction_status == "flagged"
 
 
 def test_submit_job_phrase_like_required_skill_flags_but_still_creates_job(

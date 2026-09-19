@@ -11,7 +11,8 @@ architecture, or cross-service demo readiness — those live in the repo-root
 (see `[NEXT]` at the end — the one concrete gap two audits in a row
 surfaced, the focus-ring mismatch, is now closed app-wide; milestone 22
 added a small, real-browser-verified badge/banner for JD-extraction
-validation on top of that). Every planned
+validation, and milestone 23 added a distinct "Auto-repaired" badge/note on
+top of that for the backend's automatic JD-repair pass). Every planned
 page, the full V2 dark visual redesign, an
 optional 3D graph mode, and the VoiceHR language eligibility gate/assessment
 UI are built and have each been confirmed rendering correctly in a real
@@ -125,7 +126,7 @@ this table adds only the frontend-specific consumption notes.
 |---|---|---|
 | Login | `POST /v1/auth/login` | `api/auth.js` |
 | Upload resume | `POST /v1/resumes` | `api/resumes.js` |
-| List/create jobs | `GET`/`POST /v1/jobs` | `api/jobs.js`; create runs JD structuring + retrieval + scoring server-side, can take several seconds; both carry the optional `required_language`/`min_language_cefr` pair, and (new, milestone 36) `extraction_status`/`extraction_warnings` — `JobsListPage`'s badge and `JobDetailPage`'s banner both read this same shape, no field mapping needed |
+| List/create jobs | `GET`/`POST /v1/jobs` | `api/jobs.js`; create runs JD structuring + retrieval + scoring server-side, can take several seconds; both carry the optional `required_language`/`min_language_cefr` pair, and (milestone 36) `extraction_status`/`extraction_warnings` — `extraction_status` is `"clean"`/`"flagged"`, or (milestone 37) `"repaired"` — `JobsListPage`'s badges and `JobDetailPage`'s banner/note both read this same shape, no field mapping needed |
 | Set/clear job language requirement | `PATCH /v1/jobs/{id}/language-requirement` | `api/jobs.js`'s `setJobLanguageRequirement`; `JobDetailPage`'s inline edit form |
 | Ranked matches | `GET /v1/jobs/{id}/matches` | `explanation` lazily populated server-side; frontend never recomputes any score |
 | Candidate identity | `GET /v1/candidates/{id}/identity` | via `hooks/useCandidateIdentity.js`, session-scoped in-memory cache only |
@@ -856,25 +857,56 @@ checking the actual source; use this only to orient, not to cite.
     (clean) job's card shows none, clicked into it, and confirmed the
     warning banner rendered on `/jobs/{id}` with the exact warning message
     from the API — screenshotted both, zero console/page errors either way.
+23. **JD-repair-pass UI: a distinct "Auto-repaired" badge/note, `"flagged"`
+    completely unchanged.** Backend companion to `handoff.md`'s milestone
+    37 — `extraction_status` now also carries `"repaired"` (a flagged
+    extraction that one automatic Gemini repair call genuinely fixed).
+    Added a second `StatusBadge` on `JobsListPage` (`tone="accent"`, the
+    same violet tone `StatusBadge.jsx`'s `glass.accent` already provides,
+    deliberately not `warning` — a repaired job needs no recruiter
+    attention, so it shouldn't look like one that does), shown only when
+    `extraction_status === "repaired"`, alongside (never replacing) the
+    existing `"flagged"` badge condition. Added a small, non-alert
+    informational note to `JobDetailPage` for the same status — styled with
+    the same violet tokens (`--v2-violet`/`--v2-violet-bg`), not the
+    `.error`-derived warning-banner pattern `"flagged"` uses, since this
+    needs no action and shouldn't visually compete with an actual warning.
+    No new route, no new component, no change to `"flagged"`'s own badge or
+    banner at all. `api/jobs.js` needed no change (same pass-through as
+    milestone 22).
+
+    **Verification**: `npm run build` clean; frontend's 31 Node tests
+    unchanged. A real-browser Playwright regression pass (not a fresh
+    feature check — no job in this environment's data actually has
+    `extraction_status: "repaired"` yet, see `handoff.md`'s Known
+    Limitations for why) confirmed the pre-existing `"flagged"`/`"clean"`
+    badge and banner behavior is completely unaffected by adding the new
+    conditional branches: the same flagged job still shows exactly "Needs
+    review" (never "Auto-repaired"), the same clean job still shows
+    neither, zero console/page errors. The "Auto-repaired" badge/note
+    themselves were verified by direct code review against `StatusBadge`'s
+    existing tone API and this page's existing CSS patterns, not an actual
+    browser render of that specific state.
 
 ---
 
 ## [NEXT]
 
-**No outstanding frontend task.** Milestone 22 (the JD-extraction-validation
-badge/banner) is the most recent frontend change, real-browser-verified per
-above. Everything from milestone 21's focus-ring audit still holds — no
-regression re-check was needed this session since milestone 22 touched only
-`JobsListPage`/`JobDetailPage`, both already covered by that audit's own
-full Tab-navigation pass.
+**No outstanding frontend task.** Milestone 23 (the JD-repair-pass
+badge/note) is the most recent frontend change. Everything from milestone
+21's focus-ring audit still holds — no regression re-check was needed this
+session since milestone 23 touched only the same two pages milestone 22
+did, both already covered by that audit's own full Tab-navigation pass.
 
 The next backend-driven frontend need, if any, will come from
-`handoff.md`'s own `[NEXT]` (an automatic JD-repair pass for flagged
-extractions) — the current design for that repair pass is backend-only (a
-second Gemini call before persistence, gated on validation failure), so no
-new frontend surface is expected from it, but re-check `handoff.md` once
-that work starts in case the repaired-vs-never-flagged distinction ends up
-needing its own UI treatment.
+`handoff.md`'s own `[NEXT]` (post-match JD anomaly detection — flagging a
+job whose *matching outcome* looks wrong, e.g. every candidate disqualified,
+even though its extraction validated cleanly). That feature's own design is
+still open-ended (see `handoff.md`), including whether it needs any new
+frontend surface at all or can reuse the existing `extraction_warnings`
+badge/banner vocabulary this file's milestones 22-23 already built — re-read
+`handoff.md`'s `[NEXT]` once that work actually starts rather than assuming
+either answer here.
 
 Everything else on record is either a deliberate, already-documented,
 closed decision (the "V2 page panel" background duplication, the three

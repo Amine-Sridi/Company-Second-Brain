@@ -87,6 +87,13 @@ export default function JobDetailPage() {
         </div>
       )}
 
+      {job && job.extraction_status === "repaired" && (
+        <div className={styles.extractionRepairedNote}>
+          Gemini's first extraction of this job description looked suspicious; an automatic
+          second attempt fixed it and passed validation. No action needed.
+        </div>
+      )}
+
       {loading && <p className={styles.status}>Loading candidates…</p>}
 
       {!loading && error && (

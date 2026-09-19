@@ -9,7 +9,8 @@ own long-standing division of labor).
 **Project status: feature-complete; VoiceHR's Gemini access is restored
 after a long-standing external denial, and JD submission now deterministically
 flags suspicious Gemini extractions without a mandatory review step
-(milestone 36) — an automatic repair pass for those flags is next** (see
+(milestone 36) and automatically attempts one Gemini repair call on a flagged
+extraction before giving up and leaving it flagged (milestone 37)** (see
 `[NEXT]` at the end). Every backend service, the full recruiter frontend, and
 the 2D/3D knowledge graph are implemented and passed a final whole-system
 readiness audit (see "Demo readiness" below). A dedicated audit of VoiceHR's
@@ -108,12 +109,19 @@ changed about how this now has to be run. `tests/integration/test_db_safety.py`
 (13 passed, new this session) is a pure unit test of the guard itself, no DB
 needed. `test_resume_intelligence.py`/`test_second_brain.py` exist too but
 were not run this session (untouched by this session's changes).
-`test_recruitment_workflow.py` is 99 passed (was 96 before milestone 36's +3
-for JD-extraction-validation coverage: a clean extraction reports
-`extraction_status: "clean"`, a total-under-extraction is flagged but still
-persists and matches normally against a real retrieved candidate, and a
-phrase-like required skill is flagged but the job is still created rather
-than rejected). **`tests/integration/test_interview_rounds_integration.py` (17
+`test_recruitment_workflow.py` is 102 passed (was 99 before milestone 37's +3
+for the JD-repair-pass: a flagged extraction genuinely repaired by a mocked
+second Gemini call reports `extraction_status: "repaired"` with the repaired
+(not original) requirements actually persisted and matched, a repair attempt
+whose own output still fails validation falls back to the *original*
+extraction persisted as `"flagged"` (not the failed repair's output), and a
+repair call that itself raises `LLMProviderError` never blocks job creation
+(job still created, original extraction persisted as `"flagged"`, matching
+still runs). The two milestone-36 tests for the clean/flagged happy paths
+were also extended in place with call-count assertions (`generate_structured_calls`)
+proving a clean extraction makes zero repair calls and a flagged one makes
+exactly one — not new tests, so not counted in the +3.
+**`tests/integration/test_interview_rounds_integration.py` (17
 passed, milestones 33-34 combined)** — real Postgres, run against the
 disposable `company_second_brain_test` database per the test-isolation
 invariant below, never the live demo database. Covers what the RWS-local
@@ -244,6 +252,66 @@ this machine): logged in, navigated to `/jobs`, the flagged job shows the
 none, clicked into it, and the warning banner rendered on `/jobs/{id}` with
 the exact warning message from the API — zero console/page errors
 throughout.
+
+**This session (automatic JD repair pass, milestone 37)**: milestone 36
+flagged bad extractions but took no corrective action. Now, when the first
+extraction is flagged, `main.py` makes exactly one additional Gemini call
+(`repair_structured_extraction`) — the original JD, the first extraction,
+and the exact deterministic warnings it triggered, asking Gemini to fix only
+those specific problems and return the same `StructuredJobDescription`
+schema — then re-runs `jd_validation.validate_and_normalize` on the result.
+If the repair genuinely passes validation, the *repaired* requirements are
+what get persisted and matched, with `extraction_status: "repaired"`
+(migration `0009` widens the DB `CHECK` constraint). If the repair call
+itself fails (`LLMProviderError` — unreachable, quota, malformed response)
+or its own output still fails validation, the *original*, pre-repair
+extraction is what's persisted as `"flagged"` — the failed repair attempt is
+discarded, never partially applied, and never blocks job creation either
+way. No retry loop (at most one repair call, ever), no new LLM provider, no
+scoring change (the repair pass only changes what gets validated and
+matched against, never how matching itself works), no recruiter confirmation
+step. `jd_validation.py` itself stays exactly as narrow as milestone 36 left
+it — no Gemini call was added to that module; the repair call lives in
+`main.py`, which already owns the one place in this codebase allowed to call
+Gemini for JD structuring. Frontend: a distinct "Auto-repaired" badge
+(violet/accent tone, not the warning-toned "Needs review") on the Jobs list,
+and a small informational (non-alert) note on Job Detail for a repaired job —
+`"flagged"`'s existing warning banner is completely unchanged. Verified: 159
+RWS unit tests unchanged (no new unit tests — the repair pass is only
+exercisable through the full `submit_job` pipeline, which only the
+repo-root integration suite covers), 102 repo-root integration tests passed
+(+3: a mocked repair that succeeds, one whose own output still fails
+validation, and one where the repair call itself raises `LLMProviderError` —
+all three confirm the correct final `extraction_status`, that job creation
+is never blocked, and that matching still runs). Frontend build and its 31
+Node tests passed; a real-browser Playwright regression pass confirmed the
+existing flagged/clean badge and banner behavior is completely unaffected by
+this change (no job in this environment's data has actually been repaired,
+so the new "Auto-repaired" badge/note were verified by code inspection
+against `StatusBadge`'s existing API and this page's existing CSS patterns,
+not an actual browser render of that specific state — see Known
+Limitations). **Live-verified against real Gemini, not just tests**: two
+real, controlled submissions confirmed genuine real-world behavior neither
+mocked test alone could prove. First, a deliberately incoherent JD
+(random-word gibberish) triggered a real flagged extraction, a real repair
+attempt, *and* a real transient Gemini failure on that repair call (`503
+Service Unavailable`, confirmed via the container's own structured logs
+showing two `generate_structured` calls under one correlation ID, the
+second ending in `outcome: "error"`) — the endpoint still returned `200`
+with the original extraction correctly persisted as `"flagged"`, exactly
+the designed fallback behavior, encountered for real rather than simulated.
+Second, two more realistic JDs both came back genuinely `"clean"` on the
+first attempt (real Gemini extracted short, atomic-enough skill names),
+confirming the repair pass correctly does *not* fire when it isn't needed —
+zero repair calls for either. A real `"repaired"` outcome (flagged, then
+genuinely fixed by the repair call) was not observed live this session —
+real Gemini simply didn't happen to produce a fixable-but-initially-bad
+extraction for the JDs tried, and this project's own daily Gemini quota
+history (see Known Limitations) argues against spending more real calls
+chasing that specific outcome when the mocked integration test already
+proves it deterministically. Two disposable "Smoketest JD Repair Pass"
+jobs (2 and 3) and one already-committed one (1) were left in place, same
+established convention as every other session's smoketest data.
 
 ---
 
@@ -497,9 +565,9 @@ not carried forward from memory.
 | `GET /health` | none | |
 | `POST /v1/auth/login` | none | Issues the recruiter JWT. |
 | `POST /v1/resumes` | JWT | Forwards to Resume Intelligence with the service key; browser never sees it. |
-| `GET /v1/jobs` | JWT | `match_count` via one `LEFT JOIN`, no pagination. Each row also carries `required_language`/`min_language_cefr` (both `null` if the job has no requirement). **New this session (milestone 36)**: each row also carries `extraction_status` (`"clean"`/`"flagged"`) and `extraction_warnings` (list of `{field, message}`), read from the job's `JobDescription` via an outer join — falls back to `"clean"`/`[]` defensively if that join has no match (shouldn't happen; `create_job_with_description` always creates both atomically). |
-| `POST /v1/jobs` | JWT | JD structuring (Gemini) → deterministic validation/normalization (`jd_validation.py`) → Second Brain retrieval → scoring → persists one `MatchResult` per candidate. Optional `required_language`/`min_language_cefr` (both or neither) set the job's language eligibility requirement — recruiter-set only, Gemini never sees these fields. **New this session (milestone 36)**: the structured JD is normalized (trim/dedupe/required-preferred-overlap-removal — scoring-neutral, since `compute_skill_score` targets `required ∪ preferred`) and checked against 4 deterministic rules (phrase-like required skills, total under-extraction, experience >25 years, >6 title variants) before being persisted or matched. A flagged extraction is never blocked — it's saved and matched exactly like a clean one, just with `extraction_status: "flagged"` and `extraction_warnings` in the response for recruiter visibility. The response's `required_skills`/`preferred_skills`/`titles`/`min_years_experience` are the *normalized* values (what was actually persisted and matched), not Gemini's raw output. |
-| `PATCH /v1/jobs/{job_id}/language-requirement` | JWT | Configures or clears (both null) an existing job's language requirement. Never touches any already-created `Application`'s own snapshot. **New this session (milestone 36)**: response now re-reads and surfaces the job's real `extraction_status`/`extraction_warnings` (via `get_job_description_for_job`) instead of hardcoding `"clean"`/`[]`. |
+| `GET /v1/jobs` | JWT | `match_count` via one `LEFT JOIN`, no pagination. Each row also carries `required_language`/`min_language_cefr` (both `null` if the job has no requirement). **Milestone 36**: each row also carries `extraction_status` (`"clean"`/`"flagged"`, now also `"repaired"` — milestone 37) and `extraction_warnings` (list of `{field, message}`), read from the job's `JobDescription` via an outer join — falls back to `"clean"`/`[]` defensively if that join has no match (shouldn't happen; `create_job_with_description` always creates both atomically). |
+| `POST /v1/jobs` | JWT | JD structuring (Gemini) → deterministic validation/normalization (`jd_validation.py`) → **[milestone 37] one automatic Gemini repair attempt if flagged** → Second Brain retrieval → scoring → persists one `MatchResult` per candidate. Optional `required_language`/`min_language_cefr` (both or neither) set the job's language eligibility requirement — recruiter-set only, Gemini never sees these fields. **Milestone 36**: the structured JD is normalized (trim/dedupe/required-preferred-overlap-removal — scoring-neutral, since `compute_skill_score` targets `required ∪ preferred`) and checked against 4 deterministic rules (phrase-like required skills, total under-extraction, experience >25 years, >6 title variants) before being persisted or matched. **Milestone 37**: if flagged, `main.py`'s `repair_structured_extraction` makes exactly one additional Gemini call (original JD + first extraction + exact warnings, same schema) and re-validates the result. A genuinely fixed repair persists as `extraction_status: "repaired"` with the *repaired* requirements actually used for matching; a repair that fails outright (`LLMProviderError`) or whose own output still fails validation falls back to the *original* extraction persisted as `"flagged"` — never blocks job creation either way, never a retry loop. The response's `required_skills`/`preferred_skills`/`titles`/`min_years_experience` are always whatever was actually persisted and matched (normalized, or repaired-and-normalized), never Gemini's raw first-pass output. |
+| `PATCH /v1/jobs/{job_id}/language-requirement` | JWT | Configures or clears (both null) an existing job's language requirement. Never touches any already-created `Application`'s own snapshot. **Milestone 36**: response now re-reads and surfaces the job's real `extraction_status`/`extraction_warnings` (via `get_job_description_for_job`) instead of hardcoding `"clean"`/`[]` — this naturally also surfaces `"repaired"` (milestone 37) with no further change needed here. |
 | `GET /v1/jobs/{job_id}/matches` | JWT | Lazily generates+caches `explanation` per match on first read. |
 | `POST /v1/scoring-configs` | service key | Admin/system action, not recruiter-facing. |
 | `GET /v1/candidates/{id}/identity` | JWT | Transient proxy to Resume Intelligence; no `db` dependency. |
@@ -660,6 +728,24 @@ python services/recruitment-workflow/scripts/seed_demo_data.py --yes --job-title
 
 ---
 
+## Known limitations
+
+- **Milestone 37's `extraction_status: "repaired"` outcome was not observed
+  against real Gemini this session.** Two real, controlled live submissions
+  did exercise the repair pass genuinely (a flagged extraction triggering a
+  real repair call, including one real transient repair-call failure that
+  correctly fell back to `"flagged"` without blocking job creation), but
+  neither JD tried happened to produce a flagged-then-successfully-fixed
+  result — real Gemini either extracted cleanly on the first attempt or
+  failed the repair attempt outright for the deliberately-incoherent JD used.
+  The `"repaired"` path itself is proven deterministically by 3 mocked
+  integration tests (a fixed repair, a repair whose own output still fails
+  validation, and a failing repair call), and the frontend's "Auto-repaired"
+  badge/note were checked by direct code inspection against `StatusBadge`'s
+  existing API, not an actual browser render of that specific state (no real
+  job in this environment currently has `extraction_status: "repaired"`).
+  Low risk, but a real one worth confirming if a future session hits it
+  naturally or has quota to spare chasing it deliberately.
 - **RESOLVED 2026-09-19: VoiceHR's Gemini API key/project was denied access
   by Google from milestone 25 onward; a user-provided key rotation that same
   day fixed it.** Full arc, since the history matters for anyone who hits
@@ -2038,45 +2124,93 @@ re-verifying against current source, per every prior session's own discipline.
     rendering correctly in a real Chromium browser (Playwright, cached
     binary on this machine) — flagged job shows the badge, every clean job
     doesn't, the banner shows the exact warning message, zero console
-    errors. See `[NEXT]`.
+    errors.
+37. **Automatic JD repair pass for flagged extractions.** When
+    `validate_and_normalize`'s first pass returns `"flagged"`, `main.py` now
+    makes exactly one additional Gemini call
+    (`repair_structured_extraction`) — the original JD, the first
+    extraction, and the exact deterministic warnings it triggered, asking
+    Gemini to fix only those specific problems and return the same
+    `StructuredJobDescription` schema — then re-runs
+    `validate_and_normalize` on the result. A genuine fix persists as
+    `extraction_status: "repaired"` with the *repaired* requirements
+    actually used for matching (migration `0009` widens the `CHECK`
+    constraint to allow it); a repair call that itself raises
+    `LLMProviderError`, or whose own output still fails validation, falls
+    back to persisting the *original* pre-repair extraction as `"flagged"` —
+    never blocks job creation either way, never a retry loop (at most one
+    repair call, ever). `jd_validation.py` itself gained no Gemini
+    dependency — the repair call lives in `main.py`, the one place already
+    allowed to call Gemini for JD structuring. Frontend: a distinct
+    "Auto-repaired" badge (violet/accent tone) on the Jobs list and a small
+    informational note on Job Detail, entirely separate from `"flagged"`'s
+    existing warning UX, which is unchanged. Verified: 159 RWS unit tests
+    unchanged (repair is only exercisable through the full `submit_job`
+    pipeline), 102 repo-root integration tests passed (+3: a mocked repair
+    that succeeds, one whose own output still fails validation, one where
+    the repair call itself fails), frontend build and 31 Node tests passed,
+    a real-browser Playwright regression pass confirmed the existing
+    flagged/clean UI is unaffected. **Live-verified against real Gemini**:
+    a deliberately incoherent JD triggered a real flagged extraction, a real
+    repair attempt, and a real transient repair-call failure (`503 Service
+    Unavailable`, confirmed via structured logs showing two
+    `generate_structured` calls under one correlation ID) that correctly
+    fell back to `"flagged"` without blocking job creation; two more
+    realistic JDs both extracted cleanly on the first attempt, confirming
+    zero repair calls when none are needed. A genuine flagged-then-fixed
+    `"repaired"` outcome was not observed live (real Gemini didn't happen to
+    produce one for the JDs tried) — proven instead by the 3 mocked
+    integration tests; see Known Limitations. See `[NEXT]`.
 
 ---
 
 ## [NEXT]
 
-**Automatic JD repair pass for flagged extractions.**
+**Post-match JD anomaly detection.**
 
-Milestone 36 added deterministic detection and normalization for bad JD
-extractions (phrase-like required skills, total under-extraction, suspicious
-experience, too many title variants) but takes no corrective action beyond
-flagging — a flagged job is persisted and matched exactly as extracted,
-warnings visible only via the badge/banner. The natural next slice (named as
-the deferred follow-up in this feature's own design) is a single, optional
-Gemini repair pass: when `validate_and_normalize` returns `"flagged"`, make
-one repair attempt (e.g. a tighter re-prompt asking Gemini to re-extract only
-the flagged field(s) as clean skill names instead of phrases) before falling
-back to persisting the flagged extraction as-is if the repair attempt also
-fails validation or the LLM call itself fails. Concrete scope to work out
-when starting this: where the repair call lives (`main.py`'s `submit_job`,
-after the first `validate_and_normalize` call, gated on `status == "flagged"`
-only), what the repair prompt asks for (likely just the offending field(s),
-not a full re-structuring), how many attempts (one, per the original design
-note — no retry loop), and whether a repaired-then-still-flagged result gets
-a distinct status (e.g. keep `"flagged"` but note in a warning that repair
-was attempted) or stays indistinguishable from a never-repaired flag. Must
-preserve every invariant milestone 36 established: repair happens before
-persistence/matching (never retroactively touches an already-created
-`MatchResult`), and the LLM still never decides `final_score`/`qualified`/
-scoring outcomes — repair only changes what gets validated and matched
-against, not how matching itself works.
+Milestones 36-37 catch bad *extractions* deterministically, before matching
+ever runs — phrase-like required skills, total under-extraction, suspicious
+experience, too many titles, with one automatic Gemini repair attempt on a
+flagged one. What neither milestone can catch is a JD that extracts and
+validates perfectly cleanly but still produces a nonsensical *matching
+outcome* — e.g. every single retrieved candidate disqualified (a real,
+already-documented example exists in this project's own demo data: the
+`Backend Engineer` job whose `required_skills` extraction, though clean by
+milestone 36's own rules, don't match any real candidate's Second Brain
+skill list, so every match came back disqualified), or the opposite failure,
+every candidate qualifying with a suspiciously high score (a sign
+`required_skills`/`preferred_skills` ended up too permissive even though
+each individual skill name looked fine on its own). This is a fundamentally
+different signal from milestones 36-37: it can only be computed *after*
+`score_candidate` has run for every retrieved candidate, using the
+aggregate distribution of `qualified`/`final_score` across that job's own
+`MatchResult`s, not anything inspectable from the structured JD alone.
+Concrete scope to work out when starting this: where this check lives
+(likely a new pure function, `jd_validation.py` or a sibling module, taking
+the list of per-candidate scoring outcomes `submit_job` already computes and
+returning a warning verdict the same shape as `ExtractionWarning`) and what
+counts as anomalous (0% qualified? 100% qualified? some statistical outlier
+against this project's actual retrieved-candidate pool sizes, which tend to
+be small — see Known Limitations/demo data). Whatever threshold is picked
+should be justified against this project's real data, not an invented
+round number. It must not require a second Second Brain retrieval or a
+second scoring pass, must not touch `MatchResult`'s own immutability
+(reproducibility rule — this is advisory metadata about the *set* of
+matches, not a rewrite of any individual one), and must not become a second
+mandatory-review gate — same "flag, never block" philosophy as milestones
+36-37. Whether this warrants its own `extraction_status`-like field on `Job`
+(distinct from `JobDescription.extraction_status`, since this is about the
+*match outcome*, not the *extraction*) or reuses the existing
+`extraction_warnings` shape is an open design question for whoever starts
+this, not decided here.
 
 Separately, unrelated to this feature and still genuinely blocking a *live*
 recruiter-initiated invite: `RESEND_API_KEY` is still unset. Not a code
 task — needs a real key configured in `services/voicehr/.env` and the
 `voicehr` container rebuilt/restarted.
 
-Also still open, deliberately deferred behind the repair pass above:
-milestone 35's own follow-up, a real fresh end-to-end VoiceHR interview.
+Also still open, deliberately deferred behind the anomaly-detection feature
+above: milestone 35's own follow-up, a real fresh end-to-end VoiceHR interview.
 Milestone 35 confirmed VoiceHR's Gemini access itself works again (a real
 Live session generating real audio, a real evaluator call producing a real
 result) — but only at the raw connectivity level. Two things have never been
