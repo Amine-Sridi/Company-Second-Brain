@@ -58,6 +58,8 @@ def test_create_interview_round_persists_and_is_embedded_on_read(
         json={
             "round_type": "technical",
             "interviewer_name": "Jane Doe",
+            "interviewer_email": "jane.doe@example.com",
+            "location": "https://meet.example.com/room",
             "scheduled_at": "2026-10-01T10:00:00Z",
         },
         headers=auth_headers,
@@ -67,6 +69,11 @@ def test_create_interview_round_persists_and_is_embedded_on_read(
     assert body["status"] == "scheduled"
     assert body["outcome"] is None
     assert body["round_type"] == "technical"
+    assert body["interviewer_email"] == "jane.doe@example.com"
+    assert body["location"] == "https://meet.example.com/room"
+    # No RESEND_API_KEY is configured in this test environment -- see the
+    # dedicated "missing RESEND_API_KEY" test below for this exact contract.
+    assert body["notification_status"] == "failed"
 
     from db import Application, InterviewRound
 
@@ -123,7 +130,7 @@ def test_create_blocked_while_language_gate_pending_via_real_db(
 
     resp = client.post(
         f"/v1/applications/{application_id}/interview-rounds",
-        json={"round_type": "technical", "interviewer_name": "Jane Doe", "scheduled_at": "2026-10-01T10:00:00Z"},
+        json={"round_type": "technical", "interviewer_name": "Jane Doe", "interviewer_email": "jane.doe@example.com", "scheduled_at": "2026-10-01T10:00:00Z"},
         headers=auth_headers,
     )
     assert resp.status_code == 422
@@ -141,7 +148,7 @@ def test_create_blocked_after_real_accept_via_real_db(
 
     resp = client.post(
         f"/v1/applications/{application_id}/interview-rounds",
-        json={"round_type": "technical", "interviewer_name": "Jane Doe", "scheduled_at": "2026-10-01T10:00:00Z"},
+        json={"round_type": "technical", "interviewer_name": "Jane Doe", "interviewer_email": "jane.doe@example.com", "scheduled_at": "2026-10-01T10:00:00Z"},
         headers=auth_headers,
     )
     assert resp.status_code == 422
@@ -289,6 +296,8 @@ def _create_round_via_api(client, auth_headers, application_id, **overrides):
     body = {
         "round_type": "technical",
         "interviewer_name": "Jane Doe",
+        "interviewer_email": "jane.doe@example.com",
+        "location": "https://meet.example.com/room",
         "scheduled_at": "2026-10-01T10:00:00Z",
     }
     body.update(overrides)
@@ -297,6 +306,189 @@ def _create_round_via_api(client, auth_headers, application_id, **overrides):
     )
     assert resp.status_code == 201
     return resp.json()
+
+
+# ---------------------------------------------------------------------------
+# Phase 1 notifications -- real Postgres, real (mocked) Resume Intelligence
+# contact lookup, real notification_status/notification_error persistence.
+# ---------------------------------------------------------------------------
+
+def test_create_interview_round_missing_resend_api_key_fails_cleanly(
+    client, auth_headers, mock_second_brain, mock_resume_intelligence, mock_voicehr, db_session
+):
+    """No RESEND_API_KEY is configured in this test environment (see .env.example) --
+    the real, unmocked interview_round_mailer must fail cleanly with a clear error,
+    and the round must still be created, exactly like VoiceHR's own candidate-invite
+    email behaves when its RESEND_API_KEY is unset."""
+    application_id = _interviewed_application(
+        client, auth_headers, mock_second_brain, mock_resume_intelligence, mock_voicehr
+    )
+
+    round_ = _create_round_via_api(client, auth_headers, application_id)
+
+    assert round_["notification_status"] == "failed"
+    assert "RESEND_API_KEY" in round_["notification_error"]
+
+    from db import InterviewRound
+
+    row = db_session.query(InterviewRound).filter(InterviewRound.id == uuid.UUID(round_["id"])).first()
+    assert row is not None
+    assert row.notification_status == "failed"
+
+
+def test_create_interview_round_successful_notification_emails_both_parties(
+    client, auth_headers, mock_second_brain, mock_resume_intelligence, mock_voicehr,
+    mock_interview_round_mailer,
+):
+    application_id = _interviewed_application(
+        client, auth_headers, mock_second_brain, mock_resume_intelligence, mock_voicehr
+    )
+
+    round_ = _create_round_via_api(
+        client, auth_headers, application_id, interviewer_email="panel@example.com",
+    )
+
+    assert round_["notification_status"] == "sent"
+    assert round_["notification_error"] is None
+    assert len(mock_interview_round_mailer.calls) == 1
+    call = mock_interview_round_mailer.calls[0]
+    # candidate@example.com is select_and_invite's own registered contact (see
+    # conftest_recruitment_workflow.py) -- confirms the real candidate contact,
+    # fetched fresh from Resume Intelligence, actually reached the mailer.
+    assert call["candidate_email"] == "candidate@example.com"
+    assert call["interviewer_email"] == "panel@example.com"
+
+
+def test_create_interview_round_candidate_contact_failure_still_creates_round(
+    client, auth_headers, mock_second_brain, mock_resume_intelligence, mock_voicehr,
+    mock_interview_round_mailer,
+):
+    application_id = _interviewed_application(
+        client, auth_headers, mock_second_brain, mock_resume_intelligence, mock_voicehr
+    )
+    mock_resume_intelligence.fail()
+
+    round_ = _create_round_via_api(client, auth_headers, application_id)
+
+    assert round_["notification_status"] == "failed"
+    assert "Resume Intelligence" in round_["notification_error"]
+    # The mailer must never even be called if the contact lookup itself failed --
+    # there is nothing to email the candidate at.
+    assert mock_interview_round_mailer.calls == []
+
+
+def test_create_interview_round_never_persists_candidate_contact(
+    client, auth_headers, mock_second_brain, mock_resume_intelligence, mock_voicehr,
+    mock_interview_round_mailer, db_session,
+):
+    """The candidate's real contact (name/email) must never appear anywhere on the
+    persisted interview_rounds row -- only ever passed to the mailer in memory."""
+    application_id = _interviewed_application(
+        client, auth_headers, mock_second_brain, mock_resume_intelligence, mock_voicehr
+    )
+
+    round_ = _create_round_via_api(
+        client, auth_headers, application_id,
+        interviewer_name="Panel Lead", interviewer_email="panel@example.com",
+        location="https://meet.example.com/room", notes="Focus on system design.",
+    )
+    assert round_["notification_status"] == "sent"
+
+    from db import InterviewRound
+
+    row = db_session.query(InterviewRound).filter(InterviewRound.id == uuid.UUID(round_["id"])).first()
+    assert row is not None
+    candidate_email = "candidate@example.com"  # select_and_invite's own registered contact
+    candidate_name = "Test Candidate"
+    for column in (row.interviewer_name, row.interviewer_email, row.location, row.notes):
+        if column is not None:
+            assert candidate_email not in column
+            assert candidate_name not in column
+
+
+# ---------------------------------------------------------------------------
+# Resend notification -- same round, explicit resend, never a duplicate round.
+# ---------------------------------------------------------------------------
+
+def test_resend_notification_succeeds_against_real_db(
+    client, auth_headers, mock_second_brain, mock_resume_intelligence, mock_voicehr,
+    mock_interview_round_mailer, db_session,
+):
+    application_id = _interviewed_application(
+        client, auth_headers, mock_second_brain, mock_resume_intelligence, mock_voicehr
+    )
+    round_ = _create_round_via_api(client, auth_headers, application_id)
+    assert round_["notification_status"] == "sent"
+    assert len(mock_interview_round_mailer.calls) == 1
+
+    resp = client.post(
+        f"/v1/applications/{application_id}/interview-rounds/{round_['id']}/resend-notification",
+        headers=auth_headers,
+    )
+    assert resp.status_code == 200
+    assert resp.json()["id"] == round_["id"]
+    assert resp.json()["notification_status"] == "sent"
+    # A real second send happened (not a no-op) -- but still the same one round.
+    assert len(mock_interview_round_mailer.calls) == 2
+
+    from db import InterviewRound
+
+    rows = db_session.query(InterviewRound).filter(InterviewRound.application_id == uuid.UUID(application_id)).all()
+    assert len(rows) == 1
+
+
+def test_resend_notification_failure_returns_502_real_db(
+    client, auth_headers, mock_second_brain, mock_resume_intelligence, mock_voicehr,
+    mock_interview_round_mailer, db_session,
+):
+    application_id = _interviewed_application(
+        client, auth_headers, mock_second_brain, mock_resume_intelligence, mock_voicehr
+    )
+    round_ = _create_round_via_api(client, auth_headers, application_id)
+    assert round_["notification_status"] == "sent"
+
+    mock_interview_round_mailer.fail("simulated Resend outage")
+    resp = client.post(
+        f"/v1/applications/{application_id}/interview-rounds/{round_['id']}/resend-notification",
+        headers=auth_headers,
+    )
+    assert resp.status_code == 502
+    assert "simulated Resend outage" in resp.json()["detail"]
+
+    from db import InterviewRound
+
+    row = db_session.query(InterviewRound).filter(InterviewRound.id == uuid.UUID(round_["id"])).first()
+    assert row.notification_status == "failed"
+
+
+def test_resend_notification_cooldown_real_db(
+    client, auth_headers, mock_second_brain, mock_resume_intelligence, mock_voicehr,
+    mock_interview_round_mailer,
+):
+    application_id = _interviewed_application(
+        client, auth_headers, mock_second_brain, mock_resume_intelligence, mock_voicehr
+    )
+    round_ = _create_round_via_api(client, auth_headers, application_id)
+
+    first = client.post(
+        f"/v1/applications/{application_id}/interview-rounds/{round_['id']}/resend-notification",
+        headers=auth_headers,
+    )
+    assert first.status_code == 200
+
+    second = client.post(
+        f"/v1/applications/{application_id}/interview-rounds/{round_['id']}/resend-notification",
+        headers=auth_headers,
+    )
+    assert second.status_code == 429
+
+
+def test_resend_notification_404_for_unknown_round(client, auth_headers):
+    resp = client.post(
+        f"/v1/applications/{uuid.uuid4()}/interview-rounds/{uuid.uuid4()}/resend-notification",
+        headers=auth_headers,
+    )
+    assert resp.status_code == 404
 
 
 def test_reschedule_persists_new_scheduled_at(

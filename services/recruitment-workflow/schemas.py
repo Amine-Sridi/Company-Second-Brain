@@ -266,6 +266,13 @@ class InterviewRoundResponse(BaseModel):
     docstring for why this is a parallel signal, never a new Application.status
     value). `outcome` is null unless `status == "completed"` -- enforced by a DB
     CHECK constraint, mirrored here only as a type, not re-validated.
+
+    interviewer_email/location are Optional despite being required on the request
+    schema below: a round created before migration 0010 has neither (nullable at
+    the DB level -- see that migration's own docstring for why there's no sensible
+    backfill default). notification_status/notification_error record the outcome
+    of the best-effort candidate+interviewer email send (interview_round_mailer.py)
+    -- purely advisory, never re-validated or re-derived here, just read back.
     """
 
     model_config = ConfigDict(extra="forbid")
@@ -276,8 +283,12 @@ class InterviewRoundResponse(BaseModel):
     status: Literal["scheduled", "completed", "cancelled"]
     outcome: Optional[Literal["pass", "fail", "needs_review"]] = None
     interviewer_name: str
+    interviewer_email: Optional[str] = None
+    location: Optional[str] = None
     scheduled_at: Optional[datetime] = None
     notes: Optional[str] = None
+    notification_status: Literal["pending", "sent", "failed"] = "pending"
+    notification_error: Optional[str] = None
     created_by: UUID4
     created_at: datetime
     updated_at: datetime
@@ -287,12 +298,23 @@ class InterviewRoundRequest(BaseModel):
     """POST /v1/applications/{id}/interview-rounds' request body -- schedules a new
     round in the 'scheduled' state. There is no `status`/`outcome` here: a round is
     always created scheduled, with no verdict yet (see the lifecycle actions below --
-    reschedule/complete/cancel)."""
+    reschedule/complete/cancel).
+
+    interviewer_email is required (EmailStr, so a malformed address is rejected here
+    with a 422 rather than failing later at send time) -- every round scheduled from
+    here on is expected to actually notify its interviewer; see handoff.md for the
+    phase-1 automated-notification design this supports. location is optional free
+    text (a meeting URL or a physical address, recruiter's choice) -- not split into
+    separate fields, the same "unstructured over speculative structure" treatment
+    interviewer_name/notes already get.
+    """
 
     model_config = ConfigDict(extra="forbid")
 
     round_type: Literal["technical", "managerial"]
     interviewer_name: str = Field(min_length=1, max_length=200)
+    interviewer_email: EmailStr
+    location: Optional[str] = Field(None, max_length=500)
     scheduled_at: datetime
     notes: Optional[str] = Field(None, max_length=2000)
 

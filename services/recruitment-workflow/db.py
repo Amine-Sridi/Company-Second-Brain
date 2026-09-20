@@ -311,10 +311,24 @@ class InterviewRound(Base):
     here would be exactly the kind of speculative infrastructure CLAUDE.md's code
     style rules warn against. created_by *is* a real FK to recruiters, the same
     audit pattern already used by Application.selected_by/decided_by.
+    interviewer_email is the same free-text treatment, for the same reason -- it is
+    not candidate PII (the interviewer is an internal contact the recruiter types in
+    directly, not the candidate whose PII is restricted to Resume Intelligence), so
+    storing it directly here needs no privacy carve-out.
 
     outcome is NULL unless status='completed' (enforced by a paired DB CHECK
     constraint, the same style as jobs_language_requirement_paired_check) -- a
     scheduled or cancelled round never has a pass/fail/needs_review verdict.
+
+    notification_status/notification_error/notification_sequence (migration 0010,
+    phase 1 of automating human interview scheduling -- see handoff.md) record the
+    outcome of the best-effort candidate+interviewer email sent on creation/resend
+    (interview_round_mailer.py) -- purely advisory, the same "observational, not
+    part of the round's own identity" treatment jd_validation's extraction_status/
+    extraction_warnings columns already established. A notification failure never
+    blocks or reverts round creation; see main.py's create_interview_round_endpoint.
+    notification_sequence is added now but not yet used by any application logic --
+    reserved for phase 2's ICS SEQUENCE field.
     """
 
     __tablename__ = "interview_rounds"
@@ -330,8 +344,13 @@ class InterviewRound(Base):
     status: str = Column(Text, nullable=False, server_default=text("'scheduled'"))
     outcome: Optional[str] = Column(Text, nullable=True)
     interviewer_name: str = Column(Text, nullable=False)
+    interviewer_email: Optional[str] = Column(Text, nullable=True)
+    location: Optional[str] = Column(Text, nullable=True)
     scheduled_at: Optional[datetime] = Column(DateTime(timezone=True), nullable=True)
     notes: Optional[str] = Column(Text, nullable=True)
+    notification_status: str = Column(Text, nullable=False, server_default=text("'pending'"))
+    notification_error: Optional[str] = Column(Text, nullable=True)
+    notification_sequence: int = Column(Integer, nullable=False, server_default=text("0"))
     created_by: uuid.UUID = Column(
         UUID(as_uuid=True), ForeignKey("recruitment.recruiters.id"), nullable=False
     )
@@ -949,21 +968,30 @@ def create_interview_round(
     application_id: uuid.UUID,
     round_type: str,
     interviewer_name: str,
+    interviewer_email: str,
+    location: Optional[str],
     scheduled_at: Optional[datetime],
     notes: Optional[str],
     created_by: uuid.UUID,
 ) -> InterviewRound:
     """
-    Create a new round in the 'scheduled' state. Callers (main.py's
-    create_interview_round endpoint) are responsible for the two preconditions --
-    language gate not blocking, application not already accepted/rejected -- this
-    function does not re-check either, the same division of responsibility
-    create_application/transition_application already have with their own callers.
+    Create a new round in the 'scheduled' state, notification_status defaulting to
+    'pending' -- the caller (main.py's create_interview_round_endpoint) attempts the
+    candidate+interviewer email notification *after* this call, in a separate
+    update_interview_round_notification call, once this row is already committed.
+    That split is deliberate: a notification failure must never prevent or roll back
+    the round itself existing (see this task's own design in handoff.md). Callers are
+    also responsible for the two scheduling preconditions -- language gate not
+    blocking, application not already accepted/rejected -- this function does not
+    re-check either, the same division of responsibility create_application/
+    transition_application already have with their own callers.
     """
     round_ = InterviewRound(
         application_id=application_id,
         round_type=round_type,
         interviewer_name=interviewer_name,
+        interviewer_email=interviewer_email,
+        location=location,
         scheduled_at=scheduled_at,
         notes=notes,
         created_by=created_by,
@@ -972,6 +1000,34 @@ def create_interview_round(
     db.commit()
     db.refresh(round_)
     return round_
+
+
+def update_interview_round_notification(
+    db: Session,
+    round_id: uuid.UUID,
+    notification_status: str,
+    notification_error: Optional[str],
+) -> Optional[InterviewRound]:
+    """
+    Records the outcome of a best-effort candidate+interviewer email send (create or
+    resend-notification) -- never touches round_type/interviewer_name/
+    interviewer_email/location/scheduled_at/status/outcome. Called after the round
+    itself is already committed, so this only ever annotates an existing row, never
+    rolls it back regardless of the notification outcome. No status precondition
+    (unlike reschedule/complete/cancel): notification is orthogonal to a round's own
+    scheduled/completed/cancelled lifecycle, so this succeeds regardless of it.
+    """
+    db.execute(
+        update(InterviewRound)
+        .where(InterviewRound.id == round_id)
+        .values(
+            notification_status=notification_status,
+            notification_error=notification_error,
+            updated_at=func.now(),
+        )
+    )
+    db.commit()
+    return get_interview_round(db, round_id)
 
 
 def list_interview_rounds_for_application(

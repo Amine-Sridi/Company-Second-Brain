@@ -16,7 +16,7 @@ import logging
 import time
 import uuid
 from pathlib import Path
-from typing import Annotated
+from typing import Annotated, Optional
 
 from fastapi import BackgroundTasks, Depends, FastAPI, File, Header, HTTPException, Request, Response, UploadFile, status
 from fastapi.responses import FileResponse
@@ -27,6 +27,7 @@ from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 from sqlalchemy.orm import Session
 
 import clients
+import interview_round_mailer
 import resume_intelligence_client
 import voicehr_client
 from auth import InvalidTokenError, create_access_token, decode_access_token, verify_password
@@ -63,10 +64,12 @@ from db import (
     reschedule_interview_round,
     set_job_language_requirement,
     transition_application,
+    update_interview_round_notification,
     update_job_description_extraction_metadata,
 )
 from explanation import get_or_create_explanation
 from clients import SecondBrainClientError
+from interview_round_mailer import NotificationDeliveryError
 from match_anomaly import MatchOutcome, detect_match_anomaly, merge_anomaly_warning
 from resume_intelligence_client import ResumeIntelligenceClientError
 from schemas import (
@@ -120,6 +123,8 @@ class Settings(BaseSettings):
     resume_intelligence_url: str = "http://resume-intelligence:8000"
     voicehr_api_key: str = "changeme-voicehr-key"
     voicehr_url: str = "http://voicehr:8000"
+    resend_api_key: Optional[str] = None
+    resend_from_address: str = "Company Second Brain <onboarding@resend.dev>"
     webhook_hmac_secret: str = "changeme-webhook-secret"
     gemini_api_key: str = ""
     gemini_model: str = "gemini-3.6-flash"
@@ -836,22 +841,11 @@ def _application_response(application, db: Session) -> ApplicationResponse:
         interview_completed_at=application.interview_completed_at,
         decided_at=application.decided_at,
         language_gate=_language_gate_info(application),
-        interview_rounds=[
-            InterviewRoundResponse(
-                id=r.id,
-                application_id=r.application_id,
-                round_type=r.round_type,
-                status=r.status,
-                outcome=r.outcome,
-                interviewer_name=r.interviewer_name,
-                scheduled_at=r.scheduled_at,
-                notes=r.notes,
-                created_by=r.created_by,
-                created_at=r.created_at,
-                updated_at=r.updated_at,
-            )
-            for r in rounds
-        ],
+        # Reuses _interview_round_response (defined below) rather than duplicating
+        # its field list a second time -- two independently-drifting copies is
+        # exactly the class of bug an added field (e.g. milestone 41's
+        # notification_status/interviewer_email) could otherwise silently miss here.
+        interview_rounds=[_interview_round_response(r) for r in rounds],
     )
 
 
@@ -1056,8 +1050,12 @@ def _interview_round_response(round_) -> InterviewRoundResponse:
         status=round_.status,
         outcome=round_.outcome,
         interviewer_name=round_.interviewer_name,
+        interviewer_email=round_.interviewer_email,
+        location=round_.location,
         scheduled_at=round_.scheduled_at,
         notes=round_.notes,
+        notification_status=round_.notification_status,
+        notification_error=round_.notification_error,
         created_by=round_.created_by,
         created_at=round_.created_at,
         updated_at=round_.updated_at,
@@ -1077,12 +1075,56 @@ def _get_own_interview_round(db: Session, application_id: uuid.UUID, round_id: u
     return round_
 
 
+async def _notify_interview_round(db: Session, application, round_) -> tuple[str, Optional[str]]:
+    """
+    Attempts the candidate+interviewer email notification for one interview round --
+    shared by create_interview_round_endpoint (best-effort, never blocks the request)
+    and resend_interview_round_notification_endpoint (its entire purpose, re-raised
+    as the request's own failure on error -- see that endpoint's own docstring for
+    why the two callers treat the same outcome differently). Returns
+    (notification_status, notification_error) without persisting either -- callers
+    decide when to call update_interview_round_notification, since they persist and
+    respond in a different order.
+
+    The candidate's contact is fetched fresh from Resume Intelligence for this one
+    call and never persisted anywhere in RWS -- the same transient-lookup pattern
+    invite_application already uses. A missing contact is treated the same as any
+    other notification failure (recorded, never raised as this function's own
+    exception), since "we don't know how to reach the candidate" is just one more
+    reason a best-effort notification can fail.
+    """
+    job = get_job(db, application.job_id)
+    try:
+        contact = await resume_intelligence_client.get_contact(
+            settings.resume_intelligence_url,
+            settings.resume_intelligence_api_key,
+            application.candidate_id,
+        )
+        if contact is None:
+            raise ResumeIntelligenceClientError("Candidate contact not found")
+        await interview_round_mailer.send_interview_round_notification(
+            api_key=settings.resend_api_key,
+            from_address=settings.resend_from_address,
+            candidate_email=contact["email"],
+            candidate_name=contact["name"],
+            interviewer_email=round_.interviewer_email,
+            interviewer_name=round_.interviewer_name,
+            job_title=job.title if job else "the role",
+            round_type=round_.round_type,
+            scheduled_at=round_.scheduled_at,
+            location=round_.location,
+        )
+    except (ResumeIntelligenceClientError, NotificationDeliveryError) as exc:
+        return "failed", str(exc)
+    return "sent", None
+
+
 @app.post(
     "/v1/applications/{application_id}/interview-rounds",
     response_model=InterviewRoundResponse,
     status_code=201,
 )
-def create_interview_round_endpoint(
+async def create_interview_round_endpoint(
     application_id: uuid.UUID,
     payload: InterviewRoundRequest,
     db: Session = Depends(get_db),
@@ -1101,6 +1143,18 @@ def create_interview_round_endpoint(
 
     Application.status itself is never touched here -- only a new interview_rounds
     row is created; see db.InterviewRound's own docstring for why.
+
+    Phase 1 of automating human interview scheduling (handoff.md): once the round
+    is created (and only once -- see create_interview_round's own docstring for why
+    that commit happens first), best-effort notifies the candidate and interviewer
+    by email via interview_round_mailer. The candidate's contact is fetched fresh
+    from Resume Intelligence for this one call and never persisted anywhere in RWS,
+    the same transient-lookup pattern invite_application already uses. A failure at
+    either step (contact lookup or email delivery) is recorded as
+    notification_status='failed' with the real error and does NOT roll back or fail
+    this request -- the round itself is the durable, valuable result; notification
+    is advisory on top of it, the same "observational, never blocking" relationship
+    jd_validation/match_anomaly already have to job submission.
     """
     application = get_application(db, application_id)
     if application is None:
@@ -1128,10 +1182,15 @@ def create_interview_round_endpoint(
         application_id=application_id,
         round_type=payload.round_type,
         interviewer_name=payload.interviewer_name,
+        interviewer_email=payload.interviewer_email,
+        location=payload.location,
         scheduled_at=payload.scheduled_at,
         notes=payload.notes,
         created_by=recruiter.id,
     )
+
+    notification_status, notification_error = await _notify_interview_round(db, application, round_)
+    round_ = update_interview_round_notification(db, round_.id, notification_status, notification_error)
     return _interview_round_response(round_)
 
 
@@ -1214,6 +1273,78 @@ def cancel_interview_round_endpoint(
         raise HTTPException(
             status_code=409,
             detail=f"Interview round is not cancellable (current status: {existing.status})",
+        )
+    return _interview_round_response(updated)
+
+
+# In-memory per-round cooldown for explicit interview-round notification resends --
+# a single-instance deployment need (no Redis, per CLAUDE.md's infra constraints),
+# the same pattern _resend_cooldowns already uses for POST .../resend-invite. Guards
+# against a double-click triggering more than one real Resend send in quick
+# succession; the 'scheduled'-only status check below is the real authority on
+# *whether* a resend is ever allowed at all, this only throttles *how often*.
+_INTERVIEW_ROUND_RESEND_COOLDOWN_SECONDS = 10.0
+_interview_round_resend_cooldowns: dict[uuid.UUID, float] = {}
+
+
+@app.post(
+    "/v1/applications/{application_id}/interview-rounds/{round_id}/resend-notification",
+    response_model=InterviewRoundResponse,
+)
+async def resend_interview_round_notification_endpoint(
+    application_id: uuid.UUID,
+    round_id: uuid.UUID,
+    db: Session = Depends(get_db),
+    recruiter: Recruiter = Depends(require_recruiter),
+):
+    """
+    Explicit resend of an interview round's scheduling notification -- always
+    attempts delivery (no "already sent" check, unlike create's first attempt).
+    Never creates a new round or a new interview_rounds row: reuses this exact
+    round's current interviewer_email/location/scheduled_at, the same way
+    resend-invite reuses VoiceHR's existing interview rather than creating a new
+    one. Only callable while 'scheduled' -- the same status the other lifecycle
+    actions (reschedule/complete/cancel) already require, since resending a
+    scheduling notification for an already-completed or cancelled round would
+    describe a meeting that either already happened or no longer exists.
+
+    Unlike create_interview_round_endpoint (where notification failure never blocks
+    the request, because the round's own existence is the durable, valuable
+    result), this endpoint's entire purpose *is* the notification -- so a failure
+    here is raised as this request's own 502, the same relationship
+    POST .../resend-invite already has to a VoiceHR delivery failure. The round's
+    notification_status/notification_error are still updated to reflect the real
+    outcome either way, so a later read (e.g. the Applications list) never shows a
+    stale status from before this attempt.
+    """
+    round_ = _get_own_interview_round(db, application_id, round_id)
+    if round_ is None:
+        raise HTTPException(status_code=404, detail="Interview round not found")
+    if round_.status != "scheduled":
+        raise HTTPException(
+            status_code=409,
+            detail=f"Interview round is not resendable (current status: {round_.status})",
+        )
+
+    now = time.monotonic()
+    last_attempt = _interview_round_resend_cooldowns.get(round_id)
+    if last_attempt is not None and (now - last_attempt) < _INTERVIEW_ROUND_RESEND_COOLDOWN_SECONDS:
+        raise HTTPException(
+            status_code=429,
+            detail="Resend already requested; please wait a moment before trying again",
+        )
+    # Recorded before the notification attempt (not after), the same reasoning
+    # resend-invite's own cooldown already uses -- so two near-simultaneous clicks
+    # can't both pass the check while the first is still in flight.
+    _interview_round_resend_cooldowns[round_id] = now
+
+    application = get_application(db, application_id)
+    notification_status, notification_error = await _notify_interview_round(db, application, round_)
+    updated = update_interview_round_notification(db, round_id, notification_status, notification_error)
+
+    if notification_status == "failed":
+        raise HTTPException(
+            status_code=502, detail=f"Interview round notification failed: {notification_error}"
         )
     return _interview_round_response(updated)
 

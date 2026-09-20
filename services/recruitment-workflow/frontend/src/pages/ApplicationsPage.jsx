@@ -11,6 +11,7 @@ import {
   rescheduleInterviewRound,
   completeInterviewRound,
   cancelInterviewRound,
+  resendInterviewRoundNotification,
 } from "../api/applications.js";
 import { ApiError } from "../api/client.js";
 import { useCandidateIdentity } from "../hooks/useCandidateIdentity.js";
@@ -29,8 +30,10 @@ import {
 import {
   ROUND_TYPE_LABELS,
   ROUND_OUTCOME_LABELS,
+  NOTIFICATION_STATUS_LABELS,
   roundStatusLabel,
   roundStatusTone,
+  notificationStatusTone,
   describeRound,
   describeScheduleBlockedReason,
   toDatetimeLocalInputValue,
@@ -200,6 +203,8 @@ function ApplicationRow({ application, onUpdated }) {
   const [schedulingOpen, setSchedulingOpen] = useState(false);
   const [roundType, setRoundType] = useState("technical");
   const [interviewerName, setInterviewerName] = useState("");
+  const [interviewerEmail, setInterviewerEmail] = useState("");
+  const [roundLocation, setRoundLocation] = useState("");
   const [scheduledAt, setScheduledAt] = useState("");
   const [roundNotes, setRoundNotes] = useState("");
   const [scheduling, setScheduling] = useState(false);
@@ -316,6 +321,8 @@ function ApplicationRow({ application, onUpdated }) {
     setSchedulingOpen(false);
     setRoundType("technical");
     setInterviewerName("");
+    setInterviewerEmail("");
+    setRoundLocation("");
     setScheduledAt("");
     setRoundNotes("");
     setScheduleError(null);
@@ -333,10 +340,16 @@ function ApplicationRow({ application, onUpdated }) {
       // it returns only the new InterviewRoundResponse, not the whole updated
       // application, so the round is appended onto this row's own already-loaded
       // list locally rather than re-fetching everything (nothing else about the
-      // application changes when a round is created).
+      // application changes when a round is created). RWS also best-effort emails
+      // the candidate and interviewer as part of this same call (phase 1 of
+      // automating human interview scheduling, see handoff.md) -- a delivery
+      // failure never fails this request, it only shows up as the returned
+      // round's own notification_status.
       const newRound = await createInterviewRound(application.application_id, {
         roundType,
         interviewerName: interviewerName.trim(),
+        interviewerEmail: interviewerEmail.trim(),
+        location: roundLocation.trim() || undefined,
         scheduledAt: new Date(scheduledAt).toISOString(),
         notes: roundNotes.trim() || undefined,
       });
@@ -464,6 +477,15 @@ function ApplicationRow({ application, onUpdated }) {
                 required
               />
               <input
+                type="email"
+                className={styles.scheduleFormInput}
+                placeholder="Interviewer email"
+                value={interviewerEmail}
+                onChange={(event) => setInterviewerEmail(event.target.value)}
+                disabled={scheduling}
+                required
+              />
+              <input
                 type="datetime-local"
                 className={styles.scheduleFormInput}
                 value={scheduledAt}
@@ -471,6 +493,14 @@ function ApplicationRow({ application, onUpdated }) {
                 disabled={scheduling}
                 required
                 aria-label="Scheduled date and time"
+              />
+              <input
+                type="text"
+                className={styles.scheduleFormInput}
+                placeholder="Meeting link or location (optional)"
+                value={roundLocation}
+                onChange={(event) => setRoundLocation(event.target.value)}
+                disabled={scheduling}
               />
               <textarea
                 className={styles.scheduleFormTextarea}
@@ -630,6 +660,7 @@ function InterviewRoundItem({ applicationId, round, onRoundUpdated }) {
   const [busy, setBusy] = useState(false);
   const [actionError, setActionError] = useState(null);
   const [cancelling, setCancelling] = useState(false);
+  const [resendingNotification, setResendingNotification] = useState(false);
 
   const isScheduled = round.status === "scheduled";
 
@@ -712,10 +743,36 @@ function InterviewRoundItem({ applicationId, round, onRoundUpdated }) {
     }
   }
 
+  async function handleResendNotification() {
+    if (resendingNotification) return;
+    setResendingNotification(true);
+    setActionError(null);
+    try {
+      // Real POST .../interview-rounds/{round_id}/resend-notification. Unlike
+      // every other action here, RWS rejects this with a 502 (not a 200) when
+      // delivery itself fails -- resending has no other value if the email
+      // doesn't go out, so the error is surfaced the same way as any other
+      // failure below, not treated as a partial success.
+      const updated = await resendInterviewRoundNotification(applicationId, round.id);
+      onRoundUpdated(updated);
+    } catch (err) {
+      setActionError(err instanceof ApiError ? err.message : "Failed to resend notification.");
+    } finally {
+      setResendingNotification(false);
+    }
+  }
+
   return (
     <div className={styles.roundItem}>
       <StatusBadge variant="glass" tone={roundStatusTone(round)} title={describeRound(round)}>
         {ROUND_TYPE_LABELS[round.round_type] ?? round.round_type}: {roundStatusLabel(round)}
+      </StatusBadge>
+      <StatusBadge
+        variant="glass"
+        tone={notificationStatusTone(round)}
+        title={round.notification_status === "failed" ? round.notification_error ?? undefined : undefined}
+      >
+        {NOTIFICATION_STATUS_LABELS[round.notification_status] ?? "Notification pending"}
       </StatusBadge>
 
       {isScheduled && mode === null && (
@@ -736,6 +793,16 @@ function InterviewRoundItem({ applicationId, round, onRoundUpdated }) {
           >
             Complete
           </button>
+          {round.notification_status === "failed" && (
+            <button
+              type="button"
+              className={styles.roundActionButton}
+              onClick={handleResendNotification}
+              disabled={resendingNotification}
+            >
+              {resendingNotification ? "Resending…" : "Resend notification"}
+            </button>
+          )}
           <button
             type="button"
             className={styles.roundCancelButton}

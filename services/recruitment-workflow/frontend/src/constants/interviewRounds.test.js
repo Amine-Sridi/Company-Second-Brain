@@ -11,8 +11,10 @@ import { test } from "node:test";
 import {
   ROUND_TYPE_LABELS,
   ROUND_OUTCOME_LABELS,
+  NOTIFICATION_STATUS_LABELS,
   roundStatusLabel,
   roundStatusTone,
+  notificationStatusTone,
   formatScheduledAt,
   toDatetimeLocalInputValue,
   describeRound,
@@ -44,6 +46,20 @@ test("roundStatusTone: completed outcome maps to the same tone vocabulary as the
   assert.equal(roundStatusTone({ status: "completed", outcome: "pass" }), "success");
   assert.equal(roundStatusTone({ status: "completed", outcome: "fail" }), "danger");
   assert.equal(roundStatusTone({ status: "completed", outcome: "needs_review" }), "warning");
+});
+
+test("notificationStatusTone: sent/failed use the same success/danger vocabulary as roundStatusTone", () => {
+  assert.equal(notificationStatusTone({ notification_status: "sent" }), "success");
+  assert.equal(notificationStatusTone({ notification_status: "failed" }), "danger");
+});
+
+test("notificationStatusTone: pending (and any unrecognized value) is neutral, never success/danger", () => {
+  assert.equal(notificationStatusTone({ notification_status: "pending" }), "neutral");
+  assert.equal(notificationStatusTone({ notification_status: undefined }), "neutral");
+});
+
+test("NOTIFICATION_STATUS_LABELS covers exactly pending/sent/failed", () => {
+  assert.deepEqual(new Set(Object.keys(NOTIFICATION_STATUS_LABELS)), new Set(["pending", "sent", "failed"]));
 });
 
 test("formatScheduledAt: null/invalid input never throws or renders 'Invalid Date'", () => {

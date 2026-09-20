@@ -105,21 +105,35 @@ export function reject(applicationId) {
  * (constants/interviewRounds.js: describeScheduleBlockedReason), never a
  * substitute for RWS's own check (§22).
  *
+ * Phase 1 of automating human interview scheduling (see handoff.md): RWS also
+ * best-effort emails the candidate and interviewer once the round is created
+ * (interviewerEmail is required for this reason -- RWS's own request schema
+ * rejects a malformed/missing address with a 422). A notification failure never
+ * fails this call or the round's own creation -- the returned InterviewRoundResponse
+ * always has `notification_status` ("sent"/"failed") for the caller to render.
+ *
  * @param {string} applicationId
  * @param {object} payload
  * @param {"technical"|"managerial"} payload.roundType
  * @param {string} payload.interviewerName
+ * @param {string} payload.interviewerEmail
+ * @param {string} [payload.location] - a meeting URL or a physical address, recruiter's choice
  * @param {string} payload.scheduledAt - ISO 8601 datetime string
  * @param {string} [payload.notes]
  * @returns {Promise<object>} InterviewRoundResponse (status: "scheduled")
  */
-export function createInterviewRound(applicationId, { roundType, interviewerName, scheduledAt, notes }) {
+export function createInterviewRound(
+  applicationId,
+  { roundType, interviewerName, interviewerEmail, location, scheduledAt, notes }
+) {
   return request(`/v1/applications/${applicationId}/interview-rounds`, {
     method: "POST",
     body: {
       round_type: roundType,
       interviewer_name: interviewerName,
+      interviewer_email: interviewerEmail,
       scheduled_at: scheduledAt,
+      ...(location ? { location } : {}),
       ...(notes ? { notes } : {}),
     },
   });
@@ -176,4 +190,23 @@ export function completeInterviewRound(applicationId, roundId, { outcome, notes 
  */
 export function cancelInterviewRound(applicationId, roundId) {
   return request(`/v1/applications/${applicationId}/interview-rounds/${roundId}/cancel`, { method: "POST" });
+}
+
+/**
+ * Explicit resend of a round's candidate+interviewer notification email. RWS
+ * itself only allows this while the round is "scheduled" (409 otherwise) and
+ * rate-limits rapid repeat clicks (429, same 10s cooldown pattern
+ * resendInvite's own endpoint already uses) -- unlike creating a round, a
+ * failed resend rejects with a 502 (its entire purpose is delivery; there is no
+ * separate "the round still exists" consolation the way create has).
+ *
+ * @param {string} applicationId
+ * @param {string} roundId
+ * @returns {Promise<object>} InterviewRoundResponse (notification_status: "sent")
+ */
+export function resendInterviewRoundNotification(applicationId, roundId) {
+  return request(
+    `/v1/applications/${applicationId}/interview-rounds/${roundId}/resend-notification`,
+    { method: "POST" }
+  );
 }

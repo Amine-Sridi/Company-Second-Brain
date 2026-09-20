@@ -20,6 +20,26 @@ export const ROUND_OUTCOME_LABELS = {
 };
 
 /**
+ * A round's best-effort candidate+interviewer email notification (RWS:
+ * interview_round_mailer.py, phase 1 of automating human interview scheduling --
+ * see handoff.md). Purely advisory, same as the round's own status/outcome: this
+ * only labels/tones notification_status, never computes or retries it -- the
+ * recruiter resends via the dedicated action when it's "failed".
+ */
+export const NOTIFICATION_STATUS_LABELS = {
+  pending: "Notification pending",
+  sent: "Notification sent",
+  failed: "Notification failed",
+};
+
+export function notificationStatusTone(round) {
+  if (round.notification_status === "sent") return "success";
+  if (round.notification_status === "failed") return "danger";
+  return "neutral"; // "pending" -- shouldn't linger (create/resend both resolve it
+  // synchronously), but a stale/never-notified round still needs a real tone.
+}
+
+/**
  * A round's own badge label -- "Scheduled"/"Cancelled" while there's no verdict
  * yet, otherwise the recorded outcome ("Pass"/"Fail"/"Needs review"). A completed
  * round with no recognized outcome value (shouldn't happen -- RWS's own DB CHECK

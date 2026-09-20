@@ -7,14 +7,17 @@ knowledge graph. It does **not** cover backend implementation, system-wide
 architecture, or cross-service demo readiness — those live in the repo-root
 `handoff.md`; this file must never contradict it.
 
-**Status: feature-complete and audited, no outstanding frontend task**
-(see `[NEXT]` at the end — the one concrete gap two audits in a row
-surfaced, the focus-ring mismatch, is now closed app-wide; milestone 22
-added a small, real-browser-verified badge/banner for JD-extraction
-validation, milestone 23 added a distinct "Auto-repaired" badge/note on
-top of that for the backend's automatic JD-repair pass, and milestone 24
-corrected that messaging's wording after a backend reliability audit found
-it overclaiming "extraction" as the cause for every flagged job). Every planned
+**Status: feature-complete, no outstanding frontend task** (see `[NEXT]` at
+the end — phase 2 of the interview-round notification feature milestone 25
+started, ICS/reschedule/cancel notifications, is backend-first per
+`handoff.md`'s own scoping; milestone 22 added a small, real-browser-
+verified badge/banner for JD-extraction validation, milestone 23 added a
+distinct "Auto-repaired" badge/note on top of that for the backend's
+automatic JD-repair pass, milestone 24 corrected that messaging's wording
+after a backend reliability audit found it overclaiming "extraction" as the
+cause for every flagged job, and milestone 25 added the interviewer-email/
+location scheduling fields and a notification-status badge + resend action
+for the backend's new interview-round email notifications). Every planned
 page, the full V2 dark visual redesign, an
 optional 3D graph mode, and the VoiceHR language eligibility gate/assessment
 UI are built and have each been confirmed rendering correctly in a real
@@ -136,7 +139,8 @@ this table adds only the frontend-specific consumption notes.
 | Candidate knowledge | `GET /v1/candidates/{id}/knowledge` | `CandidateDetailPage` |
 | Select / invite / resend / accept / reject | `POST /v1/matches/{id}/select`, `/v1/applications/{id}/invite\|resend-invite\|accept\|reject` | `api/applications.js`; every backend `409`/`422`/`429`/`502` rendered verbatim, no special-cased wording. `accept`'s `422` when the language eligibility gate blocks it is rendered the same generic way — the frontend also disables the button itself as a UX hint (see below), but RWS's own check is the real authority. `resend-invite` (new) is a separate call from `invite`, only shown/enabled once `"invited"` — see below |
 | Applications (scoped / global) | `GET /v1/jobs/{id}/applications`, `GET /v1/applications` | `ApplicationsPage` / `InterviewsPage`; each row's `interview_rounds` array is rendered by `ApplicationsPage` (new — see below), unused elsewhere |
-| Schedule / reschedule / complete / cancel interview round | `POST /v1/applications/{id}/interview-rounds`, `.../{round_id}/reschedule\|complete\|cancel` | `api/applications.js`'s `createInterviewRound`/`rescheduleInterviewRound`/`completeInterviewRound`/`cancelInterviewRound`; `ApplicationsPage` only — see below |
+| Schedule / reschedule / complete / cancel interview round | `POST /v1/applications/{id}/interview-rounds`, `.../{round_id}/reschedule\|complete\|cancel` | `api/applications.js`'s `createInterviewRound`/`rescheduleInterviewRound`/`completeInterviewRound`/`cancelInterviewRound`; `ApplicationsPage` only — see below. **Milestone 25**: `createInterviewRound` now also sends required `interviewerEmail`/optional `location`, and every round response carries `notification_status`/`notification_error` (phase 1 of automating human interview scheduling, see `handoff.md` milestone 41) |
+| Resend interview-round notification | `POST /v1/applications/{id}/interview-rounds/{round_id}/resend-notification` | **Milestone 25.** `api/applications.js`'s `resendInterviewRoundNotification`; `ApplicationsPage` only, shown solely when a round's `notification_status === "failed"`. Unlike every other action here, a `502` is a real failure outcome to render, not a bug — resending has no other value if delivery itself fails |
 | Interview report / recording | `GET /v1/interviews/{id}/report\|recording` | `ReportDetailPage`; recording played via a same-origin blob URL, RWS's proxy rewrite confirmed live — never a direct VoiceHR URL |
 | Knowledge graph | `GET /v1/graph/candidates-jobs` | `GraphPage`/`MatchGraph`/`MatchGraph3D`; see below |
 
@@ -368,6 +372,33 @@ the language gate. Covered by 18 Node-test-runner cases in
   Cancel here; those stay `ApplicationsPage`-only, by design, matching this
   page's own existing read-only relationship to every other application
   field it shows). Zero new API calls.
+- **Milestone 25: notification fields/badge, phase 1 of automating human
+  interview scheduling (`handoff.md` milestone 41).** The schedule form
+  gained a required "Interviewer email" input (`type="email"`) and an
+  optional "Meeting link or location" input, both sent straight through to
+  `POST .../interview-rounds`. Each round now renders a *second*
+  `StatusBadge` next to its existing type/status badge —
+  `NOTIFICATION_STATUS_LABELS`/`notificationStatusTone`
+  (`constants/interviewRounds.js`, same "labels/tones only" rule) toned
+  `sent → success`, `failed → danger`, `pending → neutral` — with a
+  "Resend notification" action button that appears only once
+  `notification_status === "failed"` (calls the new
+  `resendInterviewRoundNotification`; its `502` on failure renders in the
+  same per-round `role="alert"` banner every other round action already
+  uses, since a resend's own failure is a real outcome to show, not
+  swallowed as a partial success). `CandidateDetailPage`'s read-only
+  rendering is unaffected (it never showed round actions to begin with, and
+  the notification badge is deliberately kept `ApplicationsPage`-only too,
+  same reasoning as every other round action).
+
+  **Live-verified** (real browser, real backend, the same already-curated
+  `"Email Delivery Smoke Test Engineer"` job's Applications page): scheduled
+  a real round with a real interviewer email and location — round created,
+  "Notification failed" badge rendered (no `RESEND_API_KEY` configured live
+  either, exactly the designed contract), "Resend notification" button
+  appeared next to Reschedule/Complete/Cancel. Zero new console errors
+  beyond the same pre-existing, already-documented `/v1/candidates/
+  0a699701-.../identity` 404 this section already calls out twice above.
 
 ---
 
@@ -912,38 +943,61 @@ checking the actual source; use this only to orient, not to cite.
     new generic text present, the underlying specific warning message still
     shown beneath it), a clean job still shows neither badge, and zero
     console/page errors.
+25. **Interview-round notification fields + status badge/resend action —
+    see "Interview rounds UI" above for the full detail.** Backend companion
+    to `handoff.md`'s milestone 41 (phase 1 of automating human interview
+    scheduling): the schedule form gained a required interviewer-email input
+    and an optional location input; each round gained a second badge for
+    `notification_status` and a "Resend notification" action shown only
+    once it's `"failed"`. `handoff.md`'s own milestone 40 (atomic job
+    submission), closing the partial-write risk milestone 39 found, also
+    landed this session and confirmed the frontend-impact question milestone
+    24 left open: that fix needed zero frontend changes (a mid-request
+    failure still just returns the same `502` this page already handled,
+    with no orphaned job needing a "resume" affordance).
+
+    **Verification**: `npm run build` clean; frontend's 34 Node tests (+3:
+    `notificationStatusTone`'s tone mapping and `NOTIFICATION_STATUS_LABELS`'
+    coverage) passed. Real-browser Playwright pass against the actual
+    running stack, the same already-curated demo job used throughout this
+    section: scheduled a real round with a real interviewer email and
+    location, confirmed the round creates successfully, the "Notification
+    failed" badge renders (no `RESEND_API_KEY` configured live, exactly the
+    designed contract), and "Resend notification" appears alongside the
+    existing Reschedule/Complete/Cancel actions — zero new console errors
+    beyond the same pre-existing orphaned-candidate 404 this section already
+    calls out repeatedly.
 
 ---
 
 ## [NEXT]
 
-**No outstanding frontend task.** Milestone 24 (the "flagged" messaging fix,
-found by `handoff.md`'s milestone 39 reliability audit) is the most recent
-frontend change — a copy-only fix, real-browser-verified per above.
-Everything from milestone 21's focus-ring audit still holds — milestone 24
-touched only the same two pages milestones 22-23 already did, both already
-covered by that audit's own full Tab-navigation pass, and it changed text
-content only, no markup structure or focusable elements.
+**No outstanding frontend task.** Milestone 25 (interview-round notification
+fields/badge/resend) is the most recent frontend change, real-browser-
+verified per above.
 
-`handoff.md`'s own milestone 40 (atomic job submission) closed the
-partial-write risk backend milestone 39 found, confirming the frontend-
-impact question milestone 24's own entry above left open: the chosen fix
-(one commit at the end of the pipeline, not an idempotency key) needed zero
-frontend changes — a mid-request failure now just returns the same `502`
-this page already handles, with no orphaned job for the recruiter to ever
-see or need a "resume" affordance for. Nothing currently open in
-`handoff.md`'s own `[NEXT]` (a real live `"repaired"` outcome, purely
-opportunistic) needs any frontend surface either — that path already has
-its badge/note built (milestone 23).
+The next backend-driven frontend need will come from `handoff.md`'s own
+`[NEXT]` (interview-round ICS invitations + reschedule/cancel
+notifications — phase 2 of the same feature milestone 25 just started the
+frontend half of). That work is scoped as backend-only (a real ICS
+attachment on the existing notification email, plus wiring the same
+best-effort notification logic into `reschedule`/`cancel`, which currently
+send none) — no new frontend surface is anticipated (the existing
+notification badge/resend button milestone 25 just built should already
+cover whatever reschedule/cancel notifications look like from the
+recruiter's side, since they reuse the same `notification_status`/
+`notification_error` fields), but re-read `handoff.md`'s `[NEXT]` once that
+work actually starts rather than assuming this holds.
 
 Everything else on record is either a deliberate, already-documented,
 closed decision (the "V2 page panel" background duplication, the three
 shared components' unused non-`glass` branches, no pagination, native
 `<audio controls>` — see Known Limitations above, none of these are gaps
 waiting on a next session) or external and not implementable from this
-side: VoiceHR's Gemini access needs Google support/billing action, and
-automatic invite emails need a real `RESEND_API_KEY` configured — see
-`handoff.md`. Before starting new work here, re-audit both handoff
+side: VoiceHR's Gemini access needs Google support/billing action, and both
+automatic invite emails and interview-round notifications need a real
+`RESEND_API_KEY` configured (each service's own key — see `handoff.md`).
+Before starting new work here, re-audit both handoff
 documents' Known Limitations for anything that became real since this was
 written — don't treat this section's silence alone as proof there's
 nothing left, the same discipline this file has asked of itself before.

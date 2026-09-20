@@ -475,12 +475,20 @@ def mock_resume_intelligence(monkeypatch):
     Usage: mock_resume_intelligence.set_contact(candidate_id, {"name": ..., "email": ...})
     Not calling set_contact for a candidate_id means "no contact record" (404 -> None),
     which is the default for every candidate_id unless explicitly set.
+
+    Call .fail() to make every subsequent get_contact call raise
+    ResumeIntelligenceClientError instead (simulates Resume Intelligence being
+    unreachable, as opposed to reachable-but-no-contact-record, which set_contact's
+    own default already covers).
     """
     import resume_intelligence_client
+    from resume_intelligence_client import ResumeIntelligenceClientError
 
-    state = {"contacts": {}}
+    state = {"contacts": {}, "should_fail": False}
 
     async def _get_contact(base_url, api_key, candidate_id):
+        if state["should_fail"]:
+            raise ResumeIntelligenceClientError("simulated Resume Intelligence network failure")
         return state["contacts"].get(str(candidate_id))
 
     monkeypatch.setattr(resume_intelligence_client, "get_contact", _get_contact)
@@ -488,6 +496,9 @@ def mock_resume_intelligence(monkeypatch):
     class _Controller:
         def set_contact(self, candidate_id, contact: dict) -> None:
             state["contacts"][str(candidate_id)] = contact
+
+        def fail(self) -> None:
+            state["should_fail"] = True
 
     return _Controller()
 
@@ -550,6 +561,45 @@ def mock_voicehr(monkeypatch):
 
         def fail_resend(self) -> None:
             monkeypatch.setattr(voicehr_client, "resend_invite", _failing_resend_invite)
+
+    return _Controller()
+
+
+@pytest.fixture
+def mock_interview_round_mailer(monkeypatch):
+    """
+    Patches interview_round_mailer.send_interview_round_notification (as imported
+    by main.py's `import interview_round_mailer`) so tests never make a real HTTP
+    call to Resend. Defaults to succeeding; call .fail() to make subsequent calls
+    raise NotificationDeliveryError (simulates Resend being unreachable or
+    rejecting the request) -- independent of settings.resend_api_key, which is
+    simply unset in this test environment (see the dedicated
+    "missing RESEND_API_KEY" tests, which deliberately do NOT use this fixture, to
+    exercise that real not-configured path with the real, unmocked mailer).
+
+    Records every call's kwargs in .calls for assertion (e.g. confirming the
+    candidate's email/name never leaked into a field it shouldn't have).
+    """
+    import interview_round_mailer
+    from interview_round_mailer import NotificationDeliveryError
+
+    calls = []
+    state = {"should_fail": False, "error": "simulated Resend failure"}
+
+    async def _send(**kwargs):
+        calls.append(kwargs)
+        if state["should_fail"]:
+            raise NotificationDeliveryError(state["error"])
+
+    monkeypatch.setattr(interview_round_mailer, "send_interview_round_notification", _send)
+
+    class _Controller:
+        def __init__(self):
+            self.calls = calls
+
+        def fail(self, error: str = "simulated Resend failure") -> None:
+            state["should_fail"] = True
+            state["error"] = error
 
     return _Controller()
 
