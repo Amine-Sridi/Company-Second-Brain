@@ -23,7 +23,7 @@ from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import ValidationError
 from pydantic_settings import BaseSettings, SettingsConfigDict
-from sqlalchemy.exc import IntegrityError
+from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 from sqlalchemy.orm import Session
 
 import clients
@@ -404,6 +404,19 @@ async def submit_job(
          Brain and computes the deterministic + semantic hybrid score itself.
       5. Every scored candidate gets an immutable MatchResult row, regardless of
          qualification outcome, so the full match set is auditable.
+
+    Atomic, all-or-nothing (milestone 40, fixing a partial-write risk milestone
+    39's reliability audit found): every DB write above -- create_job_with_
+    description, every create_match_result, and the post-match anomaly's own
+    update_job_description_extraction_metadata -- only `db.flush()`es, never
+    commits, until the single `db.commit()` at the very end of this function,
+    once every step has actually succeeded. If anything raises before that
+    point (JD structuring, Second Brain retrieval, a candidate lookup mid-loop),
+    FastAPI's error response is returned and get_db's own `finally: db.close()`
+    discards the whole uncommitted transaction -- nothing is left half-written.
+    Before this, a mid-loop Second Brain failure durably persisted a Job with
+    only some of its MatchResults, with the client only ever seeing a 502 and
+    no job_id to know it happened.
     """
     try:
         structured = await structure_job_description(llm, payload.raw_description)
@@ -585,12 +598,13 @@ async def submit_job(
     match_responses.sort(key=lambda m: m.final_score, reverse=True)
 
     # Post-match anomaly detection (see match_anomaly.py) -- runs once, after every
-    # MatchResult above is already scored and persisted. Purely observational: it
-    # only reads the outcomes already computed above, never rescales/rescoring,
-    # never touches a MatchResult row, never calls Gemini. A detected anomaly can
-    # only ever move extraction_status toward "flagged" (never away from it, and
-    # never past it into some other status) and only appends a warning that isn't
-    # already present -- see merge_anomaly_warning's own idempotency contract.
+    # MatchResult above is already flushed (not yet committed -- see this function's
+    # own docstring). Purely observational: it only reads the outcomes already
+    # computed above, never rescales/rescoring, never touches a MatchResult row,
+    # never calls Gemini. A detected anomaly can only ever move extraction_status
+    # toward "flagged" (never away from it, and never past it into some other
+    # status) and only appends a warning that isn't already present -- see
+    # merge_anomaly_warning's own idempotency contract.
     anomaly = detect_match_anomaly(
         [
             MatchOutcome(
@@ -602,15 +616,38 @@ async def submit_job(
         ]
     )
     if anomaly is not None:
-        extraction_status, extraction_warnings = merge_anomaly_warning(
+        promoted_status, promoted_warnings = merge_anomaly_warning(
             extraction_status, extraction_warnings, anomaly
         )
-        update_job_description_extraction_metadata(
-            db,
-            job_description.id,
-            extraction_status,
-            [w.to_dict() for w in extraction_warnings],
-        )
+        try:
+            # A SAVEPOINT (not the outer transaction) around this one advisory
+            # write: per this feature's own "must never block job creation" rule,
+            # a failure here must not discard the job/MatchResults already
+            # pending in the same still-open outer transaction below -- only this
+            # one nested block rolls back on failure, via begin_nested()'s own
+            # context-manager contract (implicit RELEASE on success, ROLLBACK TO
+            # SAVEPOINT on exception).
+            with db.begin_nested():
+                update_job_description_extraction_metadata(
+                    db,
+                    job_description.id,
+                    promoted_status,
+                    [w.to_dict() for w in promoted_warnings],
+                )
+        except SQLAlchemyError:
+            # Log for visibility and keep responding with the PRE-anomaly status/
+            # warnings -- the response must always describe what will actually be
+            # committed below, never a promotion that failed to write.
+            logger.warning(
+                "Failed to persist post-match anomaly warning for job_description %s",
+                job_description.id,
+                exc_info=True,
+            )
+        else:
+            extraction_status, extraction_warnings = promoted_status, promoted_warnings
+
+    # The one commit for the whole pipeline -- see this function's own docstring.
+    db.commit()
 
     return JobResponse(
         job_id=job.id,

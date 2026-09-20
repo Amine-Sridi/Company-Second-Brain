@@ -77,8 +77,13 @@ export default function JobDetailPage() {
 
       {job && job.extraction_status === "flagged" && (
         <div className={styles.extractionWarning} role="alert">
-          <strong>This job description's extraction looks suspicious.</strong> Matching still
-          ran normally, but you may want to review the requirements below.
+          {/* Deliberately generic: "flagged" can mean the extraction itself looked
+              suspicious (jd_validation.py) or that matching produced a suspicious
+              outcome despite a clean extraction (match_anomaly.py) -- the specific
+              reason is always in the warning list below, so the intro must not
+              claim a cause ("extraction looks suspicious") that isn't always true. */}
+          <strong>This job needs a second look.</strong> Matching still ran normally, but
+          you may want to review the details below.
           <ul>
             {job.extraction_warnings.map((warning, index) => (
               <li key={index}>{warning.message}</li>

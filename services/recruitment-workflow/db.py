@@ -115,10 +115,14 @@ class JobDescription(Base):
     min_years_experience: Optional[float] = Column(Float, nullable=True)
     titles: list = Column(JSONB, nullable=False)
     structuring_model: str = Column(Text, nullable=False)
-    # Deterministic JD-extraction validation metadata (jd_validation.py) -- recorded
-    # once, immediately after structuring, never a correction of the four fields
-    # above. See alembic/versions/0008_jd_extraction_validation.py for why these are
-    # NOT NULL with a constant default rather than nullable.
+    # Deterministic JD-extraction/match-outcome validation metadata (jd_validation.py,
+    # match_anomaly.py) -- set once immediately after structuring, and (since
+    # milestone 38) possibly updated a second time immediately after matching, via
+    # update_job_description_extraction_metadata. Never a correction of the four
+    # required_skills/preferred_skills/min_years_experience/titles fields above --
+    # those stay exactly what was actually scored, unmodified by either update. See
+    # alembic/versions/0008_jd_extraction_validation.py for why these are NOT NULL
+    # with a constant default rather than nullable.
     extraction_status: str = Column(Text, nullable=False, server_default=text("'clean'"))
     extraction_warnings: list = Column(JSONB, nullable=False, server_default=text("'[]'::jsonb"))
     created_at: datetime = Column(
@@ -411,7 +415,18 @@ def create_job_with_description(
     extraction_warnings: Optional[list[dict]] = None,
 ) -> tuple[Job, JobDescription]:
     """
-    Create a new Job and its first (version 1) JobDescription in one transaction.
+    Adds a new Job and its first (version 1) JobDescription to the session.
+
+    Deliberately does NOT commit -- this is one step inside submit_job's own
+    single, atomic transaction (see that function's own docstring for why:
+    milestone 39's reliability audit found that committing here immediately,
+    before Second Brain retrieval and per-candidate scoring even ran, meant a
+    later failure in that pipeline left a real, orphaned Job with zero or
+    partial MatchResults durably persisted, with the client only ever seeing a
+    502 and no job_id to know it happened). Only `db.flush()`, to assign
+    `job.id`/`job_description.id` (and every other server-generated default)
+    without finalizing anything -- the caller commits once, after the entire
+    pipeline succeeds.
 
     required_skills/preferred_skills/min_years_experience/titles are expected to
     already be normalized (jd_validation.normalize_extraction) by the caller --
@@ -443,9 +458,7 @@ def create_job_with_description(
         extraction_warnings=extraction_warnings if extraction_warnings is not None else [],
     )
     db.add(job_description)
-    db.commit()
-    db.refresh(job)
-    db.refresh(job_description)
+    db.flush()  # assign job_description.id/created_at without committing
     return job, job_description
 
 
@@ -475,7 +488,7 @@ def update_job_description_extraction_metadata(
     extraction_warnings: list[dict],
 ) -> None:
     """
-    Updates only extraction_status/extraction_warnings on an already-persisted
+    Updates only extraction_status/extraction_warnings on an already-flushed
     JobDescription -- used by main.py's post-match anomaly check (match_anomaly.py)
     to append a warning discovered only after that job's MatchResults already
     exist. Never touches required_skills/preferred_skills/min_years_experience/
@@ -483,13 +496,17 @@ def update_job_description_extraction_metadata(
     all -- the same "extraction_status/extraction_warnings are observational
     metadata, not part of what's reproduced" boundary jd_validation.py's own
     columns already established (migration 0008).
+
+    Deliberately does NOT commit -- called from inside submit_job's own
+    `db.begin_nested()` savepoint (see that function's docstring), so a failure
+    here rolls back only this one advisory update, not the job/MatchResults
+    already pending in the same still-open, not-yet-committed transaction.
     """
     db.execute(
         update(JobDescription)
         .where(JobDescription.id == job_description_id)
         .values(extraction_status=extraction_status, extraction_warnings=extraction_warnings)
     )
-    db.commit()
 
 
 def set_job_language_requirement(
@@ -611,6 +628,16 @@ def create_match_result(
     missing_requirements: list[str],
     qualified: bool,
 ) -> MatchResult:
+    """
+    Adds one MatchResult to the session. Deliberately does NOT commit -- like
+    create_job_with_description, this is one step inside submit_job's single
+    atomic transaction (see that function's docstring): committing per-row here
+    used to mean a Second Brain failure partway through a job's candidate loop
+    left some candidates' MatchResults durably persisted and the rest missing,
+    with the client only seeing a 502. Only `db.flush()`, to assign match.id
+    without finalizing anything -- the caller commits once, after every
+    candidate in the pool has been scored successfully.
+    """
     match = MatchResult(
         job_id=job_id,
         job_description_id=job_description_id,
@@ -633,8 +660,7 @@ def create_match_result(
         qualified=qualified,
     )
     db.add(match)
-    db.commit()
-    db.refresh(match)
+    db.flush()  # assign match.id without committing
     return match
 
 

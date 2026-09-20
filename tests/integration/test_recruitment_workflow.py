@@ -565,6 +565,58 @@ def test_submit_job_match_anomaly_never_touches_persisted_match_result_scoring_f
         assert row.missing_requirements == match["missing_requirements"]
 
 
+def test_submit_job_match_anomaly_persist_failure_does_not_turn_success_into_500(
+    client, auth_headers, db_session, mock_second_brain, mock_llm, monkeypatch
+):
+    # Reliability audit finding (MEDIUM): the anomaly-metadata write is a purely
+    # advisory, best-effort annotation, attempted inside its own SAVEPOINT (see
+    # submit_job's docstring) so its failure never poisons the outer, still-open
+    # transaction the job and every MatchResult are pending in. If this one
+    # write fails (e.g. a transient DB error), the request must still commit and
+    # return 200 with the job's real, actually-persisted state -- never a 500
+    # that would make an otherwise fully successful submission look like a
+    # total failure (and risk a recruiter resubmitting into a duplicate job).
+    import main
+    from sqlalchemy.exc import SQLAlchemyError
+
+    def _boom(*args, **kwargs):
+        raise SQLAlchemyError("simulated transient database failure")
+
+    monkeypatch.setattr(main, "update_job_description_extraction_metadata", _boom)
+
+    mock_llm._structured = {
+        "required_skills": ["Quantum Flux Optimization"],
+        "preferred_skills": [],
+        "min_years_experience": None,
+        "titles": [],
+    }
+    candidates = [
+        make_candidate(skills=["Python", "Docker"], similarity_score=0.7) for _ in range(5)
+    ]
+    mock_second_brain.set_candidates(candidates)
+
+    resp = _submit_job(client, auth_headers, title="Anomaly Persist Failure Job", top_k=10)
+    assert resp.status_code == 200
+    body = resp.json()
+
+    # The anomaly write failed, so the response must reflect the PRE-anomaly
+    # state actually in the DB -- "clean" (this extraction never trips
+    # jd_validation.py's own rules), not a promised-but-unwritten "flagged".
+    assert body["extraction_status"] == "clean"
+    assert body["extraction_warnings"] == []
+    # The job and every MatchResult are still fully created -- the failure was
+    # isolated to the one advisory write, nothing upstream of it was affected.
+    assert len(body["matches"]) == 5
+
+    from db import JobDescription
+
+    job_id = uuid.UUID(body["job_id"])
+    jd = db_session.query(JobDescription).filter(JobDescription.job_id == job_id).first()
+    assert jd is not None
+    assert jd.extraction_status == "clean"
+    assert jd.extraction_warnings == []
+
+
 # ---------------------------------------------------------------------------
 # Retrieval integration + hybrid scoring
 # ---------------------------------------------------------------------------
@@ -639,7 +691,7 @@ def test_submit_job_matches_sorted_by_final_score_desc(client, auth_headers, moc
     assert matches[0]["candidate_id"] == strong["candidate_id"]
 
 
-def test_submit_job_retrieval_failure_returns_502(client, auth_headers, monkeypatch):
+def test_submit_job_retrieval_failure_returns_502(client, auth_headers, db_session, monkeypatch):
     import clients
     from clients import SecondBrainClientError
 
@@ -648,9 +700,71 @@ def test_submit_job_retrieval_failure_returns_502(client, auth_headers, monkeypa
 
     monkeypatch.setattr(clients, "retrieve_candidates", _failing_retrieve)
 
-    resp = _submit_job(client, auth_headers)
+    resp = _submit_job(client, auth_headers, title="Retrieval Failure Job")
     assert resp.status_code == 502
     assert "Second Brain retrieval failed" in resp.json()["detail"]
+
+    # Milestone 40: submit_job is atomic -- Job/JobDescription creation happens
+    # before Second Brain retrieval, but is only flushed, not committed, so a
+    # retrieval failure must leave no orphaned Job behind. Before this fix, this
+    # exact Job would already be durably committed with zero matches.
+    #
+    # The `client` fixture's own get_db override shares one long-lived db_session
+    # across the whole test (unlike the real get_db, which closes -- and thus
+    # rolls back anything uncommitted -- after every request), so a flushed-but-
+    # uncommitted row is still visible to a query on that *same* session even
+    # after the request "fails". The rollback() below simulates exactly what the
+    # real per-request session cleanup does in production: only a genuinely
+    # committed row survives it. Before this fix, this rollback would be a
+    # no-op (the row was already truly committed) and the assertion would fail.
+    db_session.rollback()
+    from db import Job
+
+    assert db_session.query(Job).filter(Job.title == "Retrieval Failure Job").first() is None
+
+
+def test_submit_job_mid_loop_candidate_failure_leaves_nothing_committed(
+    client, auth_headers, db_session, mock_second_brain, monkeypatch
+):
+    # Reliability-audit follow-up (milestone 40): a candidate-lookup failure
+    # partway through the scoring loop (Second Brain becoming unreachable
+    # mid-request) must leave NOTHING committed -- not the Job, not the
+    # JobDescription, not any of the MatchResults already scored before the
+    # failure. Before this fix, the Job + JobDescription + the first 2
+    # MatchResults would already be durably persisted here, with the client's
+    # 502 response carrying no job_id to even know a job now exists.
+    candidates = [make_candidate(skills=["Python"], similarity_score=0.7) for _ in range(5)]
+    mock_second_brain.set_candidates(candidates)
+
+    import clients
+    from clients import SecondBrainClientError
+
+    real_get_candidate = clients.get_candidate
+    call_count = {"n": 0}
+
+    async def _failing_get_candidate(base_url, api_key, candidate_id):
+        call_count["n"] += 1
+        if call_count["n"] == 3:
+            raise SecondBrainClientError("simulated mid-loop failure")
+        return await real_get_candidate(base_url, api_key, candidate_id)
+
+    monkeypatch.setattr(clients, "get_candidate", _failing_get_candidate)
+
+    resp = _submit_job(client, auth_headers, title="Mid-Loop Failure Job", top_k=10)
+    assert resp.status_code == 502
+    assert call_count["n"] == 3  # confirms the failure genuinely happened mid-loop, not before it
+
+    # See test_submit_job_retrieval_failure_returns_502's comment: this simulates
+    # the real per-request session cleanup the `client` fixture's shared session
+    # skips, which is what actually discards anything only flushed, never
+    # committed. Before this fix, this rollback would be a no-op (the Job and
+    # the first 2 MatchResults were already truly committed) and both
+    # assertions below would fail.
+    db_session.rollback()
+    from db import Job, MatchResult
+
+    assert db_session.query(Job).filter(Job.title == "Mid-Loop Failure Job").first() is None
+    assert db_session.query(MatchResult).count() == 0
 
 
 # ---------------------------------------------------------------------------

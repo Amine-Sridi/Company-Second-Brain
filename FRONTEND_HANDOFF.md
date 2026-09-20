@@ -11,8 +11,10 @@ architecture, or cross-service demo readiness — those live in the repo-root
 (see `[NEXT]` at the end — the one concrete gap two audits in a row
 surfaced, the focus-ring mismatch, is now closed app-wide; milestone 22
 added a small, real-browser-verified badge/banner for JD-extraction
-validation, and milestone 23 added a distinct "Auto-repaired" badge/note on
-top of that for the backend's automatic JD-repair pass). Every planned
+validation, milestone 23 added a distinct "Auto-repaired" badge/note on
+top of that for the backend's automatic JD-repair pass, and milestone 24
+corrected that messaging's wording after a backend reliability audit found
+it overclaiming "extraction" as the cause for every flagged job). Every planned
 page, the full V2 dark visual redesign, an
 optional 3D graph mode, and the VoiceHR language eligibility gate/assessment
 UI are built and have each been confirmed rendering correctly in a real
@@ -887,33 +889,52 @@ checking the actual source; use this only to orient, not to cite.
     themselves were verified by direct code review against `StatusBadge`'s
     existing tone API and this page's existing CSS patterns, not an actual
     browser render of that specific state.
+24. **Warning messaging fix: `"flagged"` no longer overclaims "extraction."**
+    Found by `handoff.md`'s milestone 39 reliability audit, not a new
+    feature. Both `JobDetailPage`'s warning banner ("This job description's
+    extraction looks suspicious") and `JobsListPage`'s "Needs review" badge
+    tooltip ("Gemini's extraction... looked suspicious") hardcoded a claim
+    that stopped being universally true the moment milestone 38's
+    `match_anomaly.py` gave `"flagged"` a *second*, unrelated cause: a
+    perfectly clean extraction whose match outcome looks wrong. A job
+    flagged only by that path would show a banner asserting something false
+    about its own extraction. Fixed with a minimal wording change in both
+    places — banner intro now reads "This job needs a second look," badge
+    tooltip now names both possible causes generically — no new component,
+    no new conditional structure; the real, specific cause is still always
+    named by the actual `extraction_warnings[].message` list, already
+    rendered verbatim underneath.
+
+    **Verification**: `npm run build` clean; frontend's 31 Node tests
+    unchanged (pure copy change, no logic touched). Real-browser Playwright
+    pass against the actual running stack confirmed the corrected wording
+    renders for a real, pre-existing flagged job (old inaccurate text gone,
+    new generic text present, the underlying specific warning message still
+    shown beneath it), a clean job still shows neither badge, and zero
+    console/page errors.
 
 ---
 
 ## [NEXT]
 
-**No outstanding frontend task.** Milestone 23 (the JD-repair-pass
-badge/note) is still the most recent *frontend code change*. `handoff.md`'s
-own milestone 38 (post-match JD anomaly detection) shipped since then, but
-it needed zero frontend changes: its new warning is just another entry in
-the same `extraction_warnings` array `JobDetailPage`'s banner already
-iterates, and `"flagged"` is the same status `JobsListPage`'s "Needs review"
-badge already keys off — confirming the open question milestones 22-23 left
-behind (whether a future backend-side extraction/match warning could reuse
-this vocabulary with no new UI) resolved in the "reuses it" direction, at
-least for this case. Everything from milestone 21's focus-ring audit still
-holds — no regression re-check was needed for milestone 38 since it touched
-no frontend file at all (confirmed via a real-browser regression pass in
-`handoff.md`'s own milestone 38 entry, checking the pre-existing warning
-banner still renders correctly with the new backend code path wired in).
+**No outstanding frontend task.** Milestone 24 (the "flagged" messaging fix,
+found by `handoff.md`'s milestone 39 reliability audit) is the most recent
+frontend change — a copy-only fix, real-browser-verified per above.
+Everything from milestone 21's focus-ring audit still holds — milestone 24
+touched only the same two pages milestones 22-23 already did, both already
+covered by that audit's own full Tab-navigation pass, and it changed text
+content only, no markup structure or focusable elements.
 
-The next backend-driven frontend need, if any, will come from
-`handoff.md`'s own `[NEXT]` (a JD-extraction-reliability end-to-end audit —
-explicitly scoped as closing live-verification gaps and checking how
-milestones 36-38 compose, not new detection logic). That audit's own scope
-says no new code is expected unless it finds a real defect, so no new
-frontend surface is anticipated from it either — re-read `handoff.md`'s
-`[NEXT]` once that work actually starts rather than assuming this holds.
+`handoff.md`'s own milestone 40 (atomic job submission) closed the
+partial-write risk backend milestone 39 found, confirming the frontend-
+impact question milestone 24's own entry above left open: the chosen fix
+(one commit at the end of the pipeline, not an idempotency key) needed zero
+frontend changes — a mid-request failure now just returns the same `502`
+this page already handles, with no orphaned job for the recruiter to ever
+see or need a "resume" affordance for. Nothing currently open in
+`handoff.md`'s own `[NEXT]` (a real live `"repaired"` outcome, purely
+opportunistic) needs any frontend surface either — that path already has
+its badge/note built (milestone 23).
 
 Everything else on record is either a deliberate, already-documented,
 closed decision (the "V2 page panel" background duplication, the three

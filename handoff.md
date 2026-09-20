@@ -13,7 +13,17 @@ flags suspicious Gemini extractions without a mandatory review step
 extraction before giving up and leaving it flagged (milestone 37), and now
 also flags a job post-match when its extraction looked clean but every
 candidate still failed the required-skills gate despite relevant profiles
-(milestone 38)** (see `[NEXT]` at the end). Every backend service, the full recruiter frontend, and
+(milestone 38). An end-to-end reliability audit of that whole pipeline
+(milestone 39) found and fixed two real MEDIUM defects (a DB failure in the
+advisory anomaly write could have turned a fully successful submission into
+an opaque 500; the frontend's warning banner/badge overclaimed "extraction"
+as the cause even for a match-outcome-only flag) and surfaced one
+pre-existing MEDIUM gap (a partial-write risk in the per-candidate scoring
+loop), which milestone 40 then closed by making the whole submission
+atomic (one commit at the end, not one per row) — and, with Gemini's daily
+quota reset, live-confirmed the post-match anomaly check firing through a
+real, fresh `POST /v1/jobs` for the first time** (see `[NEXT]` at the end).
+Every backend service, the full recruiter frontend, and
 the 2D/3D knowledge graph are implemented and passed a final whole-system
 readiness audit (see "Demo readiness" below). A dedicated audit of VoiceHR's
 autonomous real-time candidate interview confirmed it was already fully built
@@ -122,16 +132,22 @@ repair call that itself raises `LLMProviderError` never blocks job creation
 still runs). The two milestone-36 tests for the clean/flagged happy paths
 were also extended in place with call-count assertions (`generate_structured_calls`)
 proving a clean extraction makes zero repair calls and a flagged one makes
-exactly one — not new tests, so not counted in the +3. **107 passed this
-session (milestone 38's +5)**: a clean-but-hallucinated extraction (a
-compound required skill short enough to never trip `jd_validation.py`'s own
-phrase-like check) gets promoted to `"flagged"` post-match when every one of
-5 relevant candidates fails the hard gate; the same shape does *not* fire
-when semantic relevance is weak, when at least one candidate passes the hard
-gate, or when the pool is under 5 candidates; and a direct DB comparison
-confirms every `MatchResult` scoring field persisted before the anomaly
-check ran is byte-for-byte identical to what the API response already said
-after it ran.
+exactly one — not new tests, so not counted in the +3. Milestone 38 added
++5 (a clean-but-hallucinated extraction gets promoted to `"flagged"`
+post-match when every one of 5 relevant candidates fails the hard gate; the
+same shape does *not* fire when semantic relevance is weak, when at least
+one candidate passes the hard gate, or when the pool is under 5 candidates;
+and a direct DB comparison confirms every `MatchResult` scoring field
+persisted before the anomaly check ran is byte-for-byte identical to what
+the API response already said after it ran). Milestone 39 added +1: the
+reliability audit's own MEDIUM fix (a simulated DB failure writing the
+post-match anomaly must still return `200` with the job's real,
+actually-persisted pre-anomaly state, never a `500`). **109 passed this
+session (milestone 40's +1)**: a real mid-loop `SecondBrainClientError`
+(the 3rd of 5 candidates) followed by `db_session.rollback()` (simulating
+the real per-request session cleanup the shared-session test harness
+otherwise skips) confirms zero `Job`/`MatchResult` rows survive; the
+pre-existing retrieval-failure test was extended with the same check.
 **`tests/integration/test_interview_rounds_integration.py` (17
 passed, milestones 33-34 combined)** — real Postgres, run against the
 disposable `company_second_brain_test` database per the test-isolation
@@ -399,6 +415,72 @@ same numeric shape against real Postgres, just with mocked candidates
 instead of Gemini in the loop), just not demonstrated through a fresh
 browser screenshot of a newly-flagged live job.
 
+**This session (JD extraction reliability end-to-end audit, milestone 39)**:
+audited the full pipeline (Gemini extraction → deterministic validation →
+optional repair → persistence → retrieval → scoring → post-match anomaly →
+recruiter warnings) for contradictory states, warning loss/duplication,
+repair using the wrong extraction, the anomaly incorrectly promoting status,
+backward compatibility, transaction/partial-write risk, quota/failure
+behavior, `MatchResult` reproducibility, and frontend consistency across
+`clean`/`repaired`/`flagged`. Checked existing tests and real data first
+(all 174 RWS unit + 107 integration tests green baseline; every real job's
+`extraction_status`/`extraction_warnings` combination in the live database
+inspected directly via SQL — no contradictory clean-with-warnings or
+flagged-with-no-warnings rows found). **Two concrete defects found and
+fixed**: (1) **MEDIUM, the post-match anomaly's own metadata write had no
+error handling** — a transient DB failure at that one `UPDATE` (which runs
+*after* the job and every `MatchResult` are already durably committed)
+would have raised an unhandled exception, turning an otherwise fully
+successful submission into an opaque `500` for the recruiter, directly
+violating this feature's own "must never block job creation" design
+promise (and risking a recruiter resubmitting into a duplicate job, since
+job creation has no idempotency key). Fixed: the write is now wrapped in
+`try/except SQLAlchemyError`, rolling back and logging on failure, and
+falling back to responding with the job's real pre-anomaly state rather
+than a promised-but-unwritten promotion — the response now always describes
+what's actually persisted, never what merely should have been. (2)
+**MEDIUM, frontend messaging.** Both `JobDetailPage`'s warning banner
+("This job description's extraction looks suspicious") and
+`JobsListPage`'s "Needs review" badge tooltip ("Gemini's extraction... looked
+suspicious") hardcoded an *extraction*-specific claim that stopped being
+universally true the moment milestone 38 added a second, unrelated cause for
+the same `"flagged"` status (a clean extraction whose *match outcome* looks
+wrong). A job flagged only by `match_anomaly.py` would show a banner
+asserting something false about its own extraction — a real, live-jury-demo
+risk (a recruiter reading a false claim and looking for a problem that isn't
+there). Fixed with a minimal wording change in both places (no new
+component, no new conditional structure) to describe the state generically,
+letting the actual `extraction_warnings[].message` list (already rendered
+verbatim) carry the specific cause. **One MEDIUM finding reported but
+deliberately not fixed this session** (see Known Limitations): a real,
+pre-existing partial-write risk in `submit_job`'s per-candidate scoring loop
+(each `MatchResult` commits immediately; a Second Brain candidate-lookup
+failure partway through leaves a durably-committed Job + JobDescription +
+partial `MatchResult`s, then a `502` with no `job_id` for the client to
+reference, and no idempotency key to protect a recruiter's retry from
+creating a duplicate job) — this predates milestones 36-38 entirely (it's a
+property of the base matching loop, not the JD-extraction-reliability layers
+this audit targeted), and fixing it properly is an architecture-level
+atomicity decision with real tradeoffs, not a small patch to bundle into
+this audit; see `[NEXT]`. **Everything else checked came back clean**:
+contradictory states, warning duplication, repair using the wrong
+extraction, the anomaly incorrectly promoting status, and `MatchResult`
+reproducibility (confirmed by grep: no `UPDATE`/`DELETE` path exists for
+that table anywhere in `db.py`) — no defects found, verified rather than
+assumed. **Live Gemini**: one real, controlled `POST /v1/jobs` was
+attempted per this task's own instruction ("if quota allows") — a real `429
+RESOURCE_EXHAUSTED` confirmed the daily quota (see Known Limitations) is
+still exhausted from earlier in this same session; per the task's explicit
+"otherwise do not work around quota" instruction, no further live attempts
+were made, and the three-layer interaction / real `"repaired"` outcome gaps
+milestones 37-38 both left open remain open. Verified: 174 RWS unit tests
+unchanged, 108 repo-root integration tests (+1, the anomaly-persist-failure
+regression), frontend build + 31 Node tests passed, and a real-browser
+Playwright pass confirmed the corrected wording renders correctly (badge
+tooltip and banner both updated, old inaccurate text gone, underlying
+warning messages still shown, a clean job still shows neither) with zero
+console errors.
+
 ---
 
 ## Architecture / invariants
@@ -652,7 +734,7 @@ not carried forward from memory.
 | `POST /v1/auth/login` | none | Issues the recruiter JWT. |
 | `POST /v1/resumes` | JWT | Forwards to Resume Intelligence with the service key; browser never sees it. |
 | `GET /v1/jobs` | JWT | `match_count` via one `LEFT JOIN`, no pagination. Each row also carries `required_language`/`min_language_cefr` (both `null` if the job has no requirement). **Milestone 36**: each row also carries `extraction_status` (`"clean"`/`"flagged"`, now also `"repaired"` — milestone 37) and `extraction_warnings` (list of `{field, message}`), read from the job's `JobDescription` via an outer join — falls back to `"clean"`/`[]` defensively if that join has no match (shouldn't happen; `create_job_with_description` always creates both atomically). |
-| `POST /v1/jobs` | JWT | JD structuring (Gemini) → deterministic validation/normalization (`jd_validation.py`) → **[milestone 37] one automatic Gemini repair attempt if flagged** → Second Brain retrieval → scoring → persists one `MatchResult` per candidate → **[milestone 38] post-match anomaly check (`match_anomaly.py`)**. Optional `required_language`/`min_language_cefr` (both or neither) set the job's language eligibility requirement — recruiter-set only, Gemini never sees these fields. **Milestone 36**: the structured JD is normalized (trim/dedupe/required-preferred-overlap-removal — scoring-neutral, since `compute_skill_score` targets `required ∪ preferred`) and checked against 4 deterministic rules (phrase-like required skills, total under-extraction, experience >25 years, >6 title variants) before being persisted or matched. **Milestone 37**: if flagged, `main.py`'s `repair_structured_extraction` makes exactly one additional Gemini call (original JD + first extraction + exact warnings, same schema) and re-validates the result. A genuinely fixed repair persists as `extraction_status: "repaired"` with the *repaired* requirements actually used for matching; a repair that fails outright (`LLMProviderError`) or whose own output still fails validation falls back to the *original* extraction persisted as `"flagged"` — never blocks job creation either way, never a retry loop. **Milestone 38**: after every `MatchResult` above is already scored and persisted, `match_anomaly.detect_match_anomaly` checks whether ≥5 candidates were retrieved, average `semantic_score` ≥ 0.5, zero qualified, and every one failed the required-skills hard gate specifically — a JD that extracted and validated perfectly cleanly but still produced a nonsensical match outcome (a required skill Gemini hallucinated that no real candidate will ever have verbatim). A fire promotes `"clean"`/`"repaired"` to `"flagged"` (an already-`"flagged"` job is unaffected) and idempotently appends a `field: "match_outcomes"` warning — purely observational, never rescoring, never touching any `MatchResult` row, never a second Gemini call. The response's `required_skills`/`preferred_skills`/`titles`/`min_years_experience` are always whatever was actually persisted and matched (normalized, or repaired-and-normalized), never Gemini's raw first-pass output. |
+| `POST /v1/jobs` | JWT | JD structuring (Gemini) → deterministic validation/normalization (`jd_validation.py`) → **[milestone 37] one automatic Gemini repair attempt if flagged** → Second Brain retrieval → scoring → persists one `MatchResult` per candidate → **[milestone 38] post-match anomaly check (`match_anomaly.py`)**. Optional `required_language`/`min_language_cefr` (both or neither) set the job's language eligibility requirement — recruiter-set only, Gemini never sees these fields. **Milestone 36**: the structured JD is normalized (trim/dedupe/required-preferred-overlap-removal — scoring-neutral, since `compute_skill_score` targets `required ∪ preferred`) and checked against 4 deterministic rules (phrase-like required skills, total under-extraction, experience >25 years, >6 title variants) before being persisted or matched. **Milestone 37**: if flagged, `main.py`'s `repair_structured_extraction` makes exactly one additional Gemini call (original JD + first extraction + exact warnings, same schema) and re-validates the result. A genuinely fixed repair persists as `extraction_status: "repaired"` with the *repaired* requirements actually used for matching; a repair that fails outright (`LLMProviderError`) or whose own output still fails validation falls back to the *original* extraction persisted as `"flagged"` — never blocks job creation either way, never a retry loop. **Milestone 38**: after every `MatchResult` above is already scored and persisted, `match_anomaly.detect_match_anomaly` checks whether ≥5 candidates were retrieved, average `semantic_score` ≥ 0.5, zero qualified, and every one failed the required-skills hard gate specifically — a JD that extracted and validated perfectly cleanly but still produced a nonsensical match outcome (a required skill Gemini hallucinated that no real candidate will ever have verbatim). A fire promotes `"clean"`/`"repaired"` to `"flagged"` (an already-`"flagged"` job is unaffected) and idempotently appends a `field: "match_outcomes"` warning — purely observational, never rescoring, never touching any `MatchResult` row, never a second Gemini call. **Milestone 40**: the entire pipeline above is now one atomic transaction — every write only `db.flush()`es until a single `db.commit()` once everything has succeeded, so a failure anywhere (structuring, retrieval, a candidate lookup mid-loop) leaves nothing committed, not even the `Job` (the post-match anomaly write specifically runs inside its own `db.begin_nested()` SAVEPOINT, so *its* failure still can't block the commit of everything else). The response's `required_skills`/`preferred_skills`/`titles`/`min_years_experience` are always whatever was actually persisted and matched (normalized, or repaired-and-normalized), never Gemini's raw first-pass output. |
 | `PATCH /v1/jobs/{job_id}/language-requirement` | JWT | Configures or clears (both null) an existing job's language requirement. Never touches any already-created `Application`'s own snapshot. **Milestone 36**: response now re-reads and surfaces the job's real `extraction_status`/`extraction_warnings` (via `get_job_description_for_job`) instead of hardcoding `"clean"`/`[]` — this naturally also surfaces `"repaired"` (milestone 37) with no further change needed here. |
 | `GET /v1/jobs/{job_id}/matches` | JWT | Lazily generates+caches `explanation` per match on first read. |
 | `POST /v1/scoring-configs` | service key | Admin/system action, not recruiter-facing. |
@@ -816,29 +898,24 @@ python services/recruitment-workflow/scripts/seed_demo_data.py --yes --job-title
 
 ## Known limitations
 
-- **Milestone 38's post-match anomaly check was not triggered through a fresh
-  live `POST /v1/jobs` call this session.** Gemini's free-tier daily quota
-  (see "AI / Gemini quota" below) was exhausted partway through this
-  session's own live-verification attempts, confirmed via a real `429
-  RESOURCE_EXHAUSTED` error, before a fresh job could be submitted to
-  naturally exercise the new code path end to end. The feature's correctness
-  is nonetheless fully proven: 5 new repo-root integration tests reproduce
-  the exact real numeric shape (≥5 candidates, ~0.5+ average semantic
-  relevance, 0 qualified, 0 passing the hard gate) against real Postgres
-  with mocked candidates, and the real, already-existing `Backend Engineer
-  (Demo)` job's real historical `MatchResult`s were independently confirmed
-  via a read-only `SELECT` to already satisfy every one of this feature's
-  conditions (8 candidates, ~0.72 average semantic score, 0 qualified, 0
-  passed the gate) — that job just predates this feature, so its
-  `JobDescription` was never retroactively updated (this check only runs at
-  submission time, by design, not as a backfill). A same-session attempt to
-  demonstrate the feature by running a one-off script against that real
-  job's data was deliberately not carried out after the auto-mode permission
-  system flagged it as a shared-resource (live database) modification
-  outside the normal application flow — the right call, not a shortcut
-  avoided; see milestone 38's own entry above for the full reasoning. Low
-  risk (identical logic already integration-tested against real Postgres),
-  but a real live end-to-end trigger is worth doing once quota resets.
+- **RESOLVED (milestone 40): the partial-write risk in `submit_job`'s
+  per-candidate scoring loop milestone 39's audit found.** `create_job_with_
+  description`/`create_match_result`/`update_job_description_extraction_metadata`
+  now only `db.flush()`; `submit_job` issues one `db.commit()` at the very
+  end, once the whole pipeline has actually succeeded. A mid-request failure
+  (Second Brain unreachable mid-loop, JD structuring failing, anything) now
+  leaves nothing committed, verified by a real integration test that forces
+  `SecondBrainClientError` on the 3rd of 5 candidates and confirms zero
+  `Job`/`MatchResult` rows survive. See milestone 40's own entry above.
+- **RESOLVED (milestone 40): milestone 38's post-match anomaly check has now
+  been triggered live.** Gemini's daily quota reset (a new day) mid-session;
+  a real `POST /v1/jobs` (`required_skills` genuinely extracted as
+  `["Python", "REST APIs"]`, clean on the first pass) retrieved 8 real
+  candidates (average semantic relevance 0.69), zero of which passed the
+  required-skills hard gate — a real, live, first-time trigger of
+  `match_anomaly.py` through the actual full pipeline, confirmed via
+  container logs (one `generate_structured` call, no repair needed) and a
+  real-browser Playwright pass. See milestone 40's own entry above.
 - **Milestone 37's `extraction_status: "repaired"` outcome was not observed
   against real Gemini this session.** Two real, controlled live submissions
   did exercise the repair pass genuinely (a flagged extraction triggering a
@@ -2308,56 +2385,117 @@ re-verifying against current source, per every prior session's own discipline.
     writing to that live data was correctly stopped by the auto-mode
     permission system's shared-resource-modification check rather than
     worked around — see Known Limitations for the full reasoning.
+39. **JD extraction reliability end-to-end audit.** Audited the full
+    pipeline (Gemini extraction → deterministic validation → optional
+    repair → persistence → retrieval → scoring → post-match anomaly →
+    recruiter warnings) against a fixed checklist: contradictory states,
+    warning loss/duplication, repair using the wrong extraction, the
+    anomaly incorrectly promoting status, backward compatibility,
+    transaction/partial-write risk, quota/failure behavior, `MatchResult`
+    reproducibility, and frontend consistency. Checked existing tests/real
+    data first (174+107 green baseline; every real job's
+    `extraction_status`/`extraction_warnings` combination inspected directly
+    via SQL — no contradictions found). **Two MEDIUM defects found and
+    fixed**: (1) the post-match anomaly's own metadata write had no error
+    handling — a transient DB failure there (which only ever runs *after*
+    the job and every `MatchResult` are already committed) would have
+    turned a fully successful submission into an opaque `500`, violating
+    this feature's own "must never block job creation" promise; now wrapped
+    in `try/except SQLAlchemyError`, rolling back and responding with the
+    real pre-anomaly state on failure rather than a promised-but-unwritten
+    promotion. (2) frontend messaging — both `JobDetailPage`'s banner and
+    `JobsListPage`'s badge tooltip hardcoded "extraction looks suspicious,"
+    which stopped being universally true the moment milestone 38 added a
+    second, unrelated cause (a match-outcome-only flag); fixed with a
+    minimal, generic wording change in both places, no new component. **One
+    MEDIUM finding reported but deliberately not fixed**: a pre-existing
+    (predates milestones 36-38) partial-write risk in `submit_job`'s
+    per-candidate scoring loop — see Known Limitations and `[NEXT]`.
+    Everything else checked (contradictory states, warning duplication,
+    repair using the wrong extraction, `MatchResult` reproducibility
+    confirmed by grep) came back clean, verified rather than assumed. One
+    real, controlled `POST /v1/jobs` was attempted per this task's own "if
+    quota allows" instruction — a real `429 RESOURCE_EXHAUSTED` confirmed
+    the quota was still exhausted; per the task's explicit "otherwise do not
+    work around quota," no further attempts were made, so the two
+    live-verification gaps milestones 37-38 left open remain open. Verified:
+    174 RWS unit tests unchanged, 108 repo-root integration tests (+1, the
+    anomaly-persist-failure regression), frontend build + 31 Node tests
+    passed, real-browser Playwright pass confirmed the corrected wording
+    renders with zero console errors.
+40. **Atomic job submission — eliminated the partial-write risk milestone 39
+    found.** `create_job_with_description`/`create_match_result`/
+    `update_job_description_extraction_metadata` now only `db.flush()`,
+    never commit; `submit_job` issues exactly one `db.commit()`, right
+    before constructing the response, once JD structuring, validation,
+    optional repair, Second Brain retrieval, every candidate's scoring, and
+    post-match anomaly detection have all actually succeeded. If anything
+    raises before that point, `get_db`'s own `finally: db.close()` discards
+    the whole uncommitted transaction — a mid-request failure now leaves
+    *nothing* behind, not an orphaned `Job` with a partial `MatchResult`
+    set. Chose this over the alternative milestone 39 posed (per-candidate
+    commits + an idempotency key): simpler, no new schema/API surface, and
+    directly closes the defect rather than working around it — matches
+    CLAUDE.md's "boring over clever" and "no infra ahead of demonstrated
+    need." The one wrinkle: milestone 39's own anomaly-write fix (a failure
+    there must not block job creation) still needed to hold *inside* this
+    new single-transaction design, so that one write now runs inside its
+    own `db.begin_nested()` SAVEPOINT — a failure there rolls back only that
+    nested block, never the pending job/matches still waiting for the outer
+    commit. Verified: 174 RWS unit tests unchanged (the loop's commit timing
+    isn't visible to the mocked-DB suite), 109 repo-root integration tests
+    (+1: a real mid-loop `SecondBrainClientError` on the 3rd of 5 candidates,
+    proving zero `Job`/`MatchResult` rows survive — this needed
+    `db_session.rollback()` before the assertion to simulate the real
+    per-request session cleanup the test harness's shared session otherwise
+    skips; without the fix, that same rollback is a no-op and the row
+    survives, confirming the test genuinely discriminates old vs. new
+    behavior), the pre-existing retrieval-failure test extended with the
+    same DB-state check. **Live-verified against real Gemini, and this
+    closed a real, previously-open gap**: Gemini's daily quota had reset
+    (new day) — a real `POST /v1/jobs` (`"Smoketest Atomic Submission"`,
+    required_skills genuinely extracted as `["Python", "REST APIs"]`, clean
+    on the first pass, no repair needed) retrieved 8 real candidates
+    (average semantic relevance 0.69) of which **zero** passed the
+    required-skills hard gate — a real, live, first-time trigger of
+    `match_anomaly.py` through the actual full pipeline (structuring →
+    validation → persistence → retrieval → scoring → anomaly → one atomic
+    commit), closing the exact live-verification gap milestone 38's Known
+    Limitations recorded as open. Confirmed via real container logs (one
+    `generate_structured` call, i.e. no repair attempted, since the first
+    extraction was already clean) and a real-browser Playwright pass (badge
+    and banner both render correctly for this genuinely-live-flagged job).
+    A real `"repaired"` outcome still wasn't observed (not what this session
+    was chasing) -- see Known Limitations, now narrowed to just that one gap.
 
 ---
 
 ## [NEXT]
 
-**JD extraction reliability end-to-end audit.**
+**No backend defect currently known.** Milestone 40 closed the one MEDIUM
+gap milestone 39's audit surfaced and didn't fix in that same pass. The one
+remaining live-verification gap across milestones 36-40 is narrow: a real
+`extraction_status: "repaired"` outcome (a flagged extraction that a real
+Gemini repair call actually fixes) has never been observed against real
+Gemini — every other live/mocked combination this pipeline can produce
+(clean, flagged-by-extraction, flagged-by-anomaly, flagged-then-failed-repair)
+now has at least one real, live confirmation on top of its mocked test
+coverage. Concrete scope if picked up: no code change expected, purely
+opportunistic — next time a JD is submitted live with Gemini quota
+available, watch whether the first extraction gets phrase-like-flagged and
+the repair genuinely fixes it; if a session ever wants to force the
+scenario rather than wait for it, the smallest deliberate way is a JD
+worded to make Gemini state a responsibility as a "required skill" in
+paragraph form (the same shape that got phrase-like-flagged in mocked
+tests) rather than a bullet list, then let the existing repair pass run
+unmodified.
 
-Milestones 36-38 built three independent, individually-tested layers —
-deterministic extraction validation, one automatic Gemini repair attempt,
-and post-match anomaly detection — each verified in isolation (mocked unit
-tests, mocked-but-real-Postgres integration tests, and partial live-Gemini
-spot checks per each milestone's own Known Limitations entry). None of
-these three layers has been exercised *together*, end to end, against a
-single real, fresh JD submission with a real Gemini call: does a JD that
-gets phrase-like-flagged, gets a real repair attempt, and (if the repair
-fails or under-fixes) still produces a bad matching outcome actually end up
-correctly `"flagged"` with *both* the extraction-time and match-outcome
-warnings both present and both accurate? Does a JD that gets genuinely
-repaired (a real `"repaired"` outcome, never actually observed live per
-milestone 37's Known Limitations entry) then go on to match candidates
-correctly, with the frontend badge/banner sequence rendering sensibly for a
-recruiter who has never seen any of this before? This audit is explicitly
-about closing the two live-verification gaps milestones 37 and 38 both
-recorded as open (a real `"repaired"` outcome, and a real live trigger of
-`match_anomaly.py`), plus checking the three layers' interaction, not about
-writing new detection logic — no new code should be needed unless this
-audit actually finds a real defect in how the three layers compose. Concrete
-scope: once Gemini's daily quota has reset, run a small, deliberate set of
-real JD submissions through the live stack chosen to probe each layer and
-their interactions (a JD designed to trigger a repairable phrase-like skill,
-a JD designed to trigger the post-match anomaly, and ideally one designed to
-plausibly trigger both in sequence), inspecting real Gemini's actual output
-at each step rather than assuming the mocked tests' assumptions about what
-Gemini would return still hold. Real Gemini being non-deterministic, this
-may take a few attempts within a day's quota budget — if it doesn't produce
-every scenario within that budget, document plainly what was and wasn't
-observed live, per this project's own "verification is part of
-implementation, don't claim more than was actually run" rule, rather than
-spending unlimited quota chasing a specific outcome. If a real defect in the
-three layers' interaction turns up, that's real, fresh work to fix — but
-finding nothing wrong and documenting that plainly is itself a complete,
-valid outcome for this audit, not a reason to invent new scope.
-
-Separately, unrelated to this feature and still genuinely blocking a *live*
+Separately, unrelated and still genuinely blocking a *live*
 recruiter-initiated invite: `RESEND_API_KEY` is still unset. Not a code
 task — needs a real key configured in `services/voicehr/.env` and the
 `voicehr` container rebuilt/restarted.
 
-Also still open, deliberately deferred behind the JD-extraction-reliability
-audit above: milestone 35's own follow-up, a real fresh end-to-end VoiceHR interview.
+Also still open: milestone 35's own follow-up, a real fresh end-to-end VoiceHR interview.
 Milestone 35 confirmed VoiceHR's Gemini access itself works again (a real
 Live session generating real audio, a real evaluator call producing a real
 result) — but only at the raw connectivity level. Two things have never been

@@ -248,7 +248,7 @@ export default function JobsListPage() {
                     <StatusBadge
                       variant="glass"
                       tone="warning"
-                      title="Gemini's extraction of this job description looked suspicious (e.g. empty, phrase-like skills) -- review it on the job page."
+                      title="Either the extraction (e.g. empty, phrase-like skills) or the match results (e.g. no candidate passed the required-skills gate) look suspicious -- review it on the job page."
                     >
                       Needs review
                     </StatusBadge>
