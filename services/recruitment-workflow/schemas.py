@@ -271,8 +271,12 @@ class InterviewRoundResponse(BaseModel):
     schema below: a round created before migration 0010 has neither (nullable at
     the DB level -- see that migration's own docstring for why there's no sensible
     backfill default). notification_status/notification_error record the outcome
-    of the best-effort candidate+interviewer email send (interview_round_mailer.py)
-    -- purely advisory, never re-validated or re-derived here, just read back.
+    of the best-effort candidate+interviewer email+ICS send (interview_round_
+    mailer.py) -- purely advisory, never re-validated or re-derived here, just
+    read back. notification_sequence is the ICS `SEQUENCE` last actually sent
+    (phase 2, handoff.md) -- exposed mainly for debugging/verification; the
+    frontend never needs to read it directly, the notification_status badge
+    already reflects the outcome of whatever it was.
     """
 
     model_config = ConfigDict(extra="forbid")
@@ -289,6 +293,7 @@ class InterviewRoundResponse(BaseModel):
     notes: Optional[str] = None
     notification_status: Literal["pending", "sent", "failed"] = "pending"
     notification_error: Optional[str] = None
+    notification_sequence: int = 0
     created_by: UUID4
     created_at: datetime
     updated_at: datetime

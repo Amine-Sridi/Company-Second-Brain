@@ -491,6 +491,200 @@ def test_resend_notification_404_for_unknown_round(client, auth_headers):
     assert resp.status_code == 404
 
 
+# ---------------------------------------------------------------------------
+# Phase 2 -- ICS calendar attachment, reschedule/cancel notifications with a
+# real, incrementing SEQUENCE (RFC 5545's own mechanism for "this replaces the
+# last one", never a resend of unchanged content).
+# ---------------------------------------------------------------------------
+
+def test_create_notification_carries_the_rounds_own_id_and_sequence_zero(
+    client, auth_headers, mock_second_brain, mock_resume_intelligence, mock_voicehr,
+    mock_interview_round_mailer,
+):
+    application_id = _interviewed_application(
+        client, auth_headers, mock_second_brain, mock_resume_intelligence, mock_voicehr
+    )
+    round_ = _create_round_via_api(client, auth_headers, application_id)
+
+    assert round_["notification_status"] == "sent"
+    assert round_["notification_sequence"] == 0
+    assert len(mock_interview_round_mailer.calls) == 1
+    call = mock_interview_round_mailer.calls[0]
+    assert call["kind"] == "scheduled"
+    assert call["round_id"] == round_["id"]
+    assert call["sequence"] == 0
+
+
+def test_reschedule_sends_an_updated_notification_with_incremented_sequence(
+    client, auth_headers, mock_second_brain, mock_resume_intelligence, mock_voicehr,
+    mock_interview_round_mailer, db_session,
+):
+    application_id = _interviewed_application(
+        client, auth_headers, mock_second_brain, mock_resume_intelligence, mock_voicehr
+    )
+    round_ = _create_round_via_api(client, auth_headers, application_id)
+    assert len(mock_interview_round_mailer.calls) == 1  # the create-time send
+
+    resp = client.post(
+        f"/v1/applications/{application_id}/interview-rounds/{round_['id']}/reschedule",
+        json={"scheduled_at": "2026-11-15T14:00:00Z"},
+        headers=auth_headers,
+    )
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["notification_status"] == "sent"
+    assert body["notification_sequence"] == 1
+
+    assert len(mock_interview_round_mailer.calls) == 2
+    reschedule_call = mock_interview_round_mailer.calls[1]
+    assert reschedule_call["kind"] == "rescheduled"
+    assert reschedule_call["sequence"] == 1
+    assert reschedule_call["scheduled_at"].isoformat().startswith("2026-11-15T14:00:00")
+
+    from db import InterviewRound
+
+    row = db_session.query(InterviewRound).filter(InterviewRound.id == uuid.UUID(round_["id"])).first()
+    assert row.notification_sequence == 1
+
+
+def test_rescheduling_twice_increments_sequence_each_time(
+    client, auth_headers, mock_second_brain, mock_resume_intelligence, mock_voicehr,
+    mock_interview_round_mailer,
+):
+    application_id = _interviewed_application(
+        client, auth_headers, mock_second_brain, mock_resume_intelligence, mock_voicehr
+    )
+    round_ = _create_round_via_api(client, auth_headers, application_id)
+
+    client.post(
+        f"/v1/applications/{application_id}/interview-rounds/{round_['id']}/reschedule",
+        json={"scheduled_at": "2026-11-15T14:00:00Z"},
+        headers=auth_headers,
+    )
+    second = client.post(
+        f"/v1/applications/{application_id}/interview-rounds/{round_['id']}/reschedule",
+        json={"scheduled_at": "2026-12-01T09:00:00Z"},
+        headers=auth_headers,
+    )
+    assert second.status_code == 200
+
+    # create (seq 0) -> reschedule (seq 1) -> reschedule (seq 2): cumulative,
+    # never reset, and every one used the exact same UID (the round's own id).
+    assert [c["sequence"] for c in mock_interview_round_mailer.calls] == [0, 1, 2]
+    assert len({c["round_id"] for c in mock_interview_round_mailer.calls}) == 1
+
+
+def test_cancel_sends_a_cancellation_notification_with_incremented_sequence(
+    client, auth_headers, mock_second_brain, mock_resume_intelligence, mock_voicehr,
+    mock_interview_round_mailer, db_session,
+):
+    application_id = _interviewed_application(
+        client, auth_headers, mock_second_brain, mock_resume_intelligence, mock_voicehr
+    )
+    round_ = _create_round_via_api(client, auth_headers, application_id)
+
+    resp = client.post(
+        f"/v1/applications/{application_id}/interview-rounds/{round_['id']}/cancel",
+        headers=auth_headers,
+    )
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["status"] == "cancelled"
+    assert body["notification_status"] == "sent"
+    assert body["notification_sequence"] == 1
+
+    assert len(mock_interview_round_mailer.calls) == 2
+    cancel_call = mock_interview_round_mailer.calls[1]
+    assert cancel_call["kind"] == "cancelled"
+    assert cancel_call["sequence"] == 1
+
+    from db import InterviewRound
+
+    row = db_session.query(InterviewRound).filter(InterviewRound.id == uuid.UUID(round_["id"])).first()
+    assert row.notification_sequence == 1
+    assert row.status == "cancelled"
+
+
+def test_reschedule_missing_resend_api_key_fails_cleanly_but_still_reschedules(
+    client, auth_headers, mock_second_brain, mock_resume_intelligence, mock_voicehr, db_session,
+):
+    """No RESEND_API_KEY is configured in this test environment -- the real,
+    unmocked mailer must fail cleanly, and the reschedule itself must still
+    succeed (never rolled back), exactly like create's own contract."""
+    application_id = _interviewed_application(
+        client, auth_headers, mock_second_brain, mock_resume_intelligence, mock_voicehr
+    )
+    round_ = _create_round_via_api(client, auth_headers, application_id)
+
+    resp = client.post(
+        f"/v1/applications/{application_id}/interview-rounds/{round_['id']}/reschedule",
+        json={"scheduled_at": "2026-11-15T14:00:00Z"},
+        headers=auth_headers,
+    )
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["scheduled_at"] == "2026-11-15T14:00:00Z"
+    assert body["notification_status"] == "failed"
+    assert "RESEND_API_KEY" in body["notification_error"]
+    # The sequence still increments even though delivery failed -- a later
+    # successful resend should reflect a real change happened, not pretend
+    # nothing did just because nobody received it.
+    assert body["notification_sequence"] == 1
+
+    from db import InterviewRound
+
+    row = db_session.query(InterviewRound).filter(InterviewRound.id == uuid.UUID(round_["id"])).first()
+    assert row.notification_sequence == 1
+
+
+def test_cancel_missing_resend_api_key_fails_cleanly_but_still_cancels(
+    client, auth_headers, mock_second_brain, mock_resume_intelligence, mock_voicehr, db_session,
+):
+    application_id = _interviewed_application(
+        client, auth_headers, mock_second_brain, mock_resume_intelligence, mock_voicehr
+    )
+    round_ = _create_round_via_api(client, auth_headers, application_id)
+
+    resp = client.post(
+        f"/v1/applications/{application_id}/interview-rounds/{round_['id']}/cancel",
+        headers=auth_headers,
+    )
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["status"] == "cancelled"
+    assert body["notification_status"] == "failed"
+    assert "RESEND_API_KEY" in body["notification_error"]
+
+
+def test_resend_after_reschedule_uses_scheduled_wording_and_unchanged_sequence(
+    client, auth_headers, mock_second_brain, mock_resume_intelligence, mock_voicehr,
+    mock_interview_round_mailer,
+):
+    """A plain resend re-delivers the round's *current* confirmed state -- even
+    after a real reschedule, it must use "scheduled" wording (not "rescheduled",
+    which would misleadingly imply this specific send is itself a new change) and
+    must not bump the sequence further."""
+    application_id = _interviewed_application(
+        client, auth_headers, mock_second_brain, mock_resume_intelligence, mock_voicehr
+    )
+    round_ = _create_round_via_api(client, auth_headers, application_id)
+    client.post(
+        f"/v1/applications/{application_id}/interview-rounds/{round_['id']}/reschedule",
+        json={"scheduled_at": "2026-11-15T14:00:00Z"},
+        headers=auth_headers,
+    )
+
+    resp = client.post(
+        f"/v1/applications/{application_id}/interview-rounds/{round_['id']}/resend-notification",
+        headers=auth_headers,
+    )
+    assert resp.status_code == 200
+
+    resend_call = mock_interview_round_mailer.calls[-1]
+    assert resend_call["kind"] == "scheduled"
+    assert resend_call["sequence"] == 1  # unchanged from the reschedule, not bumped again
+
+
 def test_reschedule_persists_new_scheduled_at(
     client, auth_headers, mock_second_brain, mock_resume_intelligence, mock_voicehr
 ):

@@ -22,12 +22,14 @@ pre-existing MEDIUM gap (a partial-write risk in the per-candidate scoring
 loop), which milestone 40 then closed by making the whole submission
 atomic (one commit at the end, not one per row) — and, with Gemini's daily
 quota reset, live-confirmed the post-match anomaly check firing through a
-real, fresh `POST /v1/jobs` for the first time. Milestone 41 began
-automating the post-VoiceHR human interview-round stage: scheduling a round
-now emails both the candidate (contact fetched fresh from Resume
-Intelligence, never persisted) and the interviewer, phase 1 of a
-multi-phase plan (see `[NEXT]` for phase 2, ICS + reschedule/cancel
-notifications)** (see `[NEXT]` at the end). Every backend service, the full recruiter frontend, and
+real, fresh `POST /v1/jobs` for the first time. Milestones 41-42 automated
+the post-VoiceHR human interview-round stage end to end: scheduling,
+rescheduling, or cancelling a round now emails both the candidate (contact
+fetched fresh from Resume Intelligence, never persisted) and the
+interviewer, with a real ICS calendar attachment and a correctly
+incrementing `SEQUENCE` so a real calendar client treats a reschedule as an
+update and a cancel as a removal, not a duplicate** (see `[NEXT]` at the
+end). Every backend service, the full recruiter frontend, and
 the 2D/3D knowledge graph are implemented and passed a final whole-system
 readiness audit (see "Demo readiness" below). A dedicated audit of VoiceHR's
 autonomous real-time candidate interview confirmed it was already fully built
@@ -751,11 +753,11 @@ not carried forward from memory.
 | `POST /v1/applications/{id}/resend-invite` | JWT | **New this session.** Explicit resend, only callable while `invited` (409 otherwise). Calls VoiceHR's new `POST /api/rws/interviews/{id}/resend-invite`, which reuses the exact interview/token created at invite time via the same `deliver_invitation_email` function every other send path already shares — never creates a new interview, never accepts/needs an `Idempotency-Key`, never looks up or persists the candidate's contact (VoiceHR already has it). A failure (`502`) never reverts the application away from `invited`. A short in-memory per-application cooldown (10s, module-level dict, no Redis) returns `429` on a rapid repeat click — a UX safeguard, not a persisted field or new workflow status. |
 | `POST /v1/applications/{id}/accept` | JWT | Atomic conditional `UPDATE`; schedules a background Second Brain feedback write-back after the response is already sent. **422 if the language eligibility gate is `pending`/`failed`/`needs_review`** — the response body names which and the required-vs-assessed values. |
 | `POST /v1/applications/{id}/reject` | JWT | Same state machine, background write-back — **never gated by the language eligibility gate**; a recruiter can always decline. |
-| `POST /v1/applications/{id}/interview-rounds` | JWT | **Milestone 33.** Schedules a post-VoiceHR technical/managerial interview round — the stage after the language gate clears. 422 if the application is already `accepted`/`rejected`, or if `language_gate.status` is `pending`/`failed`/`needs_review` (same `BLOCKING_STATUSES` check `accept` already uses). Creates one `recruitment.interview_rounds` row (`scheduled`, no outcome yet) — never touches `Application.status`, which stays exactly `selected`/`invited`/`interviewed`/`accepted`/`rejected` as before; this is a parallel signal, not a new state-machine value, the same relationship the language gate itself has to that state machine. `interviewer_name` is free text, not a foreign key — this project has exactly one seeded recruiter account and no interviewer/user directory. **Milestone 41**: also requires `interviewer_email` (`EmailStr`, 422 if malformed) and accepts optional `location`; after creating the round, best-effort emails the candidate (contact fetched fresh from Resume Intelligence, never persisted) and the interviewer via `interview_round_mailer.py` (RWS's own Resend integration) — a failure at either step never blocks or rolls back the round, only sets the response's `notification_status: "failed"` with `notification_error` set. |
-| `POST /v1/applications/{id}/interview-rounds/{round_id}/reschedule` | JWT | **New this session (milestone 34).** Updates only `scheduled_at`; 409 if the round is not currently `scheduled` (names its actual status), 404 if the round doesn't exist or belongs to a different `application_id` than the URL's. Sends no notification of any kind yet — see `[NEXT]` (phase 2). |
+| `POST /v1/applications/{id}/interview-rounds` | JWT | **Milestone 33.** Schedules a post-VoiceHR technical/managerial interview round — the stage after the language gate clears. 422 if the application is already `accepted`/`rejected`, or if `language_gate.status` is `pending`/`failed`/`needs_review` (same `BLOCKING_STATUSES` check `accept` already uses). Creates one `recruitment.interview_rounds` row (`scheduled`, no outcome yet) — never touches `Application.status`, which stays exactly `selected`/`invited`/`interviewed`/`accepted`/`rejected` as before; this is a parallel signal, not a new state-machine value, the same relationship the language gate itself has to that state machine. `interviewer_name` is free text, not a foreign key — this project has exactly one seeded recruiter account and no interviewer/user directory. **Milestone 41**: also requires `interviewer_email` (`EmailStr`, 422 if malformed) and accepts optional `location`; after creating the round, best-effort emails the candidate (contact fetched fresh from Resume Intelligence, never persisted) and the interviewer via `interview_round_mailer.py` (RWS's own Resend integration) — a failure at either step never blocks or rolls back the round, only sets the response's `notification_status: "failed"` with `notification_error` set. **Milestone 42**: that email now also carries a real ICS calendar attachment (`SEQUENCE: 0`, the round's own `id` as `UID`) so a real calendar client offers "Add to calendar". |
+| `POST /v1/applications/{id}/interview-rounds/{round_id}/reschedule` | JWT | **Milestone 34.** Updates only `scheduled_at`; 409 if the round is not currently `scheduled` (names its actual status), 404 if the round doesn't exist or belongs to a different `application_id` than the URL's. **Milestone 42**: best-effort notifies both parties with an updated ICS (same `UID`, `SEQUENCE` incremented by one) — never blocks or reverts the reschedule itself, only sets the response's `notification_status`/`notification_error`. |
 | `POST /v1/applications/{id}/interview-rounds/{round_id}/complete` | JWT | **New this session (milestone 34).** Sets `outcome` (required — `pass`/`fail`/`needs_review`, 422 if missing/invalid, checked before ever reaching the DB) and optional `notes`, `status → completed`; only from `scheduled` (409/404 as above). Omitting `notes` preserves whatever was set at scheduling time rather than clearing it. |
-| `POST /v1/applications/{id}/interview-rounds/{round_id}/cancel` | JWT | **New this session (milestone 34).** `status → cancelled`, no body; only from `scheduled` (409/404 as above). Terminal — no un-cancel. Sends no notification of any kind yet — see `[NEXT]` (phase 2). |
-| `POST /v1/applications/{id}/interview-rounds/{round_id}/resend-notification` | JWT | **Milestone 41.** Explicit resend of the round's candidate+interviewer email — always attempts delivery, never creates a new round, only callable while `scheduled` (409 otherwise), same 10s in-memory cooldown `resend-invite` already uses (429 on a rapid repeat). Unlike creation, a delivery failure here **is** this request's own `502` (resending has no other value if delivery fails) — `notification_status`/`notification_error` are still updated to the real outcome either way, so a later read never shows a stale pre-attempt status. |
+| `POST /v1/applications/{id}/interview-rounds/{round_id}/cancel` | JWT | **Milestone 34.** `status → cancelled`, no body; only from `scheduled` (409/404 as above). Terminal — no un-cancel. **Milestone 42**: best-effort notifies both parties with a `METHOD:CANCEL` ICS (same `UID`, `SEQUENCE` incremented once more) — never blocks or reverts the cancellation itself. |
+| `POST /v1/applications/{id}/interview-rounds/{round_id}/resend-notification` | JWT | **Milestone 41.** Explicit resend of the round's candidate+interviewer email — always attempts delivery, never creates a new round, only callable while `scheduled` (409 otherwise), same 10s in-memory cooldown `resend-invite` already uses (429 on a rapid repeat). Unlike creation, a delivery failure here **is** this request's own `502` (resending has no other value if delivery fails) — `notification_status`/`notification_error` are still updated to the real outcome either way, so a later read never shows a stale pre-attempt status. **Milestone 42**: always re-delivers with `"scheduled"` wording and the round's *current* `SEQUENCE` unchanged, even after a prior reschedule — a resend is a re-delivery of the current state, never itself a change. |
 | `GET /v1/jobs/{job_id}/applications` | JWT | Job-scoped. Every row's `language_gate` object (`status`, `required_language`, `required_cefr`, `assessed_language`, `assessed_cefr`) is computed fresh on every read, never a stored column. **New this session**: every row also carries `interview_rounds` (a list, possibly empty), fetched fresh per application the same way `language_gate` is. |
 | `GET /v1/applications` | JWT | Global, unscoped, adds `job_title` and the same `language_gate`/`interview_rounds` fields. |
 | `GET /v1/interviews/{id}/report` | JWT | Proxies VoiceHR; rewrites `recording` to a same-origin RWS URL — browser never sees VoiceHR's host or the service key. |
@@ -2527,39 +2529,98 @@ re-verifying against current source, per every prior session's own discipline.
     test candidate with no real Resume Intelligence contact record — the
     same already-documented "(name unavailable)" fallback this app has
     always had, not something this session introduced).
+42. **Interview-round notifications, phase 2: ICS calendar attachments +
+    reschedule/cancel notifications.** Closes the feature phase 1 deferred.
+    `interview_round_mailer.py` gained `build_ics` (one RFC 5545 VEVENT,
+    `\r\n` line endings, `UID` derived only from the round's own `id` —
+    stable across its whole lifetime, so a reschedule updates the same
+    calendar entry rather than creating a duplicate) and `email_content`
+    (wording keyed by `kind: "scheduled"|"rescheduled"|"cancelled"`), both
+    promoted to public functions specifically so they get the same direct,
+    no-mocking pure-function test treatment `jd_validation.py`/
+    `match_anomaly.py` already do (new `test_interview_round_mailer.py`,
+    16 tests). Every notification email now carries the same ICS as an
+    attachment (`text/calendar; method=REQUEST` or `method=CANCEL`,
+    base64-encoded per Resend's attachment API). `reschedule`/`cancel`
+    (previously silent) now both best-effort notify, same "never blocks the
+    underlying action" contract creation already has — a delivery failure
+    never un-reschedules or un-cancels a round, it only shows up in
+    `notification_status`/`notification_error`. `SEQUENCE` (`notification_
+    sequence`, reserved-but-unused since migration 0010) increments by one
+    on reschedule and on cancel — the event itself genuinely changed — but
+    *not* on create's first send or a plain resend, both of which re-deliver
+    the *current* state rather than changing it (RFC 5545's own distinction
+    between an update and a duplicate). Cancel sends `METHOD:CANCEL` on the
+    same `UID` with the incremented `SEQUENCE`, the standard mechanism a
+    real calendar client uses to remove an event it already added. No new
+    external dependency — still a plain ICS text attachment via the same
+    Resend call, not a calendar-provider API integration; Google Calendar
+    remains explicitly deferred, exactly as the feature's own original
+    design specified.
+
+    Found and fixed one real bug while live-testing this: `notification_
+    sequence` was never actually added to `InterviewRoundResponse` in phase
+    1 (the DB column and mailer logic were correct, but the API response
+    silently omitted it) — caught by a real `curl`-equivalent live check
+    against the running container, not by any automated test, since none of
+    phase 1's own tests happened to assert on that specific response field.
+    Fixed and back-filled with explicit `resp.json()["notification_sequence"]`
+    assertions at every point that matters, specifically to close that class
+    of gap going forward.
+
+    **Verification**: 201 RWS unit tests (+16, all pure `interview_round_
+    mailer.py` coverage: UID stability across a reschedule, different round
+    ids get different UIDs, SEQUENCE rendered verbatim, REQUEST/CONFIRMED vs
+    CANCEL/CANCELLED, DTSTART/DTEND from the default 60-minute duration,
+    RFC 5545 text escaping, location included/omitted correctly, every
+    `kind`'s wording). 141 repo-root integration tests (+9, real Postgres,
+    mocked mailer + real Resume Intelligence contact lookup): create sends
+    `sequence=0`; reschedule sends `kind="rescheduled"`/`sequence=1` and
+    persists it; rescheduling twice increments to 2, never resets, same
+    `UID` throughout; cancel sends `kind="cancelled"`/`sequence=1` and marks
+    the round cancelled; a resend after a reschedule uses `"scheduled"`
+    wording and the *unchanged* current sequence; missing `RESEND_API_KEY`
+    fails cleanly on both reschedule and cancel without blocking either.
+    Frontend build/34 Node tests unaffected (zero frontend changes needed —
+    `reschedule`/`cancel` already returned the same `InterviewRoundResponse`
+    shape milestone 41's badge/resend-button logic already renders
+    generically). **Live-verified end to end against the real running
+    stack**: a real create → reschedule → cancel sequence against a real
+    curated demo application showed `notification_sequence` go `0 → 1 → 2`
+    exactly as designed (confirmed via the API directly, which is what
+    caught the missing-field bug above), and a real-browser pass confirmed
+    the notification badge keeps rendering correctly through a real
+    reschedule and cancel, zero new console errors beyond the same
+    pre-existing orphaned-candidate 404. A real calendar client (Gmail/
+    Outlook) actually offering "Add to calendar" from a real received email
+    was not observed live — no `RESEND_API_KEY` is configured in this
+    environment, so no real email has ever actually been delivered; the
+    ICS's own correctness is instead fully proven by direct inspection (a
+    real generated ICS was printed and hand-verified against RFC 5545) and
+    the 16 dedicated unit tests, not by a real inbox.
 
 ---
 
 ## [NEXT]
 
-**Interview-round ICS invitations + reschedule/cancel notifications.**
-
-Milestone 41 covers phase 1 only (a plain-text notification email on
-creation, plus an explicit resend) — phase 2, scoped when this feature was
-first designed, is still open: generate a real ICS (`UID` from the round's
-own `id`, `SEQUENCE` from the now-reserved-but-unused
-`notification_sequence` column) and attach it to the same notification
-email, so a real calendar client offers "Add to calendar"; wire
-`notification_sequence` increments and real update/cancellation ICS sends
-(`METHOD:CANCEL` for cancel, an incremented `SEQUENCE` for reschedule) into
-the existing `reschedule`/`cancel` endpoints, which currently send no
-notification of any kind. Concrete scope: no new external dependency (ICS
-is a plain text attachment Resend already supports, not a calendar-provider
-API integration — Google Calendar or similar remains explicitly deferred
-per the original design, revisit only if real two-way sync/availability
-checking becomes a demonstrated need, not before). Verify the same way
-milestone 41 did: real integration tests against real Postgres proving the
-ICS `UID` stays stable across a reschedule (same event updates, not a
-duplicate) and a cancel notification actually carries `METHOD:CANCEL`, plus
-a live check that a real calendar client (Gmail/Outlook) actually offers to
-add/update/remove the event from a real sent email.
+**A real, fresh end-to-end VoiceHR interview (milestone 35's own follow-up,
+deliberately deferred behind the interview-round-notifications feature,
+which is now complete).**
 
 Separately, unrelated and still genuinely blocking a *live*
-recruiter-initiated invite: `RESEND_API_KEY` is still unset. Not a code
-task — needs a real key configured in `services/voicehr/.env` and the
-`voicehr` container rebuilt/restarted.
+recruiter-initiated invite: `RESEND_API_KEY` is still unset (for both
+VoiceHR's own candidate-invite email and RWS's own interview-round
+notifications, milestones 27/41-42 — each service needs its own key in its
+own `.env`). Not a code task — needs a real key configured and the relevant
+container rebuilt/restarted. Once one exists for RWS specifically, one
+opportunistic (not urgent) check worth doing: send one real interview-round
+notification and confirm a real calendar client (Gmail/Outlook) actually
+offers "Add to calendar" from the received email, and that a follow-up
+reschedule/cancel updates or removes that same calendar entry rather than
+creating a duplicate — milestone 42's own ICS correctness is fully proven by
+direct inspection and 16 unit tests, but has never been seen through a real
+inbox.
 
-Also still open: milestone 35's own follow-up, a real fresh end-to-end VoiceHR interview.
 Milestone 35 confirmed VoiceHR's Gemini access itself works again (a real
 Live session generating real audio, a real evaluator call producing a real
 result) — but only at the raw connectivity level. Two things have never been

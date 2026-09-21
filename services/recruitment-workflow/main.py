@@ -1056,6 +1056,7 @@ def _interview_round_response(round_) -> InterviewRoundResponse:
         notes=round_.notes,
         notification_status=round_.notification_status,
         notification_error=round_.notification_error,
+        notification_sequence=round_.notification_sequence,
         created_by=round_.created_by,
         created_at=round_.created_at,
         updated_at=round_.updated_at,
@@ -1075,16 +1076,25 @@ def _get_own_interview_round(db: Session, application_id: uuid.UUID, round_id: u
     return round_
 
 
-async def _notify_interview_round(db: Session, application, round_) -> tuple[str, Optional[str]]:
+async def _notify_interview_round(
+    db: Session, application, round_, kind: str, sequence: int
+) -> tuple[str, Optional[str]]:
     """
-    Attempts the candidate+interviewer email notification for one interview round --
-    shared by create_interview_round_endpoint (best-effort, never blocks the request)
-    and resend_interview_round_notification_endpoint (its entire purpose, re-raised
-    as the request's own failure on error -- see that endpoint's own docstring for
-    why the two callers treat the same outcome differently). Returns
+    Attempts the candidate+interviewer email+ICS notification for one interview
+    round -- shared by create/reschedule/cancel (all best-effort, never block their
+    own request) and resend_interview_round_notification_endpoint (its entire
+    purpose, re-raised as the request's own failure on error -- see that endpoint's
+    own docstring for why it treats the same outcome differently). Returns
     (notification_status, notification_error) without persisting either -- callers
     decide when to call update_interview_round_notification, since they persist and
     respond in a different order.
+
+    `kind` ("scheduled"/"rescheduled"/"cancelled") controls both the email wording
+    and the ICS's own METHOD/STATUS (interview_round_mailer.py); `sequence` is the
+    ICS SEQUENCE to render -- the caller (create/reschedule/cancel) is responsible
+    for deciding whether it needs to increment relative to the round's current
+    notification_sequence (see db.InterviewRound's own docstring: reschedule/cancel
+    do, a plain resend of unchanged content does not).
 
     The candidate's contact is fetched fresh from Resume Intelligence for this one
     call and never persisted anywhere in RWS -- the same transient-lookup pattern
@@ -1105,6 +1115,9 @@ async def _notify_interview_round(db: Session, application, round_) -> tuple[str
         await interview_round_mailer.send_interview_round_notification(
             api_key=settings.resend_api_key,
             from_address=settings.resend_from_address,
+            kind=kind,
+            round_id=str(round_.id),
+            sequence=sequence,
             candidate_email=contact["email"],
             candidate_name=contact["name"],
             interviewer_email=round_.interviewer_email,
@@ -1189,7 +1202,11 @@ async def create_interview_round_endpoint(
         created_by=recruiter.id,
     )
 
-    notification_status, notification_error = await _notify_interview_round(db, application, round_)
+    # A freshly created round's first send is never itself a "change" to render
+    # as an update -- ICS SEQUENCE starts at the column's own default (0).
+    notification_status, notification_error = await _notify_interview_round(
+        db, application, round_, kind="scheduled", sequence=round_.notification_sequence
+    )
     round_ = update_interview_round_notification(db, round_.id, notification_status, notification_error)
     return _interview_round_response(round_)
 
@@ -1198,15 +1215,25 @@ async def create_interview_round_endpoint(
     "/v1/applications/{application_id}/interview-rounds/{round_id}/reschedule",
     response_model=InterviewRoundResponse,
 )
-def reschedule_interview_round_endpoint(
+async def reschedule_interview_round_endpoint(
     application_id: uuid.UUID,
     round_id: uuid.UUID,
     payload: RescheduleInterviewRoundRequest,
     db: Session = Depends(get_db),
     recruiter: Recruiter = Depends(require_recruiter),
 ):
-    """Update a round's scheduled_at. Only from 'scheduled' -- a completed or
-    cancelled round is a closed record, not something to move around."""
+    """
+    Update a round's scheduled_at. Only from 'scheduled' -- a completed or
+    cancelled round is a closed record, not something to move around.
+
+    Phase 2 (handoff.md): a real reschedule genuinely changes the event, so this
+    best-effort notifies both parties with an updated ICS -- same UID, SEQUENCE
+    incremented by one (RFC 5545's own mechanism for "this replaces the last one
+    I sent you", not a duplicate). Same "never blocks the underlying action"
+    contract creation already has: a notification failure here never reverts the
+    new scheduled_at or fails this request, it only shows up in the response's
+    own notification_status/notification_error.
+    """
     existing = _get_own_interview_round(db, application_id, round_id)
     if existing is None:
         raise HTTPException(status_code=404, detail="Interview round not found")
@@ -1217,6 +1244,15 @@ def reschedule_interview_round_endpoint(
             status_code=409,
             detail=f"Interview round is not reschedulable (current status: {existing.status})",
         )
+
+    application = get_application(db, application_id)
+    new_sequence = updated.notification_sequence + 1
+    notification_status, notification_error = await _notify_interview_round(
+        db, application, updated, kind="rescheduled", sequence=new_sequence
+    )
+    updated = update_interview_round_notification(
+        db, round_id, notification_status, notification_error, notification_sequence=new_sequence
+    )
     return _interview_round_response(updated)
 
 
@@ -1256,14 +1292,22 @@ def complete_interview_round_endpoint(
     "/v1/applications/{application_id}/interview-rounds/{round_id}/cancel",
     response_model=InterviewRoundResponse,
 )
-def cancel_interview_round_endpoint(
+async def cancel_interview_round_endpoint(
     application_id: uuid.UUID,
     round_id: uuid.UUID,
     db: Session = Depends(get_db),
     recruiter: Recruiter = Depends(require_recruiter),
 ):
-    """Cancel a round, only from 'scheduled'. Terminal, like 'completed' -- no
-    un-cancel; schedule a new round instead if one is still needed."""
+    """
+    Cancel a round, only from 'scheduled'. Terminal, like 'completed' -- no
+    un-cancel; schedule a new round instead if one is still needed.
+
+    Phase 2 (handoff.md): best-effort notifies both parties with a `METHOD:CANCEL`
+    ICS on the same UID, SEQUENCE incremented once more -- the standard mechanism
+    a real calendar client uses to remove an event it already added, rather than
+    leaving a stale entry behind. Same "never blocks" contract as create/
+    reschedule: a notification failure here never un-cancels the round.
+    """
     existing = _get_own_interview_round(db, application_id, round_id)
     if existing is None:
         raise HTTPException(status_code=404, detail="Interview round not found")
@@ -1274,6 +1318,15 @@ def cancel_interview_round_endpoint(
             status_code=409,
             detail=f"Interview round is not cancellable (current status: {existing.status})",
         )
+
+    application = get_application(db, application_id)
+    new_sequence = updated.notification_sequence + 1
+    notification_status, notification_error = await _notify_interview_round(
+        db, application, updated, kind="cancelled", sequence=new_sequence
+    )
+    updated = update_interview_round_notification(
+        db, round_id, notification_status, notification_error, notification_sequence=new_sequence
+    )
     return _interview_round_response(updated)
 
 
@@ -1339,7 +1392,12 @@ async def resend_interview_round_notification_endpoint(
     _interview_round_resend_cooldowns[round_id] = now
 
     application = get_application(db, application_id)
-    notification_status, notification_error = await _notify_interview_round(db, application, round_)
+    # A plain resend re-delivers the round's *current* confirmed state -- never
+    # itself a change, so it always uses "scheduled" wording and the round's
+    # existing SEQUENCE unchanged (see interview_round_mailer.py's own docstring).
+    notification_status, notification_error = await _notify_interview_round(
+        db, application, round_, kind="scheduled", sequence=round_.notification_sequence
+    )
     updated = update_interview_round_notification(db, round_id, notification_status, notification_error)
 
     if notification_status == "failed":

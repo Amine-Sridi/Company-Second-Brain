@@ -9,8 +9,9 @@ architecture, or cross-service demo readiness — those live in the repo-root
 
 **Status: feature-complete, no outstanding frontend task** (see `[NEXT]` at
 the end — phase 2 of the interview-round notification feature milestone 25
-started, ICS/reschedule/cancel notifications, is backend-first per
-`handoff.md`'s own scoping; milestone 22 added a small, real-browser-
+started (ICS + reschedule/cancel notifications, `handoff.md` milestone 42)
+is now done and needed zero frontend changes, confirming this section's own
+prior prediction; milestone 22 added a small, real-browser-
 verified badge/banner for JD-extraction validation, milestone 23 added a
 distinct "Auto-repaired" badge/note on top of that for the backend's
 automatic JD-repair pass, milestone 24 corrected that messaging's wording
@@ -973,21 +974,18 @@ checking the actual source; use this only to orient, not to cite.
 ## [NEXT]
 
 **No outstanding frontend task.** Milestone 25 (interview-round notification
-fields/badge/resend) is the most recent frontend change, real-browser-
-verified per above.
+fields/badge/resend) is still the most recent *frontend code change*.
+`handoff.md`'s own milestone 42 (ICS calendar attachments + reschedule/
+cancel notifications) shipped since then and confirmed the prediction this
+section's own prior entry made: it needed zero frontend changes.
+`reschedule`/`cancel` already returned the same `InterviewRoundResponse`
+shape (`notification_status`/`notification_error`) milestone 25's badge and
+resend-button logic already renders generically, so a real reschedule/
+cancel notification just shows up correctly with no new code — confirmed by
+a real-browser pass in `handoff.md`'s own milestone 42 entry.
 
-The next backend-driven frontend need will come from `handoff.md`'s own
-`[NEXT]` (interview-round ICS invitations + reschedule/cancel
-notifications — phase 2 of the same feature milestone 25 just started the
-frontend half of). That work is scoped as backend-only (a real ICS
-attachment on the existing notification email, plus wiring the same
-best-effort notification logic into `reschedule`/`cancel`, which currently
-send none) — no new frontend surface is anticipated (the existing
-notification badge/resend button milestone 25 just built should already
-cover whatever reschedule/cancel notifications look like from the
-recruiter's side, since they reuse the same `notification_status`/
-`notification_error` fields), but re-read `handoff.md`'s `[NEXT]` once that
-work actually starts rather than assuming this holds.
+`handoff.md`'s own `[NEXT]` (a real fresh end-to-end VoiceHR interview) is
+backend/manual-testing only and needs no frontend surface either.
 
 Everything else on record is either a deliberate, already-documented,
 closed decision (the "V2 page panel" background duplication, the three

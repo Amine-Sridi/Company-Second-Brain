@@ -320,15 +320,22 @@ class InterviewRound(Base):
     constraint, the same style as jobs_language_requirement_paired_check) -- a
     scheduled or cancelled round never has a pass/fail/needs_review verdict.
 
-    notification_status/notification_error/notification_sequence (migration 0010,
-    phase 1 of automating human interview scheduling -- see handoff.md) record the
-    outcome of the best-effort candidate+interviewer email sent on creation/resend
-    (interview_round_mailer.py) -- purely advisory, the same "observational, not
-    part of the round's own identity" treatment jd_validation's extraction_status/
-    extraction_warnings columns already established. A notification failure never
-    blocks or reverts round creation; see main.py's create_interview_round_endpoint.
-    notification_sequence is added now but not yet used by any application logic --
-    reserved for phase 2's ICS SEQUENCE field.
+    notification_status/notification_error (migration 0010) record the outcome of
+    the best-effort candidate+interviewer email+ICS sent on create/reschedule/
+    cancel/resend (interview_round_mailer.py) -- purely advisory, the same
+    "observational, not part of the round's own identity" treatment
+    jd_validation's extraction_status/extraction_warnings columns already
+    established. A notification failure never blocks or reverts the round's own
+    create/reschedule/cancel; see main.py's own endpoints.
+
+    notification_sequence (migration 0010, incremented starting migration --
+    phase 2, see handoff.md) is the ICS `SEQUENCE` last actually sent for this
+    round -- RFC 5545's own mechanism for a calendar client to tell an update
+    from a duplicate. It increments on reschedule and cancel (the event itself
+    changed), never on create's first send or a plain resend (both are the
+    *current* state, not a change to it) -- see
+    update_interview_round_notification's own docstring for exactly which
+    callers pass a new value.
     """
 
     __tablename__ = "interview_rounds"
@@ -1007,25 +1014,36 @@ def update_interview_round_notification(
     round_id: uuid.UUID,
     notification_status: str,
     notification_error: Optional[str],
+    notification_sequence: Optional[int] = None,
 ) -> Optional[InterviewRound]:
     """
-    Records the outcome of a best-effort candidate+interviewer email send (create or
-    resend-notification) -- never touches round_type/interviewer_name/
-    interviewer_email/location/scheduled_at/status/outcome. Called after the round
-    itself is already committed, so this only ever annotates an existing row, never
-    rolls it back regardless of the notification outcome. No status precondition
-    (unlike reschedule/complete/cancel): notification is orthogonal to a round's own
-    scheduled/completed/cancelled lifecycle, so this succeeds regardless of it.
+    Records the outcome of a best-effort candidate+interviewer email send (create,
+    reschedule, cancel, or resend-notification) -- never touches round_type/
+    interviewer_name/interviewer_email/location/scheduled_at/status/outcome. Called
+    after the round itself is already committed, so this only ever annotates an
+    existing row, never rolls it back regardless of the notification outcome. No
+    status precondition (unlike reschedule/complete/cancel): notification is
+    orthogonal to a round's own scheduled/completed/cancelled lifecycle, so this
+    succeeds regardless of it.
+
+    notification_sequence, if given, is written alongside status/error in the same
+    UPDATE -- reschedule/cancel pass the incremented value they already committed
+    to using for that send's own ICS SEQUENCE (interview_round_mailer.py), so the
+    persisted counter and the SEQUENCE a real calendar client actually received
+    can never drift apart. Create's first send and a plain resend both omit it
+    (None), leaving the column at whatever it already was -- neither one is a real
+    change to the event, so neither increments it (see this column's own docstring
+    on InterviewRound for why: SEQUENCE increases only when the event itself
+    changes, not on a re-delivery of unchanged content).
     """
-    db.execute(
-        update(InterviewRound)
-        .where(InterviewRound.id == round_id)
-        .values(
-            notification_status=notification_status,
-            notification_error=notification_error,
-            updated_at=func.now(),
-        )
-    )
+    values = {
+        "notification_status": notification_status,
+        "notification_error": notification_error,
+        "updated_at": func.now(),
+    }
+    if notification_sequence is not None:
+        values["notification_sequence"] = notification_sequence
+    db.execute(update(InterviewRound).where(InterviewRound.id == round_id).values(**values))
     db.commit()
     return get_interview_round(db, round_id)
 

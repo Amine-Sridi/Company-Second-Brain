@@ -77,7 +77,7 @@ def _fake_application(
 
 def _fake_round(
     application_id, created_by, round_type="technical", status="scheduled", outcome=None,
-    notification_status="pending", notification_error=None,
+    notification_status="pending", notification_error=None, notification_sequence=0,
 ):
     now = datetime.now(timezone.utc)
     return SimpleNamespace(
@@ -93,6 +93,7 @@ def _fake_round(
         notes=None,
         notification_status=notification_status,
         notification_error=notification_error,
+        notification_sequence=notification_sequence,
         created_by=created_by,
         created_at=now,
         updated_at=now,
@@ -150,9 +151,11 @@ def _mock_successful_notification(monkeypatch, round_namespace):
     )
     monkeypatch.setattr(main, "get_job", lambda db, jid: SimpleNamespace(id=jid, title="Backend Engineer"))
 
-    def _fake_update_notification(db, round_id, notification_status, notification_error):
+    def _fake_update_notification(db, round_id, notification_status, notification_error, notification_sequence=None):
         round_namespace.notification_status = notification_status
         round_namespace.notification_error = notification_error
+        if notification_sequence is not None:
+            round_namespace.notification_sequence = notification_sequence
         return round_namespace
 
     monkeypatch.setattr(main, "update_interview_round_notification", _fake_update_notification)
@@ -531,11 +534,20 @@ def test_reschedule_succeeds_from_scheduled(client, monkeypatch):
 
     monkeypatch.setattr(main, "get_interview_round", lambda db, rid: existing if rid == existing.id else None)
     monkeypatch.setattr(main, "reschedule_interview_round", lambda db, rid, scheduled_at: updated)
+    monkeypatch.setattr(main, "get_application", lambda db, aid: SimpleNamespace(id=aid, job_id=uuid.uuid4(), candidate_id=uuid.uuid4()))
+    _mock_successful_notification(monkeypatch, updated)
 
     resp = _reschedule(test_client, recruiter_id, application_id, existing.id)
 
     assert resp.status_code == 200
     assert resp.json()["scheduled_at"] == "2026-11-01T09:00:00Z"
+    assert resp.json()["notification_status"] == "sent"
+    # Phase 2: a real reschedule increments the ICS SEQUENCE by one -- never left
+    # unchanged, since the event itself genuinely changed. Asserted on the real
+    # API response, not just the underlying object, since the response schema
+    # must actually expose this field for a recruiter/future test to see it.
+    assert resp.json()["notification_sequence"] == existing.notification_sequence + 1
+    assert updated.notification_sequence == existing.notification_sequence + 1
 
 
 def test_reschedule_blocked_when_not_scheduled(client, monkeypatch):
@@ -695,11 +707,16 @@ def test_cancel_succeeds_from_scheduled(client, monkeypatch):
 
     monkeypatch.setattr(main, "get_interview_round", lambda db, rid: existing)
     monkeypatch.setattr(main, "cancel_interview_round", lambda db, rid: cancelled)
+    monkeypatch.setattr(main, "get_application", lambda db, aid: SimpleNamespace(id=aid, job_id=uuid.uuid4(), candidate_id=uuid.uuid4()))
+    _mock_successful_notification(monkeypatch, cancelled)
 
     resp = _cancel(test_client, recruiter_id, application_id, existing.id)
 
     assert resp.status_code == 200
     assert resp.json()["status"] == "cancelled"
+    assert resp.json()["notification_status"] == "sent"
+    assert resp.json()["notification_sequence"] == existing.notification_sequence + 1
+    assert cancelled.notification_sequence == existing.notification_sequence + 1
 
 
 def test_cancel_blocked_when_not_scheduled(client, monkeypatch):
