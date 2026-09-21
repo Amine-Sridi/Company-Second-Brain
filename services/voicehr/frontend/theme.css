@@ -6,13 +6,6 @@
   --ink: #1e2d3d;
   --ink-mid: #7a6e65;
   --ink-faint: #9a8f85;
-  --midnight: #1c2b3a;
-  --deep-night: #162230;
-  --night-card: #24394d;
-  --night-border: #253a4d;
-  --night-muted: #3d5a72;
-  --night-text: #a8cede;
-  --night-label: #4a9fc4;
   --blue-deep: #2c4a6e;
   --blue-mid: #3a7fa0;
   --blue-sky: #7eb8d4;
@@ -27,6 +20,54 @@
   --font-sans: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
   --font-voice: Georgia, "Times New Roman", serif;
   --font-mono: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+}
+
+/* V2 design system tokens -- copied from services/recruitment-workflow/frontend/
+   src/styles/variables.css ("AI recruitment command center"), the actual design
+   system the rest of this product runs (every post-login recruiter page). Scoped
+   to the candidate interview page only (.midnight-page and its descendants,
+   below) -- .linen-page (admin/report) is a separate, deliberately untouched
+   surface and never reads these. Values are a literal copy, not a reference,
+   since this is a different app/bundler with no shared CSS -- kept under the
+   same --v2-* names as RWS's own tokens so the two stay traceably identical if
+   either changes. */
+:root {
+  --v2-bg: #0a0c14;
+  --v2-bg-elevated: #10131e;
+  --v2-bg-inset: #06070d;
+
+  --v2-surface: rgba(255, 255, 255, 0.035);
+  --v2-surface-strong: rgba(255, 255, 255, 0.06);
+  --v2-border: rgba(255, 255, 255, 0.09);
+  --v2-border-strong: rgba(255, 255, 255, 0.16);
+
+  --v2-text: #eef0f7;
+  --v2-text-muted: #9297ab;
+  --v2-text-faint: #5c6178;
+
+  --v2-cyan: #3fd8e8;
+  --v2-violet: #a78bfa;
+  --v2-cyan-bg: rgba(63, 216, 232, 0.12);
+  --v2-violet-bg: rgba(167, 139, 250, 0.12);
+
+  --v2-success: #4ade80;
+  --v2-success-bg: rgba(74, 222, 128, 0.12);
+  --v2-danger: #fb7185;
+  --v2-danger-bg: rgba(251, 113, 133, 0.14);
+  --v2-warning: #fbbf24;
+  --v2-warning-bg: rgba(251, 191, 36, 0.12);
+
+  --v2-radius: 14px;
+  --v2-radius-lg: 20px;
+  --v2-blur: 20px;
+
+  --v2-shadow-elevated: 0 24px 60px -12px rgba(0, 0, 0, 0.55), 0 1px 0 0 rgba(255, 255, 255, 0.04) inset;
+  --v2-shadow-glow-cyan: 0 0 1px rgba(63, 216, 232, 0.4), 0 8px 30px -8px rgba(63, 216, 232, 0.25);
+  --v2-transition: 180ms cubic-bezier(0.4, 0, 0.2, 1);
+
+  /* RWS never loads a webfont either (confirmed: no @font-face/Google Fonts
+     link anywhere in its frontend) -- same plain system stack here, not Inter. */
+  --font-sans-v2: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
 }
 
 * { box-sizing: border-box; }
@@ -58,34 +99,6 @@ button, input, select { font: inherit; }
 .link-url { font: 11px var(--font-mono); color: var(--blue-deep); word-break: break-all; }
 .mono { font-family: var(--font-mono); font-size: 12px; color: var(--ink-faint); }
 .meta { font-size: 13px; font-weight: 400; color: var(--ink-mid); }
-
-/* Interview surface */
-.midnight-page { min-height: 100vh; padding: 2rem 1rem; background: var(--midnight); color: var(--night-text); font-family: var(--font-sans); }
-.midnight-page > .card { max-width: 480px; padding: 0; background: transparent; box-shadow: none; }
-.interview-shell { width: 100%; max-width: 480px; margin: 0 auto; }
-.interview-top { display: flex; justify-content: space-between; align-items: center; margin-bottom: 2rem; }
-.candidate-name { font-size: 13px; color: var(--blue-sky); }
-.elapsed-timer { font: 13px var(--font-mono); color: var(--night-muted); }
-.orb-wrap { text-align: center; margin-bottom: 1.5rem; }
-.orb { width: 72px; height: 72px; border-radius: 50%; background: var(--night-card); border: 1.5px solid var(--night-border); display: grid; place-items: center; margin: 0 auto 10px; transition: border-color .4s; }
-.orb.speaking { border-color: var(--blue-sky); animation: orb-pulse 1.8s ease-in-out infinite; }
-.orb-core { width: 28px; height: 28px; border-radius: 50%; background: var(--blue-mid); opacity: .4; transition: opacity .4s; }
-.orb.speaking .orb-core { opacity: .7; }
-.orb-label { min-height: 18px; margin: 0; font-size: 12px; color: var(--night-label); }
-.wave { display: flex; align-items: flex-end; justify-content: center; gap: 3px; height: 28px; margin-bottom: 1.5rem; }
-.wave .bar { width: 3px; height: 4px; border-radius: 2px; background: var(--night-muted); transition: height .08s; }
-.wave .bar.active { background: var(--blue-sky); }
-.task-card { width: 100%; background: var(--deep-night); border: .5px solid var(--night-border); border-radius: 14px; padding: 14px 18px; }
-.task-label { margin-bottom: 6px; font-size: 11px; color: var(--night-muted); }
-.task-text { font-size: 13px; line-height: 1.65; color: var(--night-text); }
-.task-steps { display: flex; gap: 6px; align-items: center; margin-top: 12px; }
-.task-steps .step { width: 20px; height: 3px; border-radius: 2px; background: var(--night-muted); }
-.task-steps .step.done { background: var(--blue-sky); }
-.task-steps .step.current { width: 32px; background: var(--blue-mid); }
-.midnight-page .button, .midnight-page button { border: 0; border-radius: 20px; background: var(--blue-deep); color: var(--blue-tint); font-weight: 500; cursor: pointer; }
-.midnight-page button:hover { background: var(--blue-mid); }
-.midnight-page button:disabled { opacity: .45; }
-@keyframes orb-pulse { 0%, 100% { box-shadow: 0 0 0 0 rgba(126, 184, 212, .08); } 50% { box-shadow: 0 0 0 8px rgba(126, 184, 212, .08); } }
 
 /* Report-specific accents */
 .report-wrap { max-width: 720px; margin: 0 auto; padding: 0 1.5rem; }
@@ -136,16 +149,13 @@ button, input, select { font: inherit; }
   --canvas-deep: #ebe8e0;
   --surface: rgba(255, 255, 255, .78);
   --surface-solid: #fffdfa;
-  --surface-dark: #101b2a;
   --surface-dark-raised: #17263a;
   --line: rgba(30, 45, 61, .12);
-  --line-dark: rgba(168, 206, 222, .16);
   --cyan: #75d5e7;
   --cyan-strong: #2a9eb7;
   --violet: #8e86e8;
   --coral: #e48660;
   --shadow-soft: 0 18px 50px rgba(30, 45, 61, .08);
-  --shadow-dark: 0 24px 70px rgba(0, 0, 0, .24);
   --radius-lg: 24px;
   --radius-md: 16px;
 }
@@ -272,44 +282,134 @@ body.linen-page {
 .report-badge { background: #e5f6f5; color: #187b84; font-size: 11px; white-space: nowrap; }
 .empty-reports { background: rgba(255,255,255,.48); border-color: rgba(30,45,61,.16); }
 
-/* Interview */
+/* Interview -- redesigned onto the V2 tokens above so the candidate-facing page
+   reads as the same product as the recruiter frontend, not a separately-styled
+   app. Consolidated into one section (previously split across two, with a
+   near-duplicate override layer) -- this is the only place any of these
+   selectors are declared now. */
 .midnight-page {
   position: relative;
+  min-height: 100vh;
   overflow-x: hidden;
   overflow-y: auto;
-  background:
-    radial-gradient(circle at 50% -12%, rgba(117, 213, 231, .2), transparent 28rem),
-    radial-gradient(circle at 12% 88%, rgba(142, 134, 232, .12), transparent 25rem),
-    #0d1725;
+  padding: 2rem 1rem;
+  background: var(--v2-bg);
+  color: var(--v2-text);
+  font-family: var(--font-sans-v2);
+  /* Centers .card on the page -- dropped by accident when the old inline
+     <style> block (which had this on a bare `body` rule) was replaced by
+     this file; restored as a page-level rule instead so it isn't lost again
+     the same way. */
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
 }
-.midnight-page::before { content: ""; position: fixed; inset: 0; pointer-events: none; background: linear-gradient(120deg, transparent 40%, rgba(255,255,255,.025), transparent 60%); }
-.midnight-page > .card { max-width: 560px; }
+/* Same three-layer backdrop as the recruiter Dashboard (DashboardPage.module.css):
+   two soft aurora blooms (cyan top-left, violet bottom-right), a faint 1px
+   technical grid, and a barely-there noise texture -- restrained on purpose,
+   never a decorative wallpaper. */
+.midnight-page::before {
+  content: "";
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  background-image:
+    radial-gradient(640px 420px at 8% 0%, var(--v2-cyan-bg), transparent 60%),
+    radial-gradient(560px 420px at 96% 100%, var(--v2-violet-bg), transparent 60%),
+    linear-gradient(rgba(255, 255, 255, 0.025) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(255, 255, 255, 0.025) 1px, transparent 1px);
+  background-size: auto, auto, 36px 36px, 36px 36px;
+}
+.midnight-page::after {
+  content: "";
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  opacity: 0.05;
+  mix-blend-mode: overlay;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='200' height='200'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='2' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
+}
+.midnight-page > .card { position: relative; max-width: 560px; }
+
+/* Brand mark -- same 28px cyan-to-violet gradient block + wordmark as the
+   recruiter sidebar (Sidebar.module.css's .brandMark/.brandText), so a
+   candidate arriving from the invite email recognizes it as the same product. */
+.brand-row { display: flex; align-items: center; gap: 10px; margin-bottom: 1.75rem; }
+.brand-mark { flex-shrink: 0; display: inline-flex; align-items: center; justify-content: center; width: 28px; height: 28px; border-radius: 8px; background: linear-gradient(135deg, var(--v2-cyan), var(--v2-violet)); box-shadow: var(--v2-shadow-glow-cyan); }
+.brand-mark svg { width: 16px; height: 16px; color: var(--v2-bg-inset); }
+.brand-text { font-weight: 700; font-size: 14px; letter-spacing: -.01em; color: var(--v2-text); }
+
 .interview-shell { max-width: 560px; }
-.interview-top { margin-bottom: 2.5rem; padding: 0 .25rem; }
-.candidate-name { font-weight: 650; letter-spacing: .02em; }
-.elapsed-timer { padding: 7px 10px; border: 1px solid var(--line-dark); border-radius: 999px; color: var(--night-text); background: rgba(255,255,255,.04); }
-.orb-wrap { margin-bottom: 2rem; }
-.orb { width: 108px; height: 108px; border-color: var(--line-dark); background: radial-gradient(circle at 35% 25%, #294561, var(--surface-dark)); box-shadow: inset 0 0 24px rgba(117,213,231,.06), var(--shadow-dark); }
-.orb.speaking { border-color: var(--cyan); box-shadow: 0 0 0 10px rgba(117,213,231,.05), 0 0 48px rgba(117,213,231,.16), var(--shadow-dark); }
-.orb-core { width: 42px; height: 42px; background: radial-gradient(circle at 35% 30%, #b2f3f4, #478aaa 70%); box-shadow: 0 0 24px rgba(117,213,231,.55); }
-.orb-label { color: var(--cyan); font-size: 11px; font-weight: 650; letter-spacing: .08em; text-transform: uppercase; }
-.wave { height: 34px; margin-bottom: 2rem; }
-.wave .bar { width: 4px; background: #29435d; }
-.task-card { padding: 20px 22px; background: rgba(23,38,58,.82); border: 1px solid var(--line-dark); border-radius: var(--radius-lg); box-shadow: 0 16px 40px rgba(0,0,0,.16); }
-.task-label { color: var(--cyan); font-weight: 650; letter-spacing: .08em; text-transform: uppercase; }
-.task-text { min-height: 72px; color: #d9edf2; font-size: 16px; line-height: 1.65; }
-.task-steps { gap: 8px; margin-top: 18px; }
-.task-steps .step { width: 26px; height: 4px; background: #2a4058; }
-.task-steps .step.done { background: var(--cyan); }
-.task-steps .step.current { width: 48px; background: var(--violet); }
-.midnight-page button { min-height: 46px; border-radius: 13px; background: linear-gradient(135deg, #315879, #514a9c); box-shadow: 0 10px 24px rgba(0,0,0,.18); transition: transform .2s, filter .2s; }
-.midnight-page button:hover { filter: brightness(1.12); transform: translateY(-1px); }
-.midnight-page .step:not(#step-interview) { padding: 2.5rem 2rem; background: rgba(23,38,58,.72); border: 1px solid var(--line-dark); border-radius: var(--radius-lg); box-shadow: var(--shadow-dark); }
-.midnight-page h2 { color: #effbfc; font-size: 28px; letter-spacing: -.04em; }
-.midnight-page p { color: var(--night-text); line-height: 1.6; }
-.consent-box { background: rgba(255,255,255,.05); border: 1px solid var(--line-dark); border-radius: 14px; }
-.mic-bar-container { height: 8px; background: #263a50; border-radius: 99px; }
-.mic-bar { background: linear-gradient(90deg, var(--violet), var(--cyan)); }
+.interview-top { display: flex; justify-content: space-between; align-items: center; margin-bottom: 2rem; padding: 0 .25rem; }
+.candidate-name { font-size: 13px; font-weight: 650; letter-spacing: .02em; color: var(--v2-cyan); }
+.elapsed-timer { padding: 7px 10px; border: 1px solid var(--v2-border); border-radius: 999px; color: var(--v2-text-muted); background: var(--v2-surface); font: 13px var(--font-mono); }
+
+.orb-wrap { text-align: center; margin-bottom: 2rem; }
+.orb { width: 108px; height: 108px; border-radius: 50%; border: 1.5px solid var(--v2-border); display: grid; place-items: center; margin: 0 auto 10px; background: radial-gradient(circle at 35% 25%, var(--v2-bg-elevated), var(--v2-bg-inset)); box-shadow: inset 0 0 24px rgba(63, 216, 232, .06), var(--v2-shadow-elevated); transition: border-color .4s, box-shadow .4s; }
+.orb.speaking { border-color: var(--v2-cyan); box-shadow: 0 0 0 10px var(--v2-cyan-bg), 0 0 48px rgba(63, 216, 232, .16), var(--v2-shadow-elevated); animation: orb-pulse 1.8s ease-in-out infinite; }
+.orb-core { width: 42px; height: 42px; border-radius: 50%; background: radial-gradient(circle at 35% 30%, var(--v2-cyan), var(--v2-violet) 85%); opacity: .55; box-shadow: 0 0 24px rgba(63, 216, 232, .4); transition: opacity .4s; }
+.orb.speaking .orb-core { opacity: .9; }
+.orb-label { min-height: 18px; margin: 0; color: var(--v2-cyan); font-size: 11px; font-weight: 650; letter-spacing: .08em; text-transform: uppercase; }
+@keyframes orb-pulse { 0%, 100% { box-shadow: 0 0 0 0 var(--v2-cyan-bg), var(--v2-shadow-elevated); } 50% { box-shadow: 0 0 0 10px var(--v2-cyan-bg), var(--v2-shadow-elevated); } }
+
+.wave { display: flex; align-items: flex-end; justify-content: center; gap: 3px; height: 34px; margin-bottom: 2rem; }
+.wave .bar { width: 4px; height: 4px; border-radius: 2px; background: var(--v2-border-strong); transition: height .08s, background-color .2s; }
+.wave .bar.active { background: var(--v2-cyan); }
+
+.task-card { width: 100%; padding: 20px 22px; background: var(--v2-surface); backdrop-filter: blur(var(--v2-blur)); border: 1px solid var(--v2-border); border-radius: var(--v2-radius-lg); box-shadow: var(--v2-shadow-elevated); }
+.task-label { margin-bottom: 6px; color: var(--v2-cyan); font-size: 11px; font-weight: 650; letter-spacing: .08em; text-transform: uppercase; }
+.task-text { min-height: 72px; color: var(--v2-text); font-size: 16px; line-height: 1.65; }
+.task-steps { display: flex; gap: 8px; align-items: center; margin-top: 18px; }
+.task-steps .step { width: 26px; height: 4px; border-radius: 2px; background: var(--v2-border-strong); }
+.task-steps .step.done { background: var(--v2-cyan); }
+.task-steps .step.current { width: 48px; background: var(--v2-violet); }
+
+/* Live transcript -- previously styled only inline on interview.html with light
+   (white/slate) colors despite sitting on this dark page; moved here as a proper
+   V2 glass panel so it no longer looks like a foreign element mid-page. */
+.live-transcript { margin: 1rem 0; padding: 14px 16px; background: var(--v2-surface); border: 1px solid var(--v2-border); border-radius: var(--v2-radius); max-height: 180px; overflow-y: auto; text-align: left; }
+.live-transcript-title { color: var(--v2-text-faint); font-size: 11px; font-weight: 700; letter-spacing: .08em; text-transform: uppercase; margin-bottom: .5rem; }
+.live-transcript-line { margin: .4rem 0; line-height: 1.5; color: var(--v2-text); font-size: 14px; }
+.live-transcript-speaker { font-weight: 700; margin-right: .35rem; }
+.live-transcript-line.sarah .live-transcript-speaker { color: var(--v2-cyan); }
+.live-transcript-line.candidate .live-transcript-speaker { color: var(--v2-violet); }
+.live-transcript-placeholder { color: var(--v2-text-faint); font-size: 14px; }
+
+.midnight-page button {
+  min-height: 46px;
+  padding: .7rem 1.5rem;
+  border: 0;
+  border-radius: var(--v2-radius);
+  background: linear-gradient(120deg, var(--v2-cyan), var(--v2-violet));
+  color: var(--v2-bg-inset);
+  font-size: 1rem;
+  font-weight: 700;
+  cursor: pointer;
+  box-shadow: var(--v2-shadow-glow-cyan);
+  transition: transform var(--v2-transition), filter var(--v2-transition);
+}
+.midnight-page button:hover:not(:disabled) { filter: brightness(1.08); transform: translateY(-1px); }
+.midnight-page button:disabled { opacity: .45; cursor: not-allowed; transform: none; }
+/* Direct-child combinator deliberately, not just ".midnight-page .step" -- the
+   task-progress dots inside .task-card also carry the plain ".step" class
+   (current/done state), and are nested many levels deeper than a direct child
+   of .card, so this can't accidentally reach them the way a bare descendant
+   selector did before. */
+.midnight-page > .card > .step:not(#step-interview) { padding: 2.5rem 2rem; background: var(--v2-surface); backdrop-filter: blur(var(--v2-blur)); border: 1px solid var(--v2-border); border-radius: var(--v2-radius-lg); box-shadow: var(--v2-shadow-elevated); }
+.midnight-page h2 { margin-bottom: 1rem; color: var(--v2-text); font-size: 28px; letter-spacing: -.04em; }
+.midnight-page p { margin: 0; color: var(--v2-text-muted); line-height: 1.6; }
+.midnight-page .thank-you { text-align: center; }
+.midnight-page .thank-you h2 { color: var(--v2-success); }
+.midnight-page .error-msg { padding: 1rem; text-align: center; color: var(--v2-danger); }
+.midnight-page #mic-error, .midnight-page #model-error { color: var(--v2-danger); }
+.midnight-page .loading { text-align: center; padding: 2rem; }
+.midnight-page .loading p:last-child { color: var(--v2-text-faint); font-size: .9rem; margin-top: .5rem; }
+
+.consent-box { margin: 1rem 0; padding: 1rem; background: var(--v2-surface); border: 1px solid var(--v2-border); border-radius: var(--v2-radius); }
+.consent-box label { display: flex; align-items: center; gap: .5rem; cursor: pointer; color: var(--v2-text); }
+.mic-bar-container { width: 100%; height: 8px; background: var(--v2-bg-inset); border-radius: 999px; margin: 1rem 0; overflow: hidden; }
+.mic-bar { height: 100%; width: 0%; border-radius: 999px; background: linear-gradient(90deg, var(--v2-violet), var(--v2-cyan)); transition: width .1s; }
 
 /* Report */
 .report-wrap { max-width: 940px; padding: 0 1.25rem; }
@@ -360,7 +460,7 @@ body.linen-page {
   .report-wrap { padding: 0; }
   .report-card, .report-header { padding: 1.25rem; }
   .midnight-page { padding: 1.25rem .9rem; }
-  .midnight-page .step:not(#step-interview) { padding: 1.5rem; }
+  .midnight-page > .card > .step:not(#step-interview) { padding: 1.5rem; }
   .task-text { font-size: 15px; }
   .score-num { font-size: 54px; }
   .stats-row { flex-direction: column; }

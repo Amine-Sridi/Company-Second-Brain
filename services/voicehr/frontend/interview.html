@@ -5,36 +5,30 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>VoiceHR Interview</title>
     <style>
+        /* Purely structural (which wizard step is visible) -- all visual styling
+           lives in theme.css so this page shares one design system with the rest
+           of the product instead of carrying its own bespoke light theme. */
         * { box-sizing: border-box; margin: 0; padding: 0; }
-        body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background: #f5f5f5; color: #333; display: flex; justify-content: center; align-items: center; min-height: 100vh; padding: 1rem; }
-        .card { background: #fff; border-radius: 12px; padding: 2rem; max-width: 500px; width: 100%; box-shadow: 0 2px 10px rgba(0,0,0,0.1); }
-        h2 { margin-bottom: 1rem; }
         .step { display: none; }
         .step.active { display: block; }
-        .error-msg { color: #dc2626; padding: 1rem; text-align: center; }
-        .consent-box { margin: 1rem 0; padding: 1rem; background: #f9f9f9; border-radius: 6px; }
-        .consent-box label { display: flex; align-items: center; gap: 0.5rem; cursor: pointer; }
-        .mic-bar-container { width: 100%; height: 20px; background: #e5e5e5; border-radius: 10px; margin: 1rem 0; overflow: hidden; }
-        .mic-bar { height: 100%; background: #22c55e; border-radius: 10px; width: 0%; transition: width 0.1s; }
-        button { padding: 0.7rem 1.5rem; background: #2563eb; color: #fff; border: none; border-radius: 6px; font-size: 1rem; cursor: pointer; margin-top: 1rem; }
-        button:disabled { background: #93c5fd; cursor: not-allowed; }
-        .timer { font-size: 1.5rem; font-weight: 600; text-align: center; margin: 1rem 0; }
-        .task-indicator { text-align: center; color: #666; margin-bottom: 0.5rem; }
-        .thank-you { text-align: center; }
-        .thank-you h2 { color: #22c55e; }
-         .loading { text-align: center; padding: 2rem; }
-         .live-transcript { margin: 1rem 0; padding: 0.85rem; background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 8px; max-height: 180px; overflow-y: auto; text-align: left; }
-         .live-transcript-title { color: #64748b; font-size: 0.75rem; font-weight: 700; letter-spacing: 0.08em; text-transform: uppercase; margin-bottom: 0.5rem; }
-         .live-transcript-line { margin: 0.4rem 0; line-height: 1.4; }
-         .live-transcript-speaker { font-weight: 700; margin-right: 0.35rem; }
-         .live-transcript-line.sarah .live-transcript-speaker { color: #2563eb; }
-         .live-transcript-line.candidate .live-transcript-speaker { color: #7c3aed; }
-         .task-steps .step { display: block; }
+        .task-steps .step { display: block; }
     </style>
     <link rel="stylesheet" href="/theme.css">
 </head>
 <body class="midnight-page">
     <div class="card">
+        <div class="brand-row" aria-hidden="true">
+            <span class="brand-mark">
+                <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6">
+                    <circle cx="5" cy="6" r="2" />
+                    <circle cx="5" cy="14" r="2" />
+                    <circle cx="14" cy="10" r="2.6" />
+                    <path d="M6.8 6.9 11.7 9" />
+                    <path d="M6.8 13.1 11.7 11" />
+                </svg>
+            </span>
+            <span class="brand-text">Company Second Brain</span>
+        </div>
         <div class="step active" id="step-loading">
             <div class="loading">
                 <p>Loading...</p>
@@ -62,9 +56,9 @@
             <div class="mic-bar-container">
                 <div class="mic-bar" id="mic-bar"></div>
             </div>
-            <p id="mic-error" style="color:#dc2626;display:none;">Could not access microphone. Please check browser permissions.</p>
+            <p id="mic-error" style="display:none;">Could not access microphone. Please check browser permissions.</p>
             <button id="mic-retry-btn" style="display:none;" onclick="retryMicAccess()">Try again</button>
-            <p id="model-error" style="color:#dc2626;display:none;"></p>
+            <p id="model-error" style="display:none;"></p>
             <button id="start-btn" disabled onclick="startInterview()">Preparing Sarah...</button>
         </div>
 
@@ -76,7 +70,7 @@
                     <div class="task-card"><p class="task-label task-indicator">Interview in progress</p><p class="task-text">Sarah will guide you through 4 tasks. Speak naturally and give Sarah examples when you can.</p><div class="task-steps"><div class="step current"></div><div class="step"></div><div class="step"></div><div class="step"></div></div></div>
                     <div class="live-transcript" id="live-transcript" aria-live="polite" aria-label="Live transcript">
                         <p class="live-transcript-title">Live transcript</p>
-                        <div id="live-transcript-lines"><p style="color:#64748b;font-size:0.9rem;">Your conversation will appear here.</p></div>
+                        <div id="live-transcript-lines"><p class="live-transcript-placeholder">Your conversation will appear here.</p></div>
                     </div>
                  <button id="finish-btn" onclick="finishInterview()">Finish Interview</button>
              </div>
@@ -97,7 +91,7 @@
         <div class="step" id="step-finalizing">
             <div class="loading">
                 <p>Finishing up…</p>
-                <p style="color:#64748b;font-size:0.9rem;margin-top:0.5rem;">Please wait while your interview is saved. This can take a few seconds.</p>
+                <p>Please wait while your interview is saved. This can take a few seconds.</p>
             </div>
         </div>
 
@@ -204,7 +198,7 @@
              liveTranscriptCurrent = null;
              const lines = document.getElementById('live-transcript-lines');
              if (lines) {
-                 lines.innerHTML = '<p style="color:#64748b;font-size:0.9rem;">Your conversation will appear here.</p>';
+                 lines.innerHTML = '<p class="live-transcript-placeholder">Your conversation will appear here.</p>';
              }
          }
 

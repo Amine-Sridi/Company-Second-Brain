@@ -28,8 +28,17 @@ rescheduling, or cancelling a round now emails both the candidate (contact
 fetched fresh from Resume Intelligence, never persisted) and the
 interviewer, with a real ICS calendar attachment and a correctly
 incrementing `SEQUENCE` so a real calendar client treats a reschedule as an
-update and a cancel as a removal, not a duplicate** (see `[NEXT]` at the
-end). Every backend service, the full recruiter frontend, and
+update and a cancel as a removal, not a duplicate. Milestone 43 then
+resolved the last real environment blocker: a genuine `RESEND_API_KEY` is
+now configured for both VoiceHR and RWS, with live delivery confirmed for
+both services' mailers (including a real ICS-bearing email) — the only
+remaining constraint is Resend's own sandbox mode (no verified custom
+domain), which still limits real deliveries to the account's own verified
+address. Milestone 44 then drove that whole pipeline for real with a
+genuinely deliverable candidate — a real resume upload, a real qualifying
+match, and a real `Invite` click that actually succeeded, the first in this
+project's history** (see `[NEXT]` at the end). Every backend service, the full
+recruiter frontend, and
 the 2D/3D knowledge graph are implemented and passed a final whole-system
 readiness audit (see "Demo readiness" below). A dedicated audit of VoiceHR's
 autonomous real-time candidate interview confirmed it was already fully built
@@ -87,14 +96,20 @@ safely" below) — the exact incident that happened before is now structurally
 impossible to repeat by accident; (2) representative demo Jobs/MatchResults/
 Applications have been recreated (see "Current state" below) via a new,
 explicit, idempotent seed script, including reconnecting one application to
-VoiceHR's own surviving completed-report history. **What is still genuinely
-unresolved**: VoiceHR's `RESEND_API_KEY` remains unset in this environment, so
-**every real `POST /v1/applications/{id}/invite` or `.../resend-invite` call
-still fails with a clean 502** — the seed script worked around this (it never
-calls that endpoint), but a live "Invite"/"Resend invitation" click in front
-of a jury still cannot succeed until a real Resend key is configured (see
-Known Limitations). This is precisely the failure path milestone 29's new
-"Invitation not sent" / Retry UX was built and live-verified against.
+VoiceHR's own surviving completed-report history. **RESOLVED (milestone
+43)**: a real `RESEND_API_KEY` is now configured and live delivery is
+confirmed working for both VoiceHR's candidate-invite email and RWS's
+interview-round notifications (see Known Limitations for the one remaining
+caveat — Resend's sandbox mode still restricts deliveries to the account's
+own verified address until a custom domain is verified, so this
+environment's `@example.com` demo candidate addresses specifically still
+won't receive real mail). A live "Invite"/"Resend invitation" click in front
+of a jury will now genuinely attempt real delivery rather than fail
+instantly on a missing key — whether it *succeeds* for a given candidate
+depends on that candidate's address being deliverable under the current
+sandbox restriction. Milestone 29's "Invitation not sent" / Retry UX remains
+exactly as useful either way, since a sandbox rejection is still a real,
+clean failure it correctly surfaces.
 
 ---
 
@@ -236,6 +251,15 @@ Requests` responses) — the second job's creation succeeded before hitting it,
 but a further job-creation attempt failed cleanly with the documented `502`,
 no partial data written, exactly per this project's existing quota-failure
 contract.
+
+**New this session (milestone 44)**: a third job, `Smoketest Live Invite
+Demo Engineer` (`f7d2f474-5284-4d6e-81ef-6fcb31d89c0d`), and a new,
+**identity-complete, non-orphaned candidate** (`e7e2f34f-...`, real email is
+the Resend account's own verified address) with one qualified `MatchResult`
+and one real `Application` (`095731d3-a1ba-4738-82b4-3c2a9182602f`) already
+successfully `invited` — see the milestone 44 write-up below and `[NEXT]`.
+This is now the recommended application for demonstrating a live,
+succeeding "Invite" click, and the one to use for `[NEXT]`'s real interview.
 
 **This session (automatic invitation email delivery, milestone 27)**: a fresh
 job/candidate/application created live, then `invite` called against the real
@@ -1034,30 +1058,41 @@ python services/recruitment-workflow/scripts/seed_demo_data.py --yes --job-title
   link automatically as part of `POST /api/invite` itself — see "Architecture
   / invariants" above. This is no longer a gap, but see the very next entry
   for what currently blocks it from working in this environment.
-- **CRITICAL, demo-blocking as of milestone 27: `RESEND_API_KEY` is empty in
-  VoiceHR's `.env`.** Automatic invitation email delivery (milestone 27) is
-  now what determines whether `POST /api/invite` succeeds at all — with no
-  key configured, `_send_email` immediately raises, and **every real
-  "Invite"/"Retry"/"Resend invitation" click in the recruiter UI currently
-  fails with a clean 502**, verified live this and the milestone-29 session
-  (the new explicit resend endpoint hits the exact same `_send_email`
-  failure). This is a behavior change from before milestone 27, when a
-  missing key was harmless (no email was ever attempted). A real Resend API
-  key must be configured before "Invite"/"Resend invitation" can be
-  demonstrated live succeeding. **Not
-  blocking for demo data itself anymore**: this session's demo-data
-  restoration (see "Current demo data" above) deliberately never calls
-  `POST /v1/applications/{id}/invite` at all — it advances the one
-  reconnected application to `invited`/`interviewed` via a direct, explicit
-  database write plus a real webhook replay instead, specifically to avoid
-  needing this key just to seed data. If Resend's own sandbox sender is used
-  once a key is configured, note it can only deliver to the Resend account's
-  own registered email address, not arbitrary candidates — a verified custom
-  domain (`RESEND_FROM_ADDRESS` pointed at it) is required to actually invite
-  real candidate addresses; see `services/voicehr/README.md`'s "Resend email
-  configuration" section and `.env.example` for the exact steps.
-  `ADMIN_EMAIL` being empty is unrelated and still harmless (only gates the
-  separate "report ready" notification, not on any critical path).
+- **RESOLVED (milestone 43): `RESEND_API_KEY` is now configured, in both
+  VoiceHR's and RWS's own `.env` (each service needs its own — they're
+  independent Resend integrations, milestones 27 and 41-42 respectively;
+  only VoiceHR's was initially added, RWS's was missing and added the same
+  session once this was noticed). **Live-verified real delivery**, not just a
+  presence check: called each service's own mailer function directly
+  (`voicehr/backend/api/routes/interview.py:_send_email`,
+  `recruitment-workflow/interview_round_mailer.py:send_interview_round_notification`,
+  the latter with a real ICS attachment) against the Resend account's own
+  verified address — both returned success and the emails genuinely arrived.
+  A real `POST /v1/applications/{id}/invite` call against a live demo
+  application (`8fc853eb-bc32-445e-9e74-691ce05a81d3`) now genuinely reaches
+  Resend (previously: instant "not configured" 500) and correctly leaves
+  `Application.status` at `selected`/`invite_attempt_number` at `0` on
+  failure, per the existing contract. **What still blocks an arbitrary real
+  candidate address, and is not a code defect**: no verified custom domain is
+  configured, so Resend's sandbox mode rejects everything except its account
+  owner's own registered address — confirmed live, two distinct real Resend
+  rejections: `@example.com` addresses (all of this environment's demo
+  candidate emails) get a `422 validation_error` ("Please use our testing
+  email address instead of domains like `example.com`"), and any other
+  real-but-unverified address would get a `403` ("You can only send testing
+  emails to your own email address"). A verified custom domain
+  (`RESEND_FROM_ADDRESS` pointed at it) is required to actually invite
+  arbitrary real candidate addresses; see `services/voicehr/README.md`'s
+  "Resend email configuration" section and `.env.example`. **Operational
+  lesson from this session**: `docker compose restart` does **not** reload a
+  changed `.env` — it restarts the existing container's already-baked-in
+  environment. `docker compose up -d` (which recreates a container whose
+  config changed) is required after editing any service's `.env`; confirmed
+  by observing `settings.resend_api_key` read back empty after a `restart`
+  and correctly populated only after `up -d`.
+  `ADMIN_EMAIL` is now also set (VoiceHR only; RWS has no equivalent
+  setting) — harmless either way, it only gates the separate "report ready"
+  admin notification, never a candidate-facing path.
 - **`infra/.env` and every service's `DATABASE_URL` use placeholder secrets**
   (`changeme-*-key` convention; Postgres role passwords are literally
   `changeme`), and Postgres is published on `0.0.0.0:5432` (host network
@@ -1157,23 +1192,25 @@ DEMO READY verdict is still architecturally accurate (no code-level
 no longer repeat the incident (see the test-isolation invariant).
 **VoiceHR's Gemini access, the previous headline blocker, is resolved**
 (see Known Limitations' now-`RESOLVED` entry) — a live interview is a real
-option again, not just a fallback story. **What's still genuinely
-blocked**: `POST /v1/applications/{id}/invite` fails with a clean `502`
-whenever it's actually called, because VoiceHR's `RESEND_API_KEY` is
-*still* unset (confirmed empty this session, unrelated to and unaffected by
-the Gemini key change) and (since milestone 27) a successful email send is
-what makes an invite succeed at all. This does not block the demo sequence
+option again, not just a fallback story. **RESEND_API_KEY is now also
+resolved (milestone 43)** — both services have a real key, and live delivery
+to a deliverable address is confirmed working end to end (see Known
+Limitations). **What's still genuinely blocked, and is a Resend account
+setting, not a code gap**: no custom domain is verified on the Resend
+account, so a live "Invite" click against any of *this environment's*
+current demo candidates (all `@example.com` addresses) will still get a
+real, clean `502` — Resend itself rejects `@example.com` outright with a
+`422`. The only address that can currently receive a real invite is the
+Resend account's own verified one. This does not block the demo sequence
 below — it already routes around a live invite by using the
 pre-reconnected, already-`interviewed` application for the Report Detail
-leg — but it does mean a *live* "Invite" click, and therefore a *live*
-candidate-facing interview reachable through the normal recruiter flow,
-cannot be demonstrated until a real Resend key is configured and the
-`voicehr` container rebuilt/restarted. (A live interview *could* still be
-demonstrated by handing the presenter a direct interview link bypassing the
-email step, if that's ever wanted — not built, not needed unless asked
-for.) The infrastructure fix from the original audit
-(`restart: unless-stopped` on all four app containers) is still in place
-and still correct.
+leg — but a *live*, visibly-succeeding "Invite" click still needs either a
+verified custom domain or a demo candidate created with the account's own
+verified email address (neither exists yet). The infrastructure fix from
+the original audit (`restart: unless-stopped` on all four app containers) is
+still in place and still correct — note also that a changed `.env` needs
+`docker compose up -d`, not `restart`, to actually take effect (see Known
+Limitations).
 
 **AI / Gemini quota** — the three genuinely quota-consuming paths, for
 planning purposes: (1) `POST /v1/resumes` (one extraction call), (2)
@@ -1189,9 +1226,12 @@ zero quota.
 Jobs → Job Detail (`Email Delivery Smoke Test Engineer`, ranked matches) →
 Select (a *different* qualified candidate than the two already in the
 restored data, to show the live flow working — Second Brain retrieval isn't
-re-run, so this is instant and free) → Applications → **Invite only if
-`RESEND_API_KEY` has been configured for the day** (otherwise skip this
-click and say so — see the verdict above); either way, continue to → Report
+re-run, so this is instant and free) → Applications → **Invite really
+succeeding is now demonstrable for real** — use `Smoketest Live Invite Demo
+Engineer` (milestone 44)'s already-qualified candidate/application
+(`095731d3-...`) whose email is the Resend account's own verified address
+(every *other* restored demo candidate is still `@example.com` and will
+still 502, see the verdict above); either way, continue to → Report
 Detail on application `a2769e7b-f63b-4d73-8ac3-a2e443b3d46b` (the
 already-`interviewed` one, reconnected to VoiceHR's real report). **Know
 before presenting it — this changed since the last time this section was
@@ -1238,9 +1278,10 @@ as the safe, persisted backbone of the demo.
   naming the upstream, never a stack trace. Same move.
 - An application already `interviewed`/`completed` → re-inviting correctly
   409s. View its existing report instead of retrying.
-- An invite fails because email delivery failed (e.g. `RESEND_API_KEY`
-  missing/wrong, or Resend itself rejects the request) → a clean `502` naming
-  the reason, verified live in a real browser (error banner, Invite/Accept/
+- An invite fails because email delivery failed (Resend's sandbox rejecting
+  an unverified/`@example.com` address is the expected case now that the key
+  itself is configured — see Known Limitations) → a clean `502` naming the
+  reason, verified live in a real browser (error banner, Invite/Accept/
   Reject all still enabled, status still `selected`). Retrying is always safe
   — the same interview is reused, never duplicated.
 - The orphaned candidate (`0a699701-...`, currently sitting in application
@@ -1253,10 +1294,14 @@ as the safe, persisted backbone of the demo.
 /v1/jobs` returns the restored `Email Delivery Smoke Test Engineer` job (not
 `[]` — if it does return empty, re-run
 `services/recruitment-workflow/scripts/seed_demo_data.py --yes --job-title
-"Email Delivery Smoke Test Engineer"`); if a live "Invite" click is wanted,
-confirm `RESEND_API_KEY` is set in `services/voicehr/.env` and the container
-has been rebuilt/restarted since (currently unset — otherwise skip that one
-click, per the demo sequence above); do not click Invite/Accept on
+"Email Delivery Smoke Test Engineer"`); a live, visibly-*succeeding* "Invite"
+click is now demonstrable using the milestone 44 application
+(`095731d3-...`, already `invited`, or re-invite it live if you want the
+click itself on stage) — its candidate's email is the Resend account's own
+verified address (`RESEND_API_KEY` itself is configured in both services'
+`.env` — see Known Limitations — every *other* candidate here is still
+`@example.com` and will still `502`, which is Resend's sandbox recipient
+restriction, not a missing key); do not click Invite/Accept on
 application `3a6df887-...` (the orphaned candidate, see above); do one
 low-stakes Gemini smoke check the morning of, not during rehearsal (today's
 quota is exhausted — see Known Limitations — confirm it has reset); confirm
@@ -1279,12 +1324,14 @@ no `.env` file changed since last verified boot.
    persisted volume) was found and fixed, and re-verified live.
 6. *Can you run a live candidate interview right now?* — The Gemini side is
    fixed (see Known Limitations' `RESOLVED` entry — verified with a real
-   Gemini Live session generating real audio, not just a text call), but
-   the *recruiter-facing* invite path still can't send the interview email
-   live, because VoiceHR's `RESEND_API_KEY` is unset — a separate, unrelated
-   setting. The honest answer either way: "the AI half is confirmed working
-   again; only the email-delivery credential for actually reaching a
-   candidate is still missing," not "the AI is broken."
+   Gemini Live session generating real audio, not just a text call), and the
+   *recruiter-facing* invite path can now genuinely send a real email too
+   (milestone 43) — the one remaining constraint is Resend's own sandbox
+   mode (no verified custom domain yet), which limits real delivery to the
+   Resend account's own verified address rather than an arbitrary candidate.
+   The honest answer: "both halves are confirmed working for real; sending
+   to an arbitrary candidate address specifically needs a verified sending
+   domain, which is a Resend account setting, not a code gap."
 7. *Does the language interview affect the resume match score?* — No,
    deliberately. `final_score`/`qualified` come only from `scoring.py`
    (resume matching); the language gate is a separate, later, deterministic
@@ -2599,27 +2646,142 @@ re-verifying against current source, per every prior session's own discipline.
     real generated ICS was printed and hand-verified against RFC 5545) and
     the 16 dedicated unit tests, not by a real inbox.
 
+**This session (real `RESEND_API_KEY` configured, milestone 43)**: a real
+Resend key was added to VoiceHR's `.env`; RWS's own `.env` had no
+`RESEND_API_KEY` entry at all (each service needs its own — they're
+independent Resend integrations) and was missing it, so it was added there
+too. **Caught one real operational trap while doing this**: `docker compose
+restart` does not reload a changed `.env` file — it restarts the existing
+container's already-baked-in environment unchanged. Confirmed directly:
+`settings.resend_api_key` read back empty (`''`) inside the container after
+a `restart`, and only populated correctly after `docker compose up -d`
+(which recreates the container because its config changed). Both services
+were then live-verified with **real Resend deliveries, not just a
+credential-presence check**: called VoiceHR's `_send_email` and RWS's
+`send_interview_round_notification` (the latter with a real ICS attachment)
+directly against the Resend account's own verified address —
+both genuinely succeeded and the emails arrived. Then verified the real
+*product* path: a live `POST /v1/applications/{id}/invite` against demo
+application `8fc853eb-bc32-445e-9e74-691ce05a81d3` now reaches Resend for
+real (previously an instant "not configured" failure) and correctly still
+leaves `Application.status` at `selected`/`invite_attempt_number` at `0` on
+failure — the failure itself is now a genuine Resend `422 validation_error`
+("Please use our testing email address instead of domains like
+`example.com`"), since every candidate email in this environment's demo
+data uses `@example.com`. This is expected, not a bug: Resend's sandbox mode
+(no verified custom domain configured) only accepts the account's own
+registered address as a recipient — confirmed both failure shapes live,
+`422` for a disallowed placeholder domain and `403` for a real-but-unverified
+one. No code changed this session — this was configuration plus live
+verification of already-implemented milestones 27/41-42, closing the gap
+those milestones' own write-ups left open ("no real email has ever actually
+been delivered"). See Known Limitations and `[NEXT]` for what this does and
+does not unblock for the live demo.
+
+**This session (a real, deliverable invite fully set up end to end,
+milestone 44)**: milestone 43 proved the mailers work in isolation; this
+went one step further and drove the actual recruiter-facing pipeline for
+real, with a genuinely deliverable candidate. A new candidate was created
+through the real upload path (`POST /v1/resumes`, a hand-built minimal PDF
+whose text content gives the candidate's email as the Resend account's own
+verified address) — real Gemini structured extraction ran and correctly
+pulled that email out (confirmed via `GET
+/v1/candidates/{id}/identity`), candidate `e7e2f34f-5c61-4eb8-8ee6-67c80e161b75`.
+A new job, `Smoketest Live Invite Demo Engineer`
+(`f7d2f474-5284-4d6e-81ef-6fcb31d89c0d`), was created with required skills
+matching this candidate's resume exactly, so a real Gemini JD-structuring +
+real Second Brain retrieval + real scoring pass genuinely qualified this
+candidate (`final_score: 0.909`, hard gate passed) alongside the existing
+candidate pool, no scoring shortcuts taken. That match was selected into a
+real application (`095731d3-a1ba-4738-82b4-3c2a9182602f`), then a real
+`POST /v1/applications/{id}/invite` call succeeded outright —
+`status: "invited"` — the **first successful live "Invite" click in this
+project's history**; every prior session's attempt failed, first because no
+key existed, and even after milestone 43's key existed because every demo
+candidate's email is `@example.com`. Confirmed directly in VoiceHR's own
+SQLite (not just trusting the 200 response): `invite_email_sent_at` is set,
+`invite_email_error` is `NULL`, for this interview row specifically — the
+same query against this project's history of invite attempts had never once
+returned a non-null `invite_email_sent_at` before. **A real VoiceHR
+interview invitation email, containing a real, working interview link, is
+sitting in the Resend account's own inbox right now.** No code changed this
+session either — this was entirely live data setup through already-existing
+real endpoints (resume upload, job creation, select, invite), deliberately
+not a direct DB write, specifically so every step genuinely exercises real
+Gemini + real Second Brain + real Resend, not a shortcut. This candidate/
+job/application are left in place as new, real demo data (same convention
+as every other session's smoketest artifacts) — `e7e2f34f-...` is a
+**usable, non-orphaned candidate** (unlike `0a699701-...`), and this
+specific application is now the one to point to for demonstrating a live,
+succeeding "Invite" click.
+
+**This session (candidate interview page redesign, milestone 45)**: the
+VoiceHR candidate-facing interview page (`services/voicehr/frontend/
+interview.html` + its rules in `theme.css`) carried its own bespoke dark
+"midnight" theme — different hex values, `Inter`/`Georgia` fonts, its own
+button gradient — visually disconnected from the actual, current design
+system the rest of the product runs (RWS's V2 "AI recruitment command
+center": deep charcoal base, translucent glass panels, one signature
+cyan-violet gradient, aurora-bloom+grid+noise backdrop, plain system-ui
+font, documented in `services/recruitment-workflow/frontend/src/styles/
+variables.css`). Ported the real `--v2-*` token values into `theme.css`
+under a new, clearly-commented `:root` block, scoped so only the interview
+page's own selectors read them — `.linen-page` (admin/report, a separate,
+deliberately-untouched light theme) never does, confirmed by a live
+regression screenshot of `/admin` showing it completely unaffected. Rebuilt:
+same three-layer aurora/grid/noise backdrop as the recruiter Dashboard, glass
+card/task panels, the exact cyan-to-violet gradient CTA button pattern, a
+brand mark identical to the recruiter sidebar's (same icon, same "Company
+Second Brain" wordmark) so a candidate arriving from the invite email
+recognizes it as the same product, and the live-transcript panel (previously
+a stray light-themed box hardcoded inline, inconsistent with the dark page
+around it even before this change) moved into `theme.css` as a proper V2
+glass panel. Consolidated two near-duplicate override sections that both
+targeted `.midnight-page`'s selectors into one canonical section, and
+removed the CSS custom properties (`--midnight`, `--night-*`, `--line-dark`,
+`--surface-dark`, `--shadow-dark`) that redesign left with zero remaining
+uses (confirmed by grep before removing). Kept the orb/wave audio
+visualizer concept as-is, re-tinted — a re-skin, not a UX rethink. Zero JS
+behavior changed; interview.html's inline `<style>` now holds only the
+step-visibility rules the page's own script logic depends on. **One real
+bug found and fixed during live verification**: the wizard-step glass-panel
+rule (`.midnight-page .step:not(#step-interview)`) was a bare descendant
+selector that also matched the small task-progress-dot elements deep inside
+`.task-card` (they share the plain `.step` class for their current/done
+state) — that gave them a full card's padding/background instead of staying
+thin 26px bars, caught via a real-browser screenshot showing them rendered
+as large squares. Fixed by scoping to `.midnight-page > .card > .step` (a
+direct-child combinator the nested dots can't satisfy). Verified live via
+Playwright screenshots (desktop + the existing 560px mobile breakpoint)
+through consent, mic-test, interview-in-progress (orb/wave/task-card/live-
+transcript rendered via direct `showStep()` calls rather than a real
+Gemini Live session, deliberately, to avoid consuming a real interview
+token), done, terminated, retry, mic-lost, and error states — all render
+correctly, no console errors beyond a pre-existing unrelated 404. Used a
+throwaway `pending`-status interview row inserted directly for the
+screenshot pass, deleted immediately after. No RWS frontend files touched.
+
 ---
 
 ## [NEXT]
 
-**A real, fresh end-to-end VoiceHR interview (milestone 35's own follow-up,
-deliberately deferred behind the interview-round-notifications feature,
-which is now complete).**
-
-Separately, unrelated and still genuinely blocking a *live*
-recruiter-initiated invite: `RESEND_API_KEY` is still unset (for both
-VoiceHR's own candidate-invite email and RWS's own interview-round
-notifications, milestones 27/41-42 — each service needs its own key in its
-own `.env`). Not a code task — needs a real key configured and the relevant
-container rebuilt/restarted. Once one exists for RWS specifically, one
-opportunistic (not urgent) check worth doing: send one real interview-round
-notification and confirm a real calendar client (Gmail/Outlook) actually
-offers "Add to calendar" from the received email, and that a follow-up
-reschedule/cancel updates or removes that same calendar entry rather than
-creating a duplicate — milestone 42's own ICS correctness is fully proven by
-direct inspection and 16 unit tests, but has never been seen through a real
-inbox.
+**A real, fresh end-to-end VoiceHR interview.** Every automatable
+prerequisite is now done — the last remaining step is not a coding task.
+**Real finding this session**: the milestone 44 interview link was, in fact,
+already used once (found live via `/admin`'s Completed Reports list while
+regression-checking the redesign above) — "Amine Verified Demo Candidate"
+shows `status: inconclusive` in VoiceHR's own SQLite (`started_at`/
+`completed_at` only ~30 seconds apart) and the admin reports list shows
+"Evaluation unavailable" / `OVERALL: N/A`. This was not a fresh, complete,
+five-section attempt — 30 seconds cannot have reached Section E — so this
+task's actual goal (confirm Section E's adaptive follow-up and a real
+`interaction_spontaneity` score) is still open. Whether that short attempt
+was a deliberate quick check of the page/link or a real failed attempt is
+not something this session determined; either way, a genuine, complete,
+five-section attempt still has not been observed since milestone 31's
+rubric rewrite. A fresh interview would need a new invite (the existing
+application is now past `invited`) or VoiceHR's own direct link/admin
+surface as a fallback (see VoiceHR's README).
 
 Milestone 35 confirmed VoiceHR's Gemini access itself works again (a real
 Live session generating real audio, a real evaluator call producing a real
@@ -2627,14 +2789,24 @@ result) — but only at the raw connectivity level. Two things have never been
 observed together since milestone 31's rubric rewrite: a *fresh* interview
 actually reaching the new Section E adaptive follow-up question, and a real
 transcript producing the new `interaction_spontaneity` dimension score.
-Concrete scope when picked up: with a working RWS invite (or, since
-`RESEND_API_KEY` is unset, VoiceHR's own direct interview link/admin surface
-as a fallback — see VoiceHR's README), conduct one real, controlled
-interview end to end in a real browser — mic permissions, the full
-five-section flow including Section E, a real completion — then check the
+Concrete scope when picked up: using the real invite link already sent
+(milestone 44) or VoiceHR's own direct interview link/admin surface as a
+fallback (see VoiceHR's README), conduct one real,
+controlled interview end to end in a real browser — mic permissions, the
+full five-section flow including Section E, a real completion — then check the
 resulting report: does `interaction_spontaneity` get a real score, does the
 rest of the rubric look sane, does the webhook reach RWS correctly, does the
 language gate compute correctly against it.
+
+Separately, also opportunistic and also needing a human with inbox access,
+not more code: send one real interview-round notification (milestones
+41-42) to a deliverable address and confirm a real calendar client (Gmail/
+Outlook) actually offers "Add to calendar" from the received email, and that
+a follow-up reschedule/cancel updates or removes that same calendar entry
+rather than creating a duplicate. The ICS's own correctness is fully proven
+by direct inspection and 16 unit tests, and milestone 43 proved the email
+itself genuinely arrives — only the visual "does a real calendar client
+render it right" step remains.
 
 Everything else in Known Limitations above (no pagination, Second Brain's
 missing test suite, the write-only `candidate_feedback` sink, VoiceHR's
