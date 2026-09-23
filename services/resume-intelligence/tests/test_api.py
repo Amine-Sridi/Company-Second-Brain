@@ -521,6 +521,32 @@ def test_contact_lookup_with_correct_key_and_known_id_returns_contact():
     assert body["phone"] == "+33612345678"
 
 
+def test_contact_lookup_for_a_candidate_with_no_email_returns_200_not_500():
+    """A stored candidate can genuinely have no email: candidates.email is nullable
+    and store_candidate explicitly inserts such rows ("if the parsed JSON has no
+    email, always insert a new row -- we cannot dedup"), which
+    test_store_candidate_without_email_* already covers. Both halves were tested
+    separately; their intersection was not -- and it was broken. ContactLookupResponse
+    required a non-null EmailStr, so this route raised ValidationError *inside* the
+    handler and returned an opaque 500, which RWS reported to the recruiter as
+    "Resume Intelligence unavailable" instead of the real, actionable reason."""
+    candidate_id = uuid.uuid4()
+    fake = _FakeCandidate(id=candidate_id, name="Jean Dupont", email=None, phone=None)
+    client = _contact_client(fake)
+    try:
+        resp = client.get(
+            f"/v1/candidates/{candidate_id}/contact",
+            headers={"x-api-key": api.settings.service_api_key},
+        )
+    finally:
+        api.app.dependency_overrides.clear()
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["name"] == "Jean Dupont"
+    assert body["email"] is None
+
+
 def test_contact_lookup_with_malformed_candidate_id_returns_422_not_500():
     client = _contact_client(None)
     try:

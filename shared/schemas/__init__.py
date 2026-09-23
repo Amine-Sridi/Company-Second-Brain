@@ -43,7 +43,18 @@ class ContactLookupResponse(BaseModel):
 
     candidate_id: UUID4
     name: str = Field(min_length=1, max_length=200)
-    email: EmailStr
+    # Optional because a candidate genuinely can be stored with no email at all:
+    # resume_intel.candidates.email is nullable and Resume Intelligence's own
+    # store_candidate explicitly supports that case ("if the parsed JSON has no
+    # email, always insert a new row -- we cannot dedup"). This was a required
+    # EmailStr until that combination was traced: get_contact constructs this model
+    # directly, so a null email raised ValidationError *inside* the route and
+    # surfaced as an opaque 500, which RWS then reported as "Resume Intelligence
+    # unreachable" -- a misleading upstream-failure message for what is really a
+    # missing-data condition. Callers that actually need an address (RWS's invite
+    # and interview-round notification paths) check for it explicitly and report
+    # that specific reason instead.
+    email: Optional[EmailStr] = None
     phone: Optional[str] = Field(None, max_length=30)
 
 

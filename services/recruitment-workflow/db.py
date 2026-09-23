@@ -943,6 +943,13 @@ def record_interview_result(
     'invited' -- e.g. a duplicate/out-of-order webhook delivered after the recruiter
     already made a decision, or before an invite was ever recorded. The caller (the
     webhook route) treats None as "nothing to do, respond 200" rather than a failure.
+
+    Deliberately does NOT commit or roll back: this runs inside the same transaction
+    as the webhook receipt row that authorizes it (see insert_webhook_event's own
+    docstring for the lost-result window that separate transactions opened), so the
+    webhook route commits once, after both. A 0-row UPDATE is not an error condition
+    and leaves the session perfectly usable, so no rollback is needed for it either
+    -- and issuing one here would now also discard the receipt row.
     """
     result = db.execute(
         update(Application)
@@ -956,9 +963,8 @@ def record_interview_result(
         )
     )
     if result.rowcount == 0:
-        db.rollback()
         return None
-    db.commit()
+    db.flush()
     return get_application(db, application_id)
 
 
@@ -1144,10 +1150,23 @@ def insert_webhook_event(
     processed: bool,
 ) -> InterviewWebhookEvent:
     """
-    Insert a webhook receipt row. Raises sqlalchemy.exc.IntegrityError if delivery_id was
-    already recorded -- callers must catch this and treat it as a duplicate delivery
-    (200 no-op), not an error, since the database's UNIQUE constraint is the actual
-    dedup mechanism, not a check-then-act read beforehand.
+    Adds a webhook receipt row to the session. Raises sqlalchemy.exc.IntegrityError if
+    delivery_id was already recorded -- callers must catch this and treat it as a
+    duplicate delivery (200 no-op), not an error, since the database's UNIQUE
+    constraint is the actual dedup mechanism, not a check-then-act read beforehand.
+
+    Deliberately does NOT commit -- the receipt and the application state change it
+    authorizes are one transaction, owned by main.py's webhook route (the same
+    caller-owns-the-transaction split create_job_with_description/create_match_result
+    already use). This used to commit here, which opened a real window: the
+    delivery_id was durably recorded *before* record_interview_result ran, so a crash
+    or DB error between the two left the delivery permanently marked as seen while
+    the application was never updated -- and because the UNIQUE constraint is the
+    dedup mechanism, every VoiceHR retry of that same delivery then returned
+    "duplicate_ignored", discarding a real interview result with no recovery path.
+    Only `db.flush()`, which both assigns event.id and is what makes a concurrent
+    duplicate delivery block on the unique index until this transaction resolves
+    (it then correctly loses with IntegrityError, exactly as before).
     """
     event = InterviewWebhookEvent(
         delivery_id=delivery_id,
@@ -1158,15 +1177,16 @@ def insert_webhook_event(
         processed=processed,
     )
     db.add(event)
-    db.commit()
-    db.refresh(event)
+    db.flush()  # assign event.id (and surface a duplicate delivery_id) without committing
     return event
 
 
 def mark_webhook_event_processed(db: Session, event_id: uuid.UUID, processed: bool) -> None:
+    """Deliberately does NOT commit -- same single-webhook-transaction rule as
+    insert_webhook_event above; main.py's webhook route commits once at the end."""
     db.execute(
         update(InterviewWebhookEvent)
         .where(InterviewWebhookEvent.id == event_id)
         .values(processed=processed)
     )
-    db.commit()
+    db.flush()

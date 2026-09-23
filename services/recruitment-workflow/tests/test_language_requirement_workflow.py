@@ -43,7 +43,13 @@ def client(monkeypatch):
         main, "get_recruiter_by_id",
         lambda db, rid: _fake_recruiter(recruiter_id) if rid == recruiter_id else None,
     )
-    main.app.dependency_overrides[main.get_db] = lambda: SimpleNamespace()
+    # commit/rollback are no-op stand-ins for a real Session's own: routes that own
+    # their transaction (the VoiceHR webhook commits once, after both the receipt row
+    # and the application state change -- see main.py) call them directly, and a bare
+    # SimpleNamespace has neither.
+    main.app.dependency_overrides[main.get_db] = lambda: SimpleNamespace(
+        commit=lambda: None, rollback=lambda: None
+    )
     try:
         yield TestClient(main.app), recruiter_id
     finally:
@@ -324,9 +330,6 @@ def test_duplicate_webhook_delivery_does_not_call_record_interview_result_twice(
     monkeypatch.setattr(main, "insert_webhook_event", fake_insert_webhook_event)
     monkeypatch.setattr(main, "record_interview_result", fake_record_interview_result)
     monkeypatch.setattr(main, "mark_webhook_event_processed", lambda db, eid, processed: None)
-    # The route's IntegrityError branch calls db.rollback() on a duplicate delivery --
-    # the shared client fixture's bare SimpleNamespace() has no such method.
-    main.app.dependency_overrides[main.get_db] = lambda: SimpleNamespace(rollback=lambda: None)
 
     first = test_client.post("/v1/webhooks/voicehr", content=body, headers=headers)
     second = test_client.post("/v1/webhooks/voicehr", content=body, headers=headers)

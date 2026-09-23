@@ -313,13 +313,33 @@ def _create_round_via_api(client, auth_headers, application_id, **overrides):
 # contact lookup, real notification_status/notification_error persistence.
 # ---------------------------------------------------------------------------
 
+@pytest.fixture
+def resend_api_key_unset(monkeypatch):
+    """
+    Makes the "RESEND_API_KEY is not configured" precondition explicit for the tests
+    that are specifically about that branch.
+
+    It used to be ambient: no key existed anywhere in this environment, so the real,
+    unmocked mailer always stopped at its own not-configured guard. That silently
+    stopped being true once a real key was configured (milestone 43) -- these tests
+    then began making **live HTTP calls to api.resend.com** during a test run and
+    asserting on whatever the real provider happened to answer (a 422 for the
+    @example.com recipients they use). Pinning the setting here is what keeps them
+    testing the branch they name, deterministically and without touching the network.
+    """
+    import main
+
+    monkeypatch.setattr(main.settings, "resend_api_key", None)
+
+
 def test_create_interview_round_missing_resend_api_key_fails_cleanly(
-    client, auth_headers, mock_second_brain, mock_resume_intelligence, mock_voicehr, db_session
+    client, auth_headers, mock_second_brain, mock_resume_intelligence, mock_voicehr,
+    db_session, resend_api_key_unset,
 ):
-    """No RESEND_API_KEY is configured in this test environment (see .env.example) --
-    the real, unmocked interview_round_mailer must fail cleanly with a clear error,
-    and the round must still be created, exactly like VoiceHR's own candidate-invite
-    email behaves when its RESEND_API_KEY is unset."""
+    """With no RESEND_API_KEY configured, the real, unmocked interview_round_mailer
+    must fail cleanly with a clear error, and the round must still be created --
+    exactly like VoiceHR's own candidate-invite email behaves when its own
+    RESEND_API_KEY is unset."""
     application_id = _interviewed_application(
         client, auth_headers, mock_second_brain, mock_resume_intelligence, mock_voicehr
     )
@@ -400,10 +420,54 @@ def test_create_interview_round_never_persists_candidate_contact(
     assert row is not None
     candidate_email = "candidate@example.com"  # select_and_invite's own registered contact
     candidate_name = "Test Candidate"
-    for column in (row.interviewer_name, row.interviewer_email, row.location, row.notes):
+    # notification_error is included deliberately: it is the one column a failed send
+    # writes free text into, and it was missing from this list while this test still
+    # claimed to prove "never persists candidate contact" -- see the failure-path test
+    # directly below, which is the case that can actually put PII here.
+    for column in (
+        row.interviewer_name, row.interviewer_email, row.location, row.notes,
+        row.notification_error,
+    ):
         if column is not None:
             assert candidate_email not in column
             assert candidate_name not in column
+
+
+def test_failed_notification_never_persists_candidate_contact_in_the_error(
+    client, auth_headers, mock_second_brain, mock_resume_intelligence, mock_voicehr,
+    mock_interview_round_mailer, db_session,
+):
+    """The failure path is where candidate PII could actually reach the database:
+    a delivery failure's message is persisted verbatim into notification_error and
+    returned in the API response. The mailer's own sanitization is unit-tested
+    directly (services/recruitment-workflow/tests/test_interview_round_mailer.py);
+    this asserts the persisted column and the response stay clean end to end, against
+    a real Postgres row."""
+    application_id = _interviewed_application(
+        client, auth_headers, mock_second_brain, mock_resume_intelligence, mock_voicehr
+    )
+    # Shaped exactly like what the real mailer now raises (status code, no address).
+    mock_interview_round_mailer.fail(
+        "candidate: Email delivery rejected by provider (HTTP 403); "
+        "interviewer: Email delivery rejected by provider (HTTP 403)"
+    )
+
+    round_ = _create_round_via_api(client, auth_headers, application_id)
+
+    assert round_["notification_status"] == "failed"
+
+    from db import InterviewRound
+
+    row = db_session.query(InterviewRound).filter(InterviewRound.id == uuid.UUID(round_["id"])).first()
+    candidate_email = "candidate@example.com"
+    candidate_name = "Test Candidate"
+    assert candidate_email not in row.notification_error
+    assert candidate_name not in row.notification_error
+    assert candidate_email not in round_["notification_error"]
+    assert candidate_name not in round_["notification_error"]
+    # Sanitized, not empty -- the recruiter still learns which side failed and why.
+    assert "candidate:" in row.notification_error
+    assert "403" in row.notification_error
 
 
 # ---------------------------------------------------------------------------
@@ -606,9 +670,10 @@ def test_cancel_sends_a_cancellation_notification_with_incremented_sequence(
 
 
 def test_reschedule_missing_resend_api_key_fails_cleanly_but_still_reschedules(
-    client, auth_headers, mock_second_brain, mock_resume_intelligence, mock_voicehr, db_session,
+    client, auth_headers, mock_second_brain, mock_resume_intelligence, mock_voicehr,
+    db_session, resend_api_key_unset,
 ):
-    """No RESEND_API_KEY is configured in this test environment -- the real,
+    """With no RESEND_API_KEY configured -- the real,
     unmocked mailer must fail cleanly, and the reschedule itself must still
     succeed (never rolled back), exactly like create's own contract."""
     application_id = _interviewed_application(
@@ -638,7 +703,8 @@ def test_reschedule_missing_resend_api_key_fails_cleanly_but_still_reschedules(
 
 
 def test_cancel_missing_resend_api_key_fails_cleanly_but_still_cancels(
-    client, auth_headers, mock_second_brain, mock_resume_intelligence, mock_voicehr, db_session,
+    client, auth_headers, mock_second_brain, mock_resume_intelligence, mock_voicehr,
+    db_session, resend_api_key_unset,
 ):
     application_id = _interviewed_application(
         client, auth_headers, mock_second_brain, mock_resume_intelligence, mock_voicehr

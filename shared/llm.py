@@ -51,7 +51,8 @@ class GeminiProvider(LLMProvider):
     """
     Gemini implementation using google-genai 2.18.0 (same SDK version as VoiceHR).
 
-    API key is read from GEMINI_API_KEY. Default model: gemini-2.5-flash.
+    API key is read from GEMINI_API_KEY. Default model: DEFAULT_MODEL below
+    (callers normally pass their own `model=` from settings anyway).
     _client and _types are for unit testing only and are not part of the public API.
     """
 

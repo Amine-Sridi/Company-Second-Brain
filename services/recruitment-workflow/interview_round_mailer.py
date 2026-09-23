@@ -197,6 +197,19 @@ async def _send_email(
     api_key: str, from_address: str, to: str, subject: str, body: str,
     ics: Optional[bytes] = None, ics_content_type: Optional[str] = None,
 ) -> None:
+    """
+    PII constraint on every error raised here: the message must never contain `to`
+    (the recipient address) or the provider's raw response body. Whatever this
+    raises is persisted verbatim by main.py into
+    `recruitment.interview_rounds.notification_error` and returned in the API
+    response -- and when `to` is the candidate, that would put candidate PII into
+    RWS's own database, which CLAUDE.md forbids ("Candidate PII lives only in
+    Resume Intelligence"). Resend's own rejection bodies echo the recipient
+    address back too, so the body cannot be included either. The HTTP status code
+    is enough to tell the real cases apart (403 = sender/recipient not permitted
+    on an unverified domain, 422 = malformed/disallowed recipient) without naming
+    anyone; the caller already adds which side failed ("candidate:"/"interviewer:").
+    """
     payload = {"from": from_address, "to": [to], "subject": subject, "text": body}
     if ics is not None:
         payload["attachments"] = [
@@ -215,10 +228,12 @@ async def _send_email(
             )
     except httpx.HTTPError as exc:
         raise NotificationDeliveryError(
-            f"Email send to {to} failed: {type(exc).__name__}"
+            f"Email delivery failed: {type(exc).__name__}"
         ) from exc
     if response.status_code not in (200, 201):
-        raise NotificationDeliveryError(f"Email send to {to} failed: {response.text}")
+        raise NotificationDeliveryError(
+            f"Email delivery rejected by provider (HTTP {response.status_code})"
+        )
 
 
 async def send_interview_round_notification(

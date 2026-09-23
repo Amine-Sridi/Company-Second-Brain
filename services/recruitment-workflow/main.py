@@ -1112,6 +1112,10 @@ async def _notify_interview_round(
         )
         if contact is None:
             raise ResumeIntelligenceClientError("Candidate contact not found")
+        if not contact.get("email"):
+            # Same missing-data case invite_application reports as a 422 -- here it
+            # is just one more reason a best-effort notification can't be delivered.
+            raise ResumeIntelligenceClientError("Candidate has no email address on file")
         await interview_round_mailer.send_interview_round_notification(
             api_key=settings.resend_api_key,
             from_address=settings.resend_from_address,
@@ -1674,6 +1678,16 @@ async def invite_application(
             status_code=422,
             detail="Candidate contact information not found; cannot invite to interview",
         )
+    # A stored candidate can legitimately have no email (see
+    # shared.schemas.ContactLookupResponse.email) -- that is a missing-data
+    # condition the recruiter can act on, not an upstream failure, so it gets the
+    # same explicit 422 as "no contact record at all" rather than being passed to
+    # VoiceHR as a null address and coming back as an opaque 502.
+    if not contact.get("email"):
+        raise HTTPException(
+            status_code=422,
+            detail="Candidate has no email address on file; cannot invite to interview",
+        )
 
     attempt_number = application.invite_attempt_number + 1
     idempotency_key = f"{application_id}:{attempt_number}"
@@ -1924,6 +1938,13 @@ async def voicehr_webhook(
     # level are treated as interview content here and must never be logged).
     log_fields = {"delivery_id": x_delivery_id, "interview_status": payload.interview_status}
 
+    # The receipt row and the application state change it authorizes are ONE
+    # transaction, committed once at each return below. Committing the receipt
+    # separately (as this used to) meant a crash between the two left the delivery
+    # permanently recorded but never applied -- and since the receipt's UNIQUE
+    # delivery_id IS the dedup mechanism, every retry of that delivery then
+    # short-circuited to "duplicate_ignored", silently discarding a real interview
+    # result forever. See db.insert_webhook_event's own docstring.
     try:
         event = insert_webhook_event(
             db,
@@ -1942,6 +1963,9 @@ async def voicehr_webhook(
         return {"status": "duplicate_ignored"}
 
     if application_id is None:
+        # The receipt is still worth keeping -- recording an unresolvable reference is
+        # exactly what this table exists for (see db.InterviewWebhookEvent).
+        db.commit()
         logger.info("webhook_received", extra={**log_fields, "outcome": "unknown_application"})
         return {"status": "unknown_application"}
 
@@ -1950,11 +1974,14 @@ async def voicehr_webhook(
     )
     if updated is None:
         # Not an error: the application doesn't exist, or isn't currently 'invited'
-        # (already interviewed/decided, or never invited). Nothing more to do.
+        # (already interviewed/decided, or never invited). Nothing more to do -- keep
+        # the receipt (processed stays False) so the delivery is still auditable.
+        db.commit()
         logger.info("webhook_received", extra={**log_fields, "outcome": "no_op"})
         return {"status": "no_op"}
 
     mark_webhook_event_processed(db, event.id, True)
+    db.commit()
     logger.info(
         "webhook_received",
         extra={**log_fields, "outcome": "processed", "application_id": str(application_id)},

@@ -74,7 +74,15 @@ contradiction — and if you do, follow the process in "If you think a decision 
 ## Privacy boundaries (treat as strict, not a guideline)
 
 - Candidate PII (name, email, phone, address, raw resume) lives **only** in Resume
-  Intelligence.
+  Intelligence — with exactly one deliberate, scoped exception: **VoiceHR persists
+  `candidate_name` and `candidate_email`** on its own `interviews` rows, because it
+  owns sending the candidate their interview link and greeting them by name (it is a
+  pre-existing system with its own SQLite, per the decisions above). That exception is
+  limited to those two fields, in that one table. It is **not** a precedent: RWS and
+  Second Brain persist no identity fields at all, and nothing else may start. If you
+  find yourself about to write a candidate's name or email into any other service's
+  storage — including indirectly, e.g. inside an error message, a log line, or a status
+  column — that is the bug, not the boundary.
 - Every other service uses the opaque `candidate_id` — never raw identity fields.
 - Second Brain must never become a shadow candidate database. Do not add PII-shaped fields to
   its schemas, even "just for convenience" or "temporarily."

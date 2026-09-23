@@ -73,8 +73,16 @@ def _synthesize_raw_text(candidate_json: dict) -> str:
     """
     Build the retrieval/embedding text from allow-listed professional fields
     only. This is NEVER the original extracted resume text, and never touches
-    candidate_json["basics"] -- no name, email, phone, address, or links can
-    reach this string.
+    candidate_json["basics"] -- the section holding name/email/phone/location/
+    links -- so no identity *field* can reach this string.
+
+    Known limit, stated precisely rather than overclaimed: the allow-list is
+    field-level, not content-level. work[].description and education[] entries are
+    free text Gemini extracted from the resume, so a resume that writes contact
+    details inside a bullet ("reachable at ...") could carry them through here.
+    Scrubbing that would need content inspection (regex/NER) over extracted text,
+    which is a real feature, not a tweak -- deliberately not built. What this
+    function does guarantee is that no *structured* identity field is ever copied.
     """
     lines: list[str] = []
 

@@ -1602,6 +1602,32 @@ def test_invite_application_missing_contact_returns_422_without_calling_voicehr(
     assert mock_voicehr.calls == []
 
 
+def test_invite_application_contact_without_email_returns_422_without_calling_voicehr(
+    client, auth_headers, mock_second_brain, mock_resume_intelligence, mock_voicehr
+):
+    """A candidate can genuinely be stored with a contact record but no email --
+    resume_intel.candidates.email is nullable and store_candidate explicitly supports
+    it (a resume with no extractable address). That is a missing-data condition the
+    recruiter can act on, so it must get the same explicit 422 as "no record at all",
+    not be passed to VoiceHR as a null address and come back as an opaque 502."""
+    candidate = make_candidate(skills=["Python"], similarity_score=0.9)
+    _, application_id = _select_one_candidate(client, auth_headers, mock_second_brain, candidate)
+    mock_resume_intelligence.set_contact(
+        candidate["candidate_id"],
+        {"candidate_id": candidate["candidate_id"], "name": "Alice", "email": None, "phone": None},
+    )
+
+    resp = client.post(
+        f"/v1/applications/{application_id}/invite",
+        json={"language": "en"},
+        headers=auth_headers,
+    )
+
+    assert resp.status_code == 422
+    assert "email" in resp.json()["detail"].lower()
+    assert mock_voicehr.calls == []
+
+
 def test_invite_application_voicehr_unavailable_returns_502(
     client, auth_headers, mock_second_brain, mock_resume_intelligence, mock_voicehr
 ):
@@ -1919,6 +1945,87 @@ def test_webhook_duplicate_delivery_id_is_idempotent(
     assert application.status == "interviewed"  # unaffected by the duplicate
 
 
+# ---------------------------------------------------------------------------
+# Webhook receipt durability. The receipt row and the application state change it
+# authorizes are one transaction (see db.insert_webhook_event): the receipt no
+# longer commits on its own, so every route path has to commit deliberately. These
+# assert each path actually does -- without them, a missing commit would silently
+# drop the audit receipt on the no-op paths, and (worse) the previous separate-commit
+# design's lost-result window would be easy to reintroduce unnoticed.
+# ---------------------------------------------------------------------------
+
+def _webhook_event(db_session, delivery_id: str):
+    from db import InterviewWebhookEvent
+
+    return (
+        db_session.query(InterviewWebhookEvent)
+        .filter(InterviewWebhookEvent.delivery_id == delivery_id)
+        .first()
+    )
+
+
+def test_webhook_receipt_and_state_change_are_both_persisted(
+    client, auth_headers, db_session, mock_second_brain, mock_resume_intelligence, mock_voicehr
+):
+    _, application_id = select_and_invite(
+        client, auth_headers, mock_second_brain, mock_resume_intelligence, mock_voicehr
+    )
+    body, headers = make_webhook_payload(application_id, delivery_id="receipt-processed-1")
+
+    resp = client.post(_WEBHOOK_URL, content=body, headers=headers)
+    assert resp.json()["status"] == "processed"
+
+    # Only genuinely committed rows survive this (see
+    # test_submit_job_retrieval_failure_returns_502's comment) -- which is the point:
+    # it is what makes these assertions about *committing* rather than merely flushing.
+    db_session.rollback()
+
+    from db import Application
+
+    event = _webhook_event(db_session, "receipt-processed-1")
+    application = (
+        db_session.query(Application).filter(Application.id == uuid.UUID(application_id)).first()
+    )
+    assert event is not None
+    assert event.processed is True
+    assert application.status == "interviewed"
+
+
+def test_webhook_receipt_is_persisted_even_when_the_application_is_not_invitable(
+    client, auth_headers, db_session, mock_second_brain
+):
+    """A no-op for application state is still a real delivery that must stay
+    auditable -- with processed=False recording that it was never applied."""
+    candidate = make_candidate(skills=["Python"], similarity_score=0.9)
+    _, application_id = _select_one_candidate(client, auth_headers, mock_second_brain, candidate)
+    body, headers = make_webhook_payload(application_id, delivery_id="receipt-noop-1")
+
+    resp = client.post(_WEBHOOK_URL, content=body, headers=headers)
+    assert resp.json()["status"] == "no_op"  # still 'selected', never invited
+
+    db_session.rollback()  # only a committed receipt survives -- see the test above
+
+    event = _webhook_event(db_session, "receipt-noop-1")
+    assert event is not None
+    assert event.processed is False
+
+
+def test_webhook_receipt_is_persisted_for_an_unresolvable_reference(client, db_session):
+    """Recording an unresolvable external_reference_id is precisely what this table
+    exists for (see db.InterviewWebhookEvent) -- it must survive the commit change."""
+    body, headers = make_webhook_payload("not-a-uuid", delivery_id="receipt-unknown-1")
+
+    resp = client.post(_WEBHOOK_URL, content=body, headers=headers)
+    assert resp.json()["status"] == "unknown_application"
+
+    db_session.rollback()  # only a committed receipt survives -- see the test above
+
+    event = _webhook_event(db_session, "receipt-unknown-1")
+    assert event is not None
+    assert event.application_id is None
+    assert event.processed is False
+
+
 def test_webhook_unknown_application_returns_200_noop(client, auth_headers):
     body, headers = make_webhook_payload(str(uuid.uuid4()))
     resp = client.post(_WEBHOOK_URL, content=body, headers=headers)
@@ -1991,7 +2098,8 @@ def test_webhook_inconclusive_status_persisted(
 
 
 def test_webhook_unexpected_error_returns_500(
-    client, auth_headers, mock_second_brain, mock_resume_intelligence, mock_voicehr, monkeypatch
+    client, auth_headers, db_session, mock_second_brain, mock_resume_intelligence, mock_voicehr,
+    monkeypatch,
 ):
     """
     A genuine unexpected failure (e.g. a DB error) must propagate rather than be
@@ -2014,9 +2122,22 @@ def test_webhook_unexpected_error_returns_500(
 
     monkeypatch.setattr(main, "record_interview_result", _boom)
 
-    body, headers = make_webhook_payload(application_id)
+    body, headers = make_webhook_payload(application_id, delivery_id="boom-1")
     with pytest.raises(RuntimeError, match="simulated transient database failure"):
         client.post(_WEBHOOK_URL, content=body, headers=headers)
+
+    # Simulates the real per-request session cleanup the `client` fixture's shared
+    # session skips -- same reasoning as test_submit_job_retrieval_failure_returns_502's
+    # own comment above; only a genuinely committed row survives it.
+    db_session.rollback()
+
+    # The receipt must NOT survive a failure that prevented the state change: the
+    # receipt and the update are one transaction, so the whole thing rolls back and
+    # a VoiceHR retry of this same delivery_id can still be applied. Before this fix
+    # the receipt was committed on its own, so this rollback would be a no-op and the
+    # row would still be here -- and its UNIQUE delivery_id would then make every
+    # retry short-circuit to "duplicate_ignored", discarding the result forever.
+    assert _webhook_event(db_session, "boom-1") is None
 
 
 # ===========================================================================

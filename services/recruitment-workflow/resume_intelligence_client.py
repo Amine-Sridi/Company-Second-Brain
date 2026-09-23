@@ -52,8 +52,13 @@ async def get_contact(
     if resp.status_code == 404:
         return None
     if resp.status_code != 200:
+        # Deliberately excludes resp.text: this is the PII-owning service's own
+        # contact endpoint, and main.py persists this exception's message into
+        # recruitment.interview_rounds.notification_error (see
+        # interview_round_mailer._send_email's own docstring for the same
+        # constraint). The status code alone is enough to act on.
         raise ResumeIntelligenceClientError(
-            f"Resume Intelligence contact lookup returned {resp.status_code}: {resp.text}"
+            f"Resume Intelligence contact lookup returned {resp.status_code}"
         )
     return resp.json()
 
@@ -69,7 +74,7 @@ async def list_candidates(base_url: str, api_key: str) -> list[dict]:
 
     if resp.status_code != 200:
         raise ResumeIntelligenceClientError(
-            f"Resume Intelligence candidate list returned {resp.status_code}: {resp.text}"
+            f"Resume Intelligence candidate list returned {resp.status_code}"
         )
     return resp.json()
 

@@ -2761,6 +2761,141 @@ correctly, no console errors beyond a pre-existing unrelated 404. Used a
 throwaway `pending`-status interview row inserted directly for the
 screenshot pass, deleted immediately after. No RWS frontend files touched.
 
+**This session (whole-project audit, milestone 46)**: a full 12-area audit
+(architecture, backend correctness, security/privacy, AI/ML, workflow,
+VoiceHR, frontend, database, infra/ops, tests, performance,
+maintainability), written to `PROJECT_AUDIT_AND_IMPROVEMENT_PROPOSAL.md` at
+the repo root. Every claim that mattered was re-verified against source
+rather than taken from these handoffs — several handoff claims were
+confirmed accurate (the HNSW index really does use `vector_cosine_ops`
+matching the `<=>` operator actually queried; every FK that is filtered on
+really is indexed; `process_interview`'s `finalized_at` claim really does
+have no `await` before it; transcript preservation across a reconnect really
+is the primary path, since `gemini_live.py` catches `WebSocketDisconnect`
+internally). **No CRITICAL findings**; the central architectural claim (the
+LLM never decides anything) was attacked specifically and held. Three HIGH
+findings, all at the seams *between* services, plus 13 MEDIUM and 14 LOW.
+See that file for the full findings, severities, and the phased roadmap.
+
+**This session (audit phase 1 — integrity & privacy, milestone 47)**:
+implemented the audit's own phase 1. Four fixes, each with a test that was
+first proven to fail against the pre-fix code:
+
+1. **H1 (HIGH, privacy defect): candidate email no longer reaches RWS's
+   database.** `interview_round_mailer._send_email` built its errors as
+   `f"Email send to {to} failed: {response.text}"` — where `to` *is* the
+   candidate's address on the candidate send, and where Resend's own
+   rejection body echoes the address back as well. `main.py` persists that
+   string verbatim into `recruitment.interview_rounds.notification_error`
+   (and returns it in the API response), so any delivery failure wrote
+   candidate PII into RWS's own storage — directly against CLAUDE.md's
+   "candidate PII lives only in Resume Intelligence". Errors now carry a
+   category plus the provider's HTTP status only
+   (`"candidate: Email delivery rejected by provider (HTTP 403)"`), which
+   still distinguishes the real cases (403 unverified sending domain, 422
+   disallowed recipient, transport error) without naming anyone. The same
+   sanitization was applied to `resume_intelligence_client.get_contact`,
+   whose error reaches the same column by the same path and came from the
+   PII-owning service. **Live check before the fix**: the four existing
+   failed rows contained only pre-`RESEND_API_KEY` error types, so nothing
+   had leaked yet — but with a real key now configured and Resend's sandbox
+   rejecting every non-verified recipient, the next round scheduled for a
+   normal demo candidate would have been the first.
+2. **H2(b) (HIGH, idempotency defect): the webhook receipt and the state
+   change it authorizes are now one transaction.** `insert_webhook_event`
+   used to commit on its own, *before* `record_interview_result` ran in a
+   separate transaction. A crash or DB error between the two left the
+   `delivery_id` permanently recorded while the application was never
+   updated — and since that UNIQUE `delivery_id` **is** the dedup mechanism,
+   every VoiceHR retry then returned `duplicate_ignored`, discarding a real
+   interview result forever with no recovery path (the application stays
+   `invited`, the language gate stays `pending`, and `pending` blocks accept
+   while reject still works — a silently one-sided outcome). Both
+   `insert_webhook_event` and `mark_webhook_event_processed` now flush only;
+   `record_interview_result` no longer commits or rolls back; the webhook
+   route owns the transaction and commits deliberately on each path
+   (including the `no_op`/`unknown_application` paths, where the receipt is
+   still worth keeping). A concurrent duplicate now blocks on the unique
+   index until the first transaction resolves and then correctly loses with
+   `IntegrityError`, exactly as before.
+3. **M1 (MEDIUM, correctness defect): a candidate with no email no longer
+   500s.** `resume_intel.candidates.email` is nullable and `store_candidate`
+   explicitly inserts such rows, but `ContactLookupResponse.email` was a
+   required `EmailStr` and the route constructs that model directly — so a
+   null email raised `ValidationError` *inside* the handler and surfaced as
+   an opaque 500, which RWS reported as "Resume Intelligence unavailable".
+   The field is now `Optional`, and the two RWS callers that genuinely need
+   an address (invite, interview-round notification) check for it explicitly
+   and report that specific reason (a 422 "Candidate has no email address on
+   file" for invite). Both halves of this were already tested separately;
+   their intersection was not, and that is the gap that hid it.
+4. **Three inaccurate documentation claims corrected.** `CLAUDE.md`'s PII
+   invariant now names its one real exception (VoiceHR persists
+   `candidate_name`/`candidate_email` on its own `interviews` rows, because
+   it owns emailing and greeting the candidate) while explicitly keeping
+   that exception scoped and non-precedent-setting;
+   `candidate_summary._synthesize_raw_text`'s docstring no longer claims no
+   email "can" reach the embedding text (the allow-list is field-level, so
+   free-text `work[].description` could carry one — stated precisely instead
+   of overclaimed); `GeminiProvider`'s docstring no longer names a stale
+   default model.
+
+**The test that claimed to guard H1 did not.**
+`test_create_interview_round_never_persists_candidate_contact` asserted
+`notification_status == "sent"` (success path only) and checked four columns
+— `interviewer_name`, `interviewer_email`, `location`, `notes` — **excluding
+`notification_error`**, the only column that can hold a failure message.
+Fixed: `notification_error` added to that loop, plus a new failure-path
+integration test asserting the persisted column and the API response stay
+clean, plus 5 new unit tests that run the **real** `_send_email` /
+`send_interview_round_notification` against a stubbed httpx transport and
+assert the recipient address, the candidate's name, and the provider body
+never appear in what they raise.
+
+**Also found and fixed while verifying: three integration tests had been
+making live HTTP calls to `api.resend.com` on every run.**
+`test_{create,reschedule,cancel}_missing_resend_api_key_fails_cleanly*`
+depended on the *ambient* absence of a key ("no RESEND_API_KEY is configured
+in this test environment"), which silently stopped being true when milestone
+43 configured a real one. They were failing, and — worse — hitting the real
+provider with `@example.com` recipients and asserting on whatever it
+answered. A new `resend_api_key_unset` fixture pins
+`main.settings.resend_api_key = None` for exactly those three, so they test
+the branch they name, deterministically and offline. Verified afterwards
+that the whole suite makes zero requests to `api.resend.com`.
+
+**Verification**: 206 RWS unit tests (+5), 139 repo-root unit tests, 80
+Resume Intelligence tests (+1, the untested no-email/contact intersection),
+and **146 repo-root integration tests (+5, from 141), all passing** — run
+in-container against the disposable `company_second_brain_test` database.
+The +5: the no-email invite 422, the failure-path PII guard, and three
+webhook-receipt durability tests covering the processed/no-op/unresolvable
+paths. Two existing tests were also strengthened rather than added to:
+the PII guard now includes `notification_error` in its column loop, and
+`test_webhook_unexpected_error_returns_500` now asserts the receipt is
+**not** left behind after a failed state change — the exact lost-result
+window this phase closed. Each new guard was additionally proven to fail
+against the pre-fix code by temporarily reverting the fix, running it, and
+restoring — so none of them is a test that would pass either way.
+
+**Live-verified against the real running stack, not just tests**: scheduled a
+real interview round on demo application
+`8fc853eb-bc32-445e-9e74-691ce05a81d3` (candidate
+`smoketest.rws.notify@example.com`) with an `@example.com` interviewer, so
+Resend's sandbox genuinely rejected both sends. The round was created
+(`201`), `notification_status` came back `failed`, and the persisted
+`notification_error` is exactly `"candidate: Email delivery rejected by
+provider (HTTP 422); interviewer: Email delivery rejected by provider (HTTP
+422)"` — no address, no provider body, while still naming which side failed
+and why. A regex scan of `notification_error` across the **entire**
+`interview_rounds` table then returned **0** rows containing anything
+matching an email address. `GET /v1/jobs`, `GET /v1/applications`, and
+`GET /v1/graph/candidates-jobs` all still return `200` after the webhook
+transaction change, and the sanitized error is what the API hands the
+frontend. That round (`2141e4a6-...`, status `scheduled`,
+`notification_status: failed`) is left in place as this session's smoketest
+artifact, same convention as every prior session's.
+
 ---
 
 ## [NEXT]

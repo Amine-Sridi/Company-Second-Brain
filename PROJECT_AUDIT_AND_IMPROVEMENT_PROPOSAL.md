@@ -1,5 +1,28 @@
 # Company Second Brain — Project Audit & Improvement Proposal
 
+> ## Implementation status
+>
+> **Phase 1 (Integrity & privacy) — DONE, 2026-09-23.** See `handoff.md`'s
+> milestone 47 for the full record.
+>
+> | Finding | Status |
+> |---|---|
+> | **H1** — candidate email persisted in `interview_rounds.notification_error` | **Fixed.** Errors now carry a category + HTTP status only. Verified live: a deliberately failed real send now stores `"candidate: Email delivery rejected by provider (HTTP 422); interviewer: …"`, and a regex scan of the whole column across the live database returns **0** rows containing an email address. |
+> | **H2(b)** — receipt committed before the state change (lost-result window) | **Fixed.** Receipt + state change are now one transaction owned by the webhook route. |
+> | **M1** — candidate with no email → 500 from `/contact` | **Fixed.** `ContactLookupResponse.email` is `Optional`; the two callers that need an address report that specific reason (422). |
+> | Inaccurate doc claims (PII invariant, `candidate_summary` docstring, stale model name) | **Corrected.** |
+> | The test that claimed to guard H1 but didn't | **Fixed and extended**, plus 5 new unit tests against the real mailer. |
+>
+> Verification: 206 RWS unit / 139 repo-root unit / 80 Resume Intelligence /
+> **146 repo-root integration** tests passing. Every new guard was proven to fail
+> against the pre-fix code before being accepted. One extra defect was found while
+> verifying: three integration tests had been silently making **live HTTP calls to
+> `api.resend.com`** since a real key was configured — fixed, and the suite now
+> makes zero third-party calls.
+>
+> **H2(a)/H2(c) and H3 remain open** — they are Phase 2 (result re-delivery and a
+> corrective-assessment path). Everything below is the original audit, unedited.
+
 **Audit date:** 2026-09-22
 **Scope:** Whole repository — 4 services (Recruitment Workflow / Resume Intelligence /
 Second Brain / VoiceHR), shared contracts, React frontend, infrastructure, tests.
