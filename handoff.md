@@ -2896,6 +2896,227 @@ frontend. That round (`2141e4a6-...`, status `scheduled`,
 `notification_status: failed`) is left in place as this session's smoketest
 artifact, same convention as every prior session's.
 
+**This session (audit phase 2 — cross-service recoverability, milestone 48)**:
+closed the two remaining HIGH findings, both at the VoiceHR→RWS seam. The
+completion webhook is sent exactly once, best-effort, and RWS only ever
+accepted a result for an `invited` application — so a single badly-timed
+restart stranded the application at `invited` with its language gate
+`pending`, which **blocks accept while leaving reject available**. A
+recruiter could reach only the negative outcome, with nothing on screen
+explaining why, while VoiceHR held a complete report the whole time.
+
+1. **H2 — a lost result is now recoverable.** New service-key-gated
+   `POST /api/rws/interviews/{external_reference_id}/resend-result` on
+   VoiceHR re-delivers an already-evaluated result over the same signed
+   webhook, rebuilt from the stored `reports` row
+   (`rws_client.scores_from_report_row`) — **no Gemini call**, which matters
+   given this project's repeatedly-exhausted free-tier quota. Each
+   re-delivery generates a fresh `delivery_id` on purpose: RWS dedups by
+   that id, so reusing the original would make every resend a no-op on its
+   side, which is exactly the stuck state this exists to leave. Deliberately
+   *not* a retry queue or a reconciliation poller — both are explicitly out
+   of scope per CLAUDE.md, and the data is already stored, so re-sending it
+   is one call.
+2. **H2(c) — RWS now accepts a corrective result.** `record_interview_result`
+   matches `invited` **or** `interviewed`, so a late or better result lands
+   instead of being dropped. `accepted`/`rejected` are still never
+   overwritten: a terminal decision was made on the evidence available then,
+   and silently rewriting that evidence afterwards would make the audit trail
+   lie about what the recruiter actually saw. The delivery is still recorded
+   in `interview_webhook_events` either way, so a late correction after a
+   decision is auditable rather than invisible.
+3. **H3 — `retry_report` now re-notifies RWS.** The admin re-evaluation
+   rewrote every score locally and told RWS nothing, so the two systems
+   silently diverged: VoiceHR showed the new report while RWS kept the old
+   assessment — and RWS's language gate decides on *its* copy, so a recruiter
+   could be blocked from accepting a candidate whose report visibly passes.
+   (This is why fix 2 was a prerequisite: without it the notification would
+   have been a no-op.)
+4. **Recruiter-facing recovery**: `POST /v1/applications/{id}/refresh-interview-result`
+   (JWT) asks VoiceHR to re-deliver, so this is reachable without a service
+   key. Deliberately a re-delivery request rather than RWS pulling the report
+   and applying it itself — VoiceHR stays the only place that shapes an
+   assessment and the signed webhook stays the only path that applies one; a
+   pull would fork both. The webhook is received and applied *during* that
+   call, which is why the endpoint re-reads the application before responding.
+
+**First real cross-service contract tests (audit M8)**: until now every
+cross-service call was tested with the client module monkeypatched away, so
+a renamed route, a changed auth header, or a dropped status code would pass
+every test in the repository and only break live. `services/voicehr/tests/
+test_rws_contract.py` drives **RWS's genuine client against VoiceHR's
+genuine ASGI app**, replacing only the network (`httpx.ASGITransport`).
+Proven to work: temporarily renaming the route in `voicehr_client.py` makes
+it fail. Scoped to this one boundary on purpose; the helper in that file is
+the pattern to extend to the invite/report calls.
+
+**Verification**: 219 VoiceHR (+14: 10 re-delivery, 4 contract), 206 RWS
+unit, 139 repo-root unit, 80 Resume Intelligence, **153 integration (+7:
+two corrective-webhook cases and five for the new endpoint)** — all passing.
+**Live-verified the whole loop against the real running stack**: called
+`refresh-interview-result` for application
+`095731d3-a1ba-4738-82b4-3c2a9182602f`, which was already `interviewed`.
+RWS called VoiceHR, VoiceHR re-sent the signed webhook with a fresh
+`delivery_id`, and RWS **applied** it — `interview_completed_at` moved from
+`2026-09-21 18:36:59` to `2026-09-23 15:29:02`, a second
+`interview_webhook_events` row landed with `processed = true`, and VoiceHR
+recorded the matching `webhook_delivery_id`/`webhook_delivered_at`. Before
+this change that second delivery was a silent `no_op` and the endpoint did
+not exist.
+
+**Still open from the audit** (see
+`PROJECT_AUDIT_AND_IMPROVEMENT_PROPOSAL.md`): phase 3 (AI cost caps M3/M4,
+dependency pinning M7, automated migrations M6, container hardening), phase
+4 (skill normalization M13, embedding `task_type` M11 — both change scores,
+so both need versioning), phase 5 (maintainability). One phase-2 item was
+deliberately left for the frontend: surfacing "interviewed but no result" in
+the UI so a recruiter can see the stuck state and click the new endpoint —
+the backend is ready for it, and `FRONTEND_HANDOFF.md` owns that work.
+
+**This session (audit phase 3 — cost, reproducibility, ops, milestone 49)**:
+the remaining MEDIUM/LOW findings that protect the demo itself rather than
+fixing a defect.
+
+1. **M4 — the evaluator's two retry loops no longer multiply.** They retried
+   for different, individually sensible reasons (inner: a transient
+   429/503/timeout; outer: a response that parsed but was missing dimension
+   scores) and neither knew about the other, so their budgets multiplied:
+   3 x 2 meant **one interview could burn six full-transcript evaluation
+   calls** — a third of this project's documented 20/day free-tier quota.
+   Both now draw from one shared `_CallBudget`
+   (`_MAX_GEMINI_CALLS_PER_EVALUATION = 3`), keeping each loop's own
+   behaviour and capping the product instead of the factors. **Worth noting
+   how the test for this was found to be worthless and fixed**: the obvious
+   scenario (every call returns 503) caps at 3 under the *old* code too, so
+   the first version of the test passed against the very bug it was meant to
+   catch. Only transient errors that *eventually* yield an incomplete
+   response make the outer loop restart a fully-consumed inner one; the test
+   now uses exactly that sequence, and was re-verified to fail against the
+   old independent budgets.
+2. **M3 — one read of a job's matches can no longer fire N sequential Gemini
+   calls.** `GET /v1/jobs/{job_id}/matches` generated an explanation per
+   uncached match, serially, in one request: with `top_k` defaulting to 20
+   that was 20 serial calls from a single page view, against that same
+   20/day quota, and could time out before finishing. Now capped at
+   `_MAX_EXPLANATIONS_GENERATED_PER_REQUEST = 5` *new* generations per
+   request — cached explanations are always returned in full and cost
+   nothing. Since matches are ordered by `final_score` descending the capped
+   slice is the top of the ranking, and each later read fills in the next
+   few, so the whole set still ends up explained. No frontend change needed:
+   `JobDetailPage` already renders the explanation block conditionally, so a
+   not-yet-generated one simply doesn't appear.
+3. **M7 — every dependency is now pinned.** `fastapi`, `uvicorn[standard]`,
+   `pydantic`, `pydantic-settings`, `python-multipart`, `httpx` and `pytest`
+   were unpinned across all four services, so two builds of the same commit
+   could install different majors. They are pinned to the versions actually
+   running and tested (read out of the live containers, not guessed) —
+   which also surfaced a real drift: `uvicorn` was 0.53.0 in two services
+   and 0.52.4 in the other two, purely because they were built on different
+   days. **Deliberately not done: removing `pytest` from the runtime
+   images.** The audit recommended it; that recommendation was wrong for
+   this project and is now corrected in the requirements files themselves.
+   The repo-root integration suite *must* run inside the container, because
+   host-side psycopg cannot reach the Docker Postgres through the WSL2 port
+   proxy — dropping pytest would trade a few MB for the entire integration
+   suite. **Scope of this pin, stated honestly**: direct dependencies only.
+   Transitive ones (e.g. `starlette`, pulled by `fastapi`) are still resolved
+   at build time, so two builds far enough apart could still differ there.
+   Fully closing that needs a lock file (`pip-compile`/`uv`), which is a new
+   tool and workflow — worth it if this ever needs byte-identical rebuilds,
+   but pinning what this project's own files actually declare removes the
+   realistic failure (a FastAPI/Pydantic major landing mid-project) at no
+   added tooling cost.
+4. **M6 — migrations now run automatically, before the app serves.**
+   Nothing ran them before: a clean-volume `docker compose up` produced
+   containers reporting healthy (`/health` never touches the DB) while every
+   real request 500'd, until someone manually ran `alembic upgrade head` in
+   each of three services — a step encoded in no file. Each Dockerfile's
+   `CMD` is now `alembic upgrade head && exec uvicorn ...` (`exec` so uvicorn
+   still receives SIGTERM directly; a failed migration exits non-zero rather
+   than serving against a wrong schema).
+5. **L7 — the two internal services no longer publish host ports.**
+   `resume-intelligence` (8001) and `second-brain` (8002) are only ever
+   called by RWS over the compose network and never by the browser;
+   publishing them only widened the attack surface, and for a PII-owning
+   service at that. Verified first that nothing in the repo referenced those
+   host ports.
+
+**Deliberately not done: L8, running containers as a non-root user.** Checked
+what it would actually take: RWS and Second Brain write nothing to disk at
+runtime and Resume Intelligence only uses `tempfile` (so `/tmp`), meaning
+three of the four would take a one-line `USER`. VoiceHR would not — it writes
+to `/app/storage`, a root-owned named volume, so it needs ownership plumbing
+the others don't. That asymmetry is the argument against doing it now: a
+hardening applied to three services and quietly skipped on the one that
+actually persists data is more misleading than no hardening at all, and by
+CLAUDE.md's own test ("what concrete problem does this solve in this
+project") a localhost-only demo stack gains nothing concrete from it. Worth
+doing properly — all four, with the volume ownership handled — if this ever
+runs anywhere shared; it is recorded here rather than silently dropped.
+
+**Proving M6 without risking the demo data.** A true clean-volume test would
+mean `docker compose down -v`, and this project has already lost its demo
+database once to a careless destructive command. So instead: created a
+throwaway `company_second_brain_migrationcheck` database on the same
+Postgres with the same three schemas/roles/extension the init scripts
+create, ran each service's real `alembic upgrade head` against it exactly as
+the new container startup does, and confirmed a fully provisioned system
+came out of an empty one — **11 recruitment tables, 2 resume_intel, 3
+second_brain, plus the seeded recruiter and scoring config**. Then dropped
+it and confirmed both real databases were still present. No volume was
+touched.
+
+**Verification**: 220 VoiceHR (+1, the shared-budget test), 206 RWS unit,
+139 repo-root unit, 80 Resume Intelligence, **154 integration (+1, the
+explanation cap)** — all passing, the integration suite run against the
+freshly rebuilt image. **Live-verified on the real stack**:
+
+- *M6/M7*: recreated `csb-recruitment-workflow` from the newly built image.
+  Its startup log shows the `alembic.runtime.migration` lines **before**
+  uvicorn's, the container reaches healthy, and `/proc/1/cmdline` is
+  `uvicorn main:app` rather than `sh` — confirming `exec` worked, so uvicorn
+  is PID 1 and still receives SIGTERM directly on `docker stop`. Installed
+  versions inside the image match the pins exactly (`fastapi==0.141.1`,
+  `uvicorn==0.53.0`, `pydantic==2.13.5`, `httpx==0.28.1`, `pytest==9.1.1`).
+  The upgrade is a no-op here because the demo database is already at head —
+  which is the point: it is safe to run on every boot.
+- *L7*: `curl` to `localhost:8001`/`8002` now fails from the host, while
+  `docker exec csb-recruitment-workflow` reaches both over the compose
+  network (200), and the recruiter endpoints that actually proxy through
+  them (`/v1/candidates` via Resume Intelligence,
+  `/v1/candidates/{id}/knowledge` via Second Brain) still return 200.
+
+`csb-resume-intelligence` was recreated from its rebuilt image too and shows
+the identical pattern (alembic lines first, healthy, `/proc/1/cmdline` =
+`uvicorn api:app`) — a second, independent confirmation of the same
+mechanism. All five containers are healthy and every recruiter path
+(`/v1/jobs`, `/v1/candidates`, `/v1/applications`,
+`/v1/graph/candidates-jobs`, VoiceHR `/health`) returns 200.
+
+**Honest gap, environmental not code**: `second-brain` and `voicehr` are
+**still running their previous images** — this machine's DNS failed partway
+through the rebuilds (`lookup registry-1.docker.io: no such host`, i.e.
+Docker could not even resolve the registry to pull the base image), and
+three retries each did not get through. What those two images are therefore
+missing: second-brain's `alembic upgrade head` startup step (its code change
+is committed and is character-for-character the same one already verified
+live on the other two services), and VoiceHR's shared evaluator call budget
+(M4 — covered by its 220 passing host-side tests, just not yet running in
+the container). Neither gap affects anything currently demonstrable: both
+services are healthy and fully functional on their existing images. Re-run
+`docker compose build second-brain voicehr` once the network is back; build
+services **sequentially**, for the reason in the next paragraph.
+
+**One real operational finding worth keeping**: pinning invalidated pip's
+layer cache, so the first full rebuild reinstalls everything — and on this
+machine's connection (~70 KB/s to PyPI) four parallel service builds
+saturated the link and one failed with `Could not find a version that
+satisfies the requirement fastapi==0.141.1 (from versions: none)`. That
+message reads like a bad pin but is not: the *same* version downloaded
+successfully in another service's build in the same run — "from versions:
+none" means pip could not reach the index at all. Building the services
+sequentially avoids it. Worth remembering before assuming a pin is wrong.
+
 ---
 
 ## [NEXT]

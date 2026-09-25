@@ -108,6 +108,35 @@ async def notify_rws_interview_result(
         return False
 
 
+def scores_from_report_row(row) -> tuple[dict, bool]:
+    """
+    Rebuilds the subset of an evaluator result that build_assessment_payload actually
+    reads, from an already-stored `reports` row -- so a *re-delivery* of a result RWS
+    never received costs no Gemini call at all (this project's free-tier quota is a
+    real, repeatedly-hit constraint; re-evaluating just to re-notify would burn it for
+    nothing). Returns (scores, inconclusive).
+
+    pronunciation_score is forced to None rather than read back from the column, for
+    exactly the reason api/routes/report.py's own read path does it: the evaluator only
+    ever sees a text transcript, so a handful of rows scored before that rule existed
+    still carry a stale non-null value, and re-sending one would let an old row keep
+    claiming a pronunciation assessment this system no longer stands behind.
+    """
+    return (
+        {
+            "overall_score": row["overall_score"],
+            "cefr_level": row["cefr_level"],
+            "fluency_score": row["fluency_score"],
+            "vocabulary_score": row["vocabulary_score"],
+            "grammar_score": row["grammar_score"],
+            "pronunciation_score": None,
+            "comprehension_score": row["comprehension_score"],
+            "evaluation_status": row["evaluation_status"],
+        },
+        bool(row["inconclusive"]),
+    )
+
+
 async def notify_and_record_interview_result(
     conn: sqlite3.Connection,
     interview_id: int,
@@ -115,19 +144,31 @@ async def notify_and_record_interview_result(
     scores: dict,
     inconclusive: bool,
     language: str | None = None,
-) -> None:
+) -> bool:
     """
     Called by backend/services/processing.py once an interview reaches a terminal
-    outcome. Shapes the evaluator's result into RWS's assessment schema, sends the
-    signed webhook, and persists the delivery receipt on the interview row.
+    outcome, and again by any later re-delivery (a re-evaluation via retry_report, or
+    the explicit RWS-facing resend-result endpoint). Shapes the evaluator's result into
+    RWS's assessment schema, sends the signed webhook, and persists the delivery
+    receipt on the interview row.
 
-    No-op if external_reference_id is None -- this interview was created outside the
-    RWS flow (e.g. the admin UI) and there is nothing on the RWS side to notify. Never
-    raises: notify_rws_interview_result is itself best-effort/non-raising, and a failed
-    delivery is still recorded (webhook_delivered_at stays NULL) rather than retried.
+    Returns whether RWS acknowledged the delivery. The automatic completion path
+    ignores that (it is best-effort by design and has nothing to report it to), but an
+    *explicit* resend does surface it -- the same split POST /api/invite and the
+    explicit resend-invite route already have.
+
+    No-op (returns False) if external_reference_id is None -- this interview was
+    created outside the RWS flow (e.g. the admin UI) and there is nothing on the RWS
+    side to notify. Never raises: notify_rws_interview_result is itself
+    best-effort/non-raising, and a failed delivery is still recorded
+    (webhook_delivered_at stays NULL) rather than retried.
+
+    Each call generates a fresh delivery_id on purpose: RWS dedups by delivery_id, so
+    reusing the original one would make every re-delivery a no-op on its side -- which
+    is precisely the stuck state a resend exists to get out of.
     """
     if not external_reference_id:
-        return
+        return False
 
     assessment_payload = build_assessment_payload(scores, inconclusive, language)
     delivery_id = str(uuid.uuid4())
@@ -143,3 +184,4 @@ async def notify_and_record_interview_result(
         (delivery_id, datetime.utcnow().isoformat() if delivered else None, interview_id),
     )
     conn.commit()
+    return delivered

@@ -10,18 +10,24 @@ Pillow>=10.0
 python-dateutil>=2.9
 
 # ── Web API + database (added for HTTP service layer) ────────────────────────
-fastapi
-uvicorn[standard]
-pydantic-settings
-pydantic[email]
-python-multipart
+fastapi==0.141.1
+uvicorn[standard]==0.53.0
+pydantic-settings==2.15.0
+pydantic[email]==2.13.5
+python-multipart==0.0.32
 alembic==1.13.2
 sqlalchemy==2.0.32
 psycopg[binary]==3.2.1
-httpx
+httpx==0.28.1
 
 # ── AI provider ───────────────────────────────────────────────────────────────
 google-genai==2.18.0
 
 # ── Utilities ─────────────────────────────────────────────────────────────────
-pytest
+# pytest ships in this runtime image deliberately, unlike VoiceHR's (which
+# excludes it). This project's repo-root integration suite must run *inside* the
+# container: host-side psycopg cannot reach the Docker Postgres through the WSL2
+# port proxy (see handoff.md's Known Limitations), so `docker exec <svc> pytest`
+# is the only way those real-database tests run at all. Removing it would trade a
+# few MB of image size for the loss of the entire integration suite.
+pytest==9.1.1

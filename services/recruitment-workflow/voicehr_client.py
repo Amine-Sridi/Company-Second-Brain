@@ -90,6 +90,41 @@ async def resend_invite(base_url: str, api_key: str, external_reference_id: str)
         raise VoiceHRClientError(f"VoiceHR resend returned {resp.status_code}: {resp.text}")
 
 
+async def resend_interview_result(
+    base_url: str, api_key: str, external_reference_id: str
+) -> None:
+    """
+    Asks VoiceHR to re-deliver an already-evaluated interview's result over its
+    normal signed completion webhook -- the recovery path for a result RWS never
+    received (the webhook is sent exactly once, best-effort, so a restart at the
+    wrong moment strands the application at 'invited' with its language gate
+    'pending', blocking accept forever).
+
+    Deliberately a re-delivery request rather than RWS pulling the report and
+    applying it directly: VoiceHR stays the only place that shapes an assessment,
+    and the HMAC-signed webhook stays the only path that applies one. A pull would
+    fork both. The webhook arrives (and is fully processed) during this call, so the
+    application is already updated by the time this returns.
+
+    Raises VoiceHRClientError on a 409 (no result to send yet) or a 502 (VoiceHR
+    sent it but RWS did not acknowledge) as well as transport failures -- every one
+    of those means the caller's application state did not change.
+    """
+    try:
+        resp = await call_service(
+            "POST",
+            f"{base_url}/api/rws/interviews/{external_reference_id}/resend-result",
+            api_key=api_key,
+        )
+    except ServiceCallError as exc:
+        raise VoiceHRClientError(str(exc)) from exc
+
+    if resp.status_code != 200:
+        raise VoiceHRClientError(
+            f"VoiceHR result re-delivery returned {resp.status_code}"
+        )
+
+
 async def get_interview_report(
     base_url: str, api_key: str, external_reference_id: str
 ) -> Optional[dict]:

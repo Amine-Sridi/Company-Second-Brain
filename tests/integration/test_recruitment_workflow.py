@@ -842,6 +842,39 @@ def test_match_explanation_included_in_get_matches(client, auth_headers, mock_se
     assert len(mock_llm.generate_text_calls) == 1
 
 
+def test_match_explanations_are_capped_per_request_and_filled_in_over_reads(
+    client, auth_headers, mock_second_brain, mock_llm
+):
+    """One read of a cold job used to fire one sequential Gemini call per match --
+    with top_k defaulting to 20 that is 20 serial calls against a free tier
+    documented at 20 requests/day, from a single page view. Cached explanations are
+    still always returned; only fresh generations are bounded, and a later read
+    picks up where the previous one stopped."""
+    from main import _MAX_EXPLANATIONS_GENERATED_PER_REQUEST as cap
+
+    candidates = [
+        make_candidate(skills=["Python"], similarity_score=0.9 - (i / 100))
+        for i in range(cap + 3)
+    ]
+    mock_second_brain.set_candidates(candidates)
+    job_id = _submit_job(client, auth_headers).json()["job_id"]
+
+    first = client.get(f"{_JOBS_URL}/{job_id}/matches", headers=auth_headers).json()
+
+    assert len(first) == cap + 3
+    assert len(mock_llm.generate_text_calls) == cap
+    # Ordered by final_score desc, so the ones that did get explained are the top of
+    # the ranking -- what a recruiter reads first -- not an arbitrary slice.
+    assert all(m["explanation"] is not None for m in first[:cap])
+    assert all(m["explanation"] is None for m in first[cap:])
+
+    second = client.get(f"{_JOBS_URL}/{job_id}/matches", headers=auth_headers).json()
+
+    # The already-cached ones cost nothing; the next few are generated now.
+    assert len(mock_llm.generate_text_calls) == cap + 3
+    assert all(m["explanation"] is not None for m in second)
+
+
 def test_match_explanation_not_generated_at_job_submission_time(
     client, auth_headers, mock_second_brain, mock_llm
 ):
@@ -2024,6 +2057,143 @@ def test_webhook_receipt_is_persisted_for_an_unresolvable_reference(client, db_s
     assert event is not None
     assert event.application_id is None
     assert event.processed is False
+
+
+# ---------------------------------------------------------------------------
+# Late / corrective interview results. The completion webhook is sent exactly once,
+# best-effort, so a result can arrive late (a re-delivery after RWS was unreachable)
+# or be superseded (an admin re-evaluation in VoiceHR). Both must land -- while it
+# only matched 'invited', a correction could never be applied: VoiceHR showed the new
+# report, RWS kept the old assessment, and RWS's language gate decides on its own copy.
+# ---------------------------------------------------------------------------
+
+def test_second_webhook_corrects_an_already_interviewed_application(
+    client, auth_headers, db_session, mock_second_brain, mock_resume_intelligence, mock_voicehr
+):
+    _, application_id = select_and_invite(
+        client, auth_headers, mock_second_brain, mock_resume_intelligence, mock_voicehr
+    )
+    first_body, first_headers = make_webhook_payload(
+        application_id, interview_status="inconclusive", delivery_id="correct-1",
+        overall_score=None, cefr_level=None, evaluation_status="insufficient_evidence",
+        inconclusive=True,
+    )
+    assert client.post(_WEBHOOK_URL, content=first_body, headers=first_headers).json()["status"] == "processed"
+
+    # A genuinely better result for the same interview, delivered afterwards.
+    second_body, second_headers = make_webhook_payload(
+        application_id, interview_status="completed", delivery_id="correct-2",
+        overall_score=84, cefr_level="C1", evaluation_status="completed", inconclusive=False,
+    )
+    resp = client.post(_WEBHOOK_URL, content=second_body, headers=second_headers)
+
+    assert resp.json()["status"] == "processed"
+
+    db_session.rollback()
+    from db import Application
+
+    application = (
+        db_session.query(Application).filter(Application.id == uuid.UUID(application_id)).first()
+    )
+    assert application.status == "interviewed"
+    assert application.interview_status == "completed"
+    assert application.interview_assessment["cefr_level"] == "C1"
+    assert application.interview_assessment["overall_score"] == 84
+
+
+def test_corrective_webhook_never_overwrites_a_decided_application(
+    client, auth_headers, db_session, mock_second_brain, mock_resume_intelligence, mock_voicehr
+):
+    """A terminal decision was made on the evidence available at the time. Silently
+    rewriting that evidence afterwards would make the audit trail lie about what the
+    recruiter actually saw -- so the delivery is recorded but never applied."""
+    _, application_id = select_and_invite(
+        client, auth_headers, mock_second_brain, mock_resume_intelligence, mock_voicehr
+    )
+    body, headers = make_webhook_payload(
+        application_id, delivery_id="decided-1", overall_score=55, cefr_level="B1"
+    )
+    client.post(_WEBHOOK_URL, content=body, headers=headers)
+    client.post(f"/v1/applications/{application_id}/reject", headers=auth_headers)
+
+    late_body, late_headers = make_webhook_payload(
+        application_id, delivery_id="decided-2", overall_score=95, cefr_level="C2"
+    )
+    resp = client.post(_WEBHOOK_URL, content=late_body, headers=late_headers)
+
+    assert resp.json()["status"] == "no_op"
+
+    db_session.rollback()
+    from db import Application
+
+    application = (
+        db_session.query(Application).filter(Application.id == uuid.UUID(application_id)).first()
+    )
+    assert application.status == "rejected"
+    assert application.interview_assessment["cefr_level"] == "B1"  # unchanged
+    # The late delivery is still auditable even though it was not applied.
+    assert _webhook_event(db_session, "decided-2") is not None
+
+
+# ---------------------------------------------------------------------------
+# POST /v1/applications/{id}/refresh-interview-result -- recruiter-facing recovery
+# ---------------------------------------------------------------------------
+
+def test_refresh_interview_result_asks_voicehr_to_redeliver(
+    client, auth_headers, mock_second_brain, mock_resume_intelligence, mock_voicehr
+):
+    _, application_id = select_and_invite(
+        client, auth_headers, mock_second_brain, mock_resume_intelligence, mock_voicehr
+    )
+
+    resp = client.post(
+        f"/v1/applications/{application_id}/refresh-interview-result", headers=auth_headers
+    )
+
+    assert resp.status_code == 200
+    assert mock_voicehr.resend_result_calls == [{"external_reference_id": application_id}]
+
+
+def test_refresh_interview_result_unknown_application_returns_404(client, auth_headers):
+    resp = client.post(
+        f"/v1/applications/{uuid.uuid4()}/refresh-interview-result", headers=auth_headers
+    )
+    assert resp.status_code == 404
+
+
+def test_refresh_interview_result_before_invite_returns_409(
+    client, auth_headers, mock_second_brain, mock_voicehr
+):
+    """Nothing can have been delivered for an application that was never invited."""
+    candidate = make_candidate(skills=["Python"], similarity_score=0.9)
+    _, application_id = _select_one_candidate(client, auth_headers, mock_second_brain, candidate)
+
+    resp = client.post(
+        f"/v1/applications/{application_id}/refresh-interview-result", headers=auth_headers
+    )
+
+    assert resp.status_code == 409
+    assert mock_voicehr.resend_result_calls == []
+
+
+def test_refresh_interview_result_surfaces_voicehr_failure_as_502(
+    client, auth_headers, mock_second_brain, mock_resume_intelligence, mock_voicehr
+):
+    _, application_id = select_and_invite(
+        client, auth_headers, mock_second_brain, mock_resume_intelligence, mock_voicehr
+    )
+    mock_voicehr.fail_resend_result()
+
+    resp = client.post(
+        f"/v1/applications/{application_id}/refresh-interview-result", headers=auth_headers
+    )
+
+    assert resp.status_code == 502
+
+
+def test_refresh_interview_result_requires_authentication(client):
+    resp = client.post(f"/v1/applications/{uuid.uuid4()}/refresh-interview-result")
+    assert resp.status_code == 401
 
 
 def test_webhook_unknown_application_returns_200_noop(client, auth_headers):

@@ -136,6 +136,7 @@ async def retry_report(report_token: str) -> dict:
     try:
         row = conn.execute(
             """SELECT r.*, i.token, i.language, i.candidate_name, i.status as interview_status,
+                      i.external_reference_id,
                       rec.transcript_path, rec.raw_transcript, rec.duration_seconds
                FROM reports r
                JOIN interviews i ON r.interview_id = i.id
@@ -207,6 +208,22 @@ async def retry_report(report_token: str) -> dict:
             ("inconclusive" if inconclusive else "completed", now, row["interview_id"]),
         )
         conn.commit()
+
+        # Re-notify RWS with the corrected result, exactly as process_interview does
+        # for the first one. Without this, a retry silently diverged the two systems:
+        # VoiceHR showed the new, good report while RWS kept the old failed/
+        # inconclusive assessment -- and RWS's language gate decides on *its* copy, so
+        # a recruiter could be blocked from accepting a candidate whose report visibly
+        # passes. Best-effort and non-raising, like the original send: the
+        # re-evaluation itself is already durably committed above and must not be
+        # undone by a delivery problem. (RWS accepts this as a correction because
+        # record_interview_result also updates an application already 'interviewed' --
+        # see its own docstring; a terminal accepted/rejected decision is still never
+        # overwritten.)
+        await notify_and_record_interview_result(
+            conn, row["interview_id"], row["external_reference_id"], scores, inconclusive,
+            language=row["language"],
+        )
         return scores
     finally:
         conn.close()

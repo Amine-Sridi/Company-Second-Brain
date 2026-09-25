@@ -506,20 +506,28 @@ def mock_resume_intelligence(monkeypatch):
 @pytest.fixture
 def mock_voicehr(monkeypatch):
     """
-    Patches voicehr_client.invite_candidate and voicehr_client.resend_invite (as
-    imported by main.py's `import voicehr_client`) so tests never make a real HTTP
-    call to VoiceHR.
+    Patches voicehr_client.invite_candidate, voicehr_client.resend_invite, and
+    voicehr_client.resend_interview_result (as imported by main.py's
+    `import voicehr_client`) so tests never make a real HTTP call to VoiceHR.
 
-    Records every call in .calls / .resend_calls for assertion. Call .fail() /
-    .fail_resend() to make subsequent calls of that kind raise VoiceHRClientError
-    (simulates VoiceHR being unreachable or a delivery failure -- indistinguishable
-    from RWS's side either way, see voicehr_client's own docstrings).
+    Records every call in .calls / .resend_calls / .resend_result_calls for
+    assertion. Call .fail() / .fail_resend() / .fail_resend_result() to make
+    subsequent calls of that kind raise VoiceHRClientError (simulates VoiceHR being
+    unreachable or a delivery failure -- indistinguishable from RWS's side either
+    way, see voicehr_client's own docstrings).
+
+    Note what resend_interview_result deliberately does NOT do here: in production it
+    makes VoiceHR re-POST the signed completion webhook, which updates the
+    application as a side effect *during* the call. A test that needs that effect
+    posts the webhook itself -- keeping the mock a pure "VoiceHR was asked" record
+    rather than a second, drifting implementation of the real webhook handler.
     """
     import voicehr_client
     from voicehr_client import VoiceHRClientError
 
     calls = []
     resend_calls = []
+    resend_result_calls = []
 
     async def _invite_candidate(
         base_url, api_key, idempotency_key, candidate_name, candidate_email,
@@ -548,19 +556,32 @@ def mock_voicehr(monkeypatch):
     async def _failing_resend_invite(*args, **kwargs):
         raise VoiceHRClientError("simulated VoiceHR resend delivery failure")
 
+    async def _resend_interview_result(base_url, api_key, external_reference_id):
+        resend_result_calls.append({"external_reference_id": external_reference_id})
+
+    async def _failing_resend_interview_result(*args, **kwargs):
+        raise VoiceHRClientError("VoiceHR result re-delivery returned 409")
+
     monkeypatch.setattr(voicehr_client, "invite_candidate", _invite_candidate)
     monkeypatch.setattr(voicehr_client, "resend_invite", _resend_invite)
+    monkeypatch.setattr(voicehr_client, "resend_interview_result", _resend_interview_result)
 
     class _Controller:
         def __init__(self):
             self.calls = calls
             self.resend_calls = resend_calls
+            self.resend_result_calls = resend_result_calls
 
         def fail(self) -> None:
             monkeypatch.setattr(voicehr_client, "invite_candidate", _failing_invite_candidate)
 
         def fail_resend(self) -> None:
             monkeypatch.setattr(voicehr_client, "resend_invite", _failing_resend_invite)
+
+        def fail_resend_result(self) -> None:
+            monkeypatch.setattr(
+                voicehr_client, "resend_interview_result", _failing_resend_interview_result
+            )
 
     return _Controller()
 

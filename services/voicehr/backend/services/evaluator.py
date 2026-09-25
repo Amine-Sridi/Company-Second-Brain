@@ -147,7 +147,34 @@ def _is_retryable_provider_error(exc: Exception) -> bool:
     ))
 
 
-async def _evaluate_with_gemini(prompt: str) -> dict:
+# One hard ceiling on how many times a single evaluation may call Gemini, shared by
+# BOTH retry loops in this module. They retry for different, individually sensible
+# reasons -- the inner one on a transient provider error (429/503/timeout), the outer
+# one on a response that parsed but was missing dimension scores -- and neither knew
+# about the other, so their budgets multiplied: 3 x 2 meant one interview could burn
+# **six** full-transcript evaluation calls. On this project's free tier (a documented
+# 20 requests/day that has repeatedly run out mid-session) that is a third of a day's
+# quota for one bad interview. Sharing one budget keeps both behaviours and caps the
+# product instead of the factors.
+_MAX_GEMINI_CALLS_PER_EVALUATION = 3
+
+
+class _CallBudget:
+    """Mutable, passed down into _evaluate_with_gemini so both loops draw from the
+    same pool. Deliberately not a module-level counter: it is per-evaluation, so
+    concurrent interviews can't consume each other's allowance."""
+
+    def __init__(self, limit: int):
+        self.remaining = limit
+
+    def take(self) -> bool:
+        if self.remaining <= 0:
+            return False
+        self.remaining -= 1
+        return True
+
+
+async def _evaluate_with_gemini(prompt: str, budget: "_CallBudget") -> dict:
     global gemini_client
     if gemini_client is None:
         from google import genai
@@ -159,7 +186,8 @@ async def _evaluate_with_gemini(prompt: str) -> dict:
 
     from google.genai import types
 
-    for attempt in range(3):
+    attempt = 0
+    while budget.take():
         try:
             response = gemini_client.aio.models.generate_content(
                 model=getattr(
@@ -181,9 +209,14 @@ async def _evaluate_with_gemini(prompt: str) -> dict:
                 raise ValueError("Gemini returned an empty response")
             return json.loads(text.strip().removeprefix("```json").removesuffix("```").strip())
         except Exception as exc:
-            if attempt == 2 or not _is_retryable_provider_error(exc):
+            if budget.remaining <= 0 or not _is_retryable_provider_error(exc):
                 raise
             await asyncio.sleep(2 ** attempt)
+            attempt += 1
+    raise RuntimeError(
+        "Gemini call budget exhausted for this evaluation "
+        f"({_MAX_GEMINI_CALLS_PER_EVALUATION} calls)"
+    )
 
 
 def _score(value) -> int | None:
@@ -372,8 +405,10 @@ def _insufficient_evidence_result(
     return result
 
 
-# One generation + one retry, and never more -- bounded so a persistently
-# low-quality/incomplete model response can't turn into an unbounded loop.
+# One generation + one retry on a *validation* failure, and never more -- bounded so
+# a persistently low-quality/incomplete model response can't turn into a loop. This is
+# the outer of the two retry budgets; _MAX_GEMINI_CALLS_PER_EVALUATION above is the
+# shared ceiling that stops this and the provider-level retry from multiplying.
 _MAX_EVALUATION_ATTEMPTS = 2
 
 
@@ -389,9 +424,10 @@ async def evaluate(
         transcript=f"Language: {language}\n{format_transcript(transcript)}",
     )
 
+    budget = _CallBudget(_MAX_GEMINI_CALLS_PER_EVALUATION)
     for attempt in range(_MAX_EVALUATION_ATTEMPTS):
         try:
-            raw = await _evaluate_with_gemini(prompt)
+            raw = await _evaluate_with_gemini(prompt, budget)
             # Insufficient evidence can come from either side: VoiceHR's own
             # deterministic pre-check (processing.py: too short/too few turns/
             # terminated) or the model's own read of the transcript's content (e.g.

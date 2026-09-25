@@ -13,6 +13,10 @@ from backend.api.routes.interview import deliver_invitation_email
 from backend.api.routes.invite import require_rws_service_key
 import backend.database as database
 from backend.services.processing import retry_report
+from backend.services.rws_client import (
+    notify_and_record_interview_result,
+    scores_from_report_row,
+)
 
 router = APIRouter()
 
@@ -258,6 +262,60 @@ async def resend_rws_invite(
 
     await deliver_invitation_email(db, row, row["token"])
     return {"status": "sent"}
+
+
+@router.post("/api/rws/interviews/{external_reference_id}/resend-result")
+async def resend_rws_result(
+    external_reference_id: str,
+    db=Depends(get_db),
+    _auth: None = Depends(require_rws_service_key),
+):
+    """
+    Re-delivers an already-evaluated interview's result to RWS, from stored data --
+    the recovery path for a completion webhook RWS never actually received.
+
+    Why this exists: the completion webhook is sent exactly once, best-effort (see
+    rws_client.notify_rws_interview_result). If RWS is restarting or unreachable at
+    that moment, VoiceHR keeps a perfectly good report while RWS's application stays
+    'invited' forever -- its language gate stays 'pending', which blocks accept while
+    leaving reject available. That is a silently one-sided outcome with no in-product
+    way out. This endpoint is the way out, and is deliberately the whole fix rather
+    than a retry queue or a reconciliation poller (both explicitly out of scope per
+    CLAUDE.md): the data is already here, so re-sending it is a single call.
+
+    Costs no Gemini quota -- the assessment is rebuilt from the stored `reports` row
+    (rws_client.scores_from_report_row), never re-evaluated. Use the admin retry
+    action instead when the *evaluation itself* needs redoing.
+
+    Only meaningful once an interview has actually finished and produced a report;
+    409 otherwise. Unlike the automatic completion path, a delivery failure here is
+    this request's own 502 -- resending has no other purpose if it doesn't arrive,
+    the same relationship resend-invite already has to a failed send.
+    """
+    interview = db.execute(
+        "SELECT * FROM interviews WHERE external_reference_id = ?",
+        (external_reference_id,),
+    ).fetchone()
+    if not interview:
+        raise HTTPException(status_code=404, detail="Interview not found")
+
+    report = db.execute(
+        "SELECT * FROM reports WHERE interview_id = ?", (interview["id"],)
+    ).fetchone()
+    if not report:
+        raise HTTPException(
+            status_code=409,
+            detail=f"Interview has no result to send yet (status: {interview['status']})",
+        )
+
+    scores, inconclusive = scores_from_report_row(report)
+    delivered = await notify_and_record_interview_result(
+        db, interview["id"], external_reference_id, scores, inconclusive,
+        language=interview["language"],
+    )
+    if not delivered:
+        raise HTTPException(status_code=502, detail="RWS did not acknowledge the result")
+    return {"status": "delivered"}
 
 
 @router.get("/recordings/{filename}")

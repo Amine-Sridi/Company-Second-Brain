@@ -33,8 +33,12 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
-    ports:
-      - "${RESUME_INTELLIGENCE_PORT:-8001}:8000"
+    # Deliberately not published to the host. Only RWS calls this service, over the
+    # compose network, and the browser never does -- publishing it only widened the
+    # attack surface for a PII-owning service. Reach it for debugging with
+    # `docker exec csb-resume-intelligence ...`, or re-add a mapping temporarily.
+    expose:
+      - "8000"
     healthcheck:
       test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://localhost:8000/health')\""]
       interval: 10s
@@ -53,8 +57,10 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
-    ports:
-      - "${SECOND_BRAIN_PORT:-8002}:8000"
+    # Not published to the host, same reasoning as resume-intelligence above: only
+    # RWS talks to it, over the compose network.
+    expose:
+      - "8000"
     healthcheck:
       test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://localhost:8000/health')\""]
       interval: 10s

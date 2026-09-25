@@ -938,11 +938,27 @@ def record_interview_result(
     assessment: dict,
 ) -> Optional[Application]:
     """
-    Atomically transition an application from 'invited' to 'interviewed', storing the
-    assessment. Returns None (a no-op, not an error) if the application is not currently
-    'invited' -- e.g. a duplicate/out-of-order webhook delivered after the recruiter
-    already made a decision, or before an invite was ever recorded. The caller (the
-    webhook route) treats None as "nothing to do, respond 200" rather than a failure.
+    Atomically record an interview result: 'invited' -> 'interviewed' for the first
+    one, or an in-place correction of an application already 'interviewed'.
+
+    Returns None (a no-op, not an error) if the application doesn't exist, was never
+    invited, or has already been decided -- the caller (the webhook route) treats None
+    as "nothing to do, respond 200" rather than a failure.
+
+    Why 'interviewed' is also accepted: VoiceHR can legitimately produce a *better*
+    result for an interview it already reported -- an admin re-evaluation
+    (processing.retry_report) can turn a failed/insufficient-evidence assessment into a
+    real CEFR verdict. While this only matched 'invited', that correction could never
+    land: VoiceHR showed the new report, RWS kept the old assessment, and since RWS's
+    language gate decides on *its* copy, a recruiter could be blocked from accepting a
+    candidate whose report visibly passes. A later delivery for the same application is
+    therefore applied, not dropped.
+
+    'accepted'/'rejected' are still never overwritten, deliberately: a terminal
+    decision was made on the evidence available at the time, and silently rewriting
+    that evidence afterwards would make the audit trail lie about what the recruiter
+    actually saw. The delivery is still recorded in interview_webhook_events either
+    way, so a late correction after a decision is auditable rather than invisible.
 
     Deliberately does NOT commit or roll back: this runs inside the same transaction
     as the webhook receipt row that authorizes it (see insert_webhook_event's own
@@ -953,7 +969,10 @@ def record_interview_result(
     """
     result = db.execute(
         update(Application)
-        .where(Application.id == application_id, Application.status == "invited")
+        .where(
+            Application.id == application_id,
+            Application.status.in_(("invited", "interviewed")),
+        )
         .values(
             status="interviewed",
             interview_status=interview_status,

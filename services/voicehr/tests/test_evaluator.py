@@ -1,7 +1,7 @@
 import json
 import unittest
 from types import SimpleNamespace
-from unittest.mock import patch, MagicMock
+from unittest.mock import AsyncMock, patch, MagicMock
 
 
 class TestEvaluator(unittest.TestCase):
@@ -241,6 +241,54 @@ class TestEvaluator(unittest.TestCase):
         assert result["evaluation_status"] == "completed"
         assert result["overall_score"] is not None
         assert mock_gemini.aio.models.generate_content.call_count == 2
+
+    @patch("backend.services.evaluator.gemini_client")
+    def test_evaluate_never_exceeds_the_shared_gemini_call_budget(self, mock_gemini):
+        """The two retry loops (transient provider errors, and a response that parsed
+        but was incomplete) used to have independent budgets that multiplied: 3 x 2
+        meant one interview could burn six full-transcript evaluation calls, a third
+        of this project's documented 20/day free-tier quota. They now share one
+        ceiling.
+
+        The sequence below is the exact case that multiplied, and it is the only
+        shape that does: transient errors alone stop at the inner cap, and incomplete
+        responses alone stop at the outer one. It takes transient errors that
+        *eventually* yield an incomplete response to make the outer loop retry a
+        fully-consumed inner loop."""
+        from backend.services.evaluator import evaluate, _MAX_GEMINI_CALLS_PER_EVALUATION
+        import asyncio
+
+        incomplete = MagicMock()
+        incomplete.text = json.dumps({
+            "comprehension_relevance_score": 80,
+            "fluency_coherence_score": 70,
+            "grammar_language_control_score": 75,
+            "vocabulary_range_score": 65,
+            # interaction_spontaneity_score missing -> fails the completeness check,
+            # which is what makes the *outer* loop want another attempt.
+            "sufficient_evidence": True,
+            "evidence": [],
+        })
+        transient = RuntimeError("503 Service Unavailable")
+        # Old behaviour: 3 inner calls, then the outer loop restarts the whole thing
+        # for 3 more = 6. More responses are supplied than may be consumed on purpose.
+        mock_gemini.aio.models.generate_content.side_effect = [
+            transient, transient, incomplete,
+            transient, transient, incomplete,
+        ]
+
+        transcript = [{"role": "user", "text": "I lead teams.", "timestamp": 5}]
+        with patch("backend.services.evaluator.settings", SimpleNamespace(
+            gemini_model="gemini-2.5-flash",
+            gemini_evaluation_model="gemini-2.5-flash", gemini_api_key="test-key",
+        )), patch("backend.services.evaluator.asyncio.sleep", new=AsyncMock()):
+            result = asyncio.run(evaluate(transcript, duration_seconds=600))
+
+        assert result["evaluation_status"] == "failed"
+        assert (
+            mock_gemini.aio.models.generate_content.call_count
+            == _MAX_GEMINI_CALLS_PER_EVALUATION
+        )
 
     @patch("backend.services.evaluator.gemini_client")
     def test_evaluate_gives_up_after_bounded_retries_on_persistent_incomplete_response(self, mock_gemini):

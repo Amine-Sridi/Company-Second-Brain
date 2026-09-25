@@ -709,6 +709,19 @@ def update_job_language_requirement(
     )
 
 
+# How many *new* explanations one read of a job's matches may generate. Cached ones
+# are always returned in full and cost nothing -- this only bounds fresh Gemini calls.
+#
+# Without a cap this endpoint fired one sequential Gemini call per match on a cold
+# job: with top_k defaulting to 20, a single page view was 20 serial calls against a
+# free tier documented at 20 requests/day, and could time out before finishing. Since
+# matches are ordered by final_score descending, the capped slice is the top of the
+# ranking -- the part a recruiter actually reads first -- and each subsequent read
+# fills in the next few, so the whole set still ends up explained without any one
+# request being able to exhaust a day's quota.
+_MAX_EXPLANATIONS_GENERATED_PER_REQUEST = 5
+
+
 @app.get("/v1/jobs/{job_id}/matches", response_model=list[MatchResultResponse])
 async def get_job_matches(
     job_id: uuid.UUID,
@@ -725,6 +738,10 @@ async def get_job_matches(
     missing/unreachable Gemini key never fails this endpoint -- the already-persisted
     scores/qualification are always returned regardless; only `explanation` comes back
     null in that case.
+
+    At most _MAX_EXPLANATIONS_GENERATED_PER_REQUEST of those cache misses are actually
+    generated per request (see that constant for why); the rest simply return null
+    until a later read fills them in. Cached explanations are never withheld.
     """
     if get_job(db, job_id) is None:
         raise HTTPException(status_code=404, detail="Job not found")
@@ -732,12 +749,16 @@ async def get_job_matches(
     matches = list_match_results_for_job(db, job_id)
 
     responses = []
+    generated = 0
     for m in matches:
-        if llm is not None:
+        cached = get_match_explanation(db, m.id)
+        if cached is not None:
+            explanation = cached.explanation
+        elif llm is not None and generated < _MAX_EXPLANATIONS_GENERATED_PER_REQUEST:
             explanation = await get_or_create_explanation(db, llm, m, settings.gemini_model)
+            generated += 1
         else:
-            cached = get_match_explanation(db, m.id)
-            explanation = cached.explanation if cached else None
+            explanation = None
         responses.append(
             MatchResultResponse(
                 match_id=m.id,
@@ -1801,6 +1822,66 @@ async def resend_invite(
         raise HTTPException(status_code=502, detail=f"VoiceHR resend failed: {exc}")
 
     return _application_response(application, db)
+
+
+@app.post(
+    "/v1/applications/{application_id}/refresh-interview-result",
+    response_model=ApplicationResponse,
+)
+async def refresh_interview_result(
+    application_id: uuid.UUID,
+    db: Session = Depends(get_db),
+    recruiter: Recruiter = Depends(require_recruiter),
+):
+    """
+    Recruiter-facing recovery for an interview VoiceHR finished but RWS never heard
+    about: asks VoiceHR to re-deliver the result over its normal signed webhook.
+
+    Why this is needed at all: that webhook is sent exactly once, best-effort. If RWS
+    is restarting or unreachable at that moment, VoiceHR keeps a complete report while
+    this application stays 'invited' and its language gate stays 'pending' -- and
+    'pending' blocks accept while leaving reject available, so the only outcome a
+    recruiter can reach is the negative one, with nothing on screen explaining why.
+    This is the way out, and it is deliberately a manual, recruiter-triggered action
+    rather than a retry queue or reconciliation poller (both explicitly out of scope
+    per CLAUDE.md).
+
+    Also the delivery path for a *corrected* result after an admin re-evaluation in
+    VoiceHR (see db.record_interview_result on why an already-'interviewed'
+    application accepts an update, and why an accepted/rejected one never does).
+
+    The re-delivered webhook is received and applied by this service's own
+    POST /v1/webhooks/voicehr while the call below is in flight, so the application is
+    already updated by the time it returns -- which is why this re-reads it afterwards
+    rather than trusting the copy it started with.
+    """
+    application = get_application(db, application_id)
+    if application is None:
+        raise HTTPException(status_code=404, detail="Application not found")
+    if application.status not in ("invited", "interviewed"):
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                "Application has no interview result to refresh "
+                f"(current status: {application.status})"
+            ),
+        )
+
+    # End this request's read transaction before the outbound call: the webhook it
+    # triggers arrives as a separate request that needs to UPDATE this very row, and
+    # holding an open transaction across a network round trip is exactly the pattern
+    # worth not repeating (see submit_job's own long-transaction note).
+    db.rollback()
+
+    try:
+        await voicehr_client.resend_interview_result(
+            settings.voicehr_url, settings.voicehr_api_key, str(application_id)
+        )
+    except VoiceHRClientError as exc:
+        raise HTTPException(status_code=502, detail=f"Could not refresh interview result: {exc}")
+
+    refreshed = get_application(db, application_id)
+    return _application_response(refreshed, db)
 
 
 # ---------------------------------------------------------------------------

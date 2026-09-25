@@ -13,15 +13,45 @@
 > | Inaccurate doc claims (PII invariant, `candidate_summary` docstring, stale model name) | **Corrected.** |
 > | The test that claimed to guard H1 but didn't | **Fixed and extended**, plus 5 new unit tests against the real mailer. |
 >
-> Verification: 206 RWS unit / 139 repo-root unit / 80 Resume Intelligence /
-> **146 repo-root integration** tests passing. Every new guard was proven to fail
-> against the pre-fix code before being accepted. One extra defect was found while
-> verifying: three integration tests had been silently making **live HTTP calls to
-> `api.resend.com`** since a real key was configured — fixed, and the suite now
-> makes zero third-party calls.
+> One extra defect was found while verifying: three integration tests had been
+> silently making **live HTTP calls to `api.resend.com`** since a real key was
+> configured — fixed, and the suite now makes zero third-party calls.
 >
-> **H2(a)/H2(c) and H3 remain open** — they are Phase 2 (result re-delivery and a
-> corrective-assessment path). Everything below is the original audit, unedited.
+> **Phase 2 (Cross-service recoverability) — DONE, 2026-09-23.** See milestone 48.
+>
+> | Finding | Status |
+> |---|---|
+> | **H2(a)** — completion webhook sent once, no recovery path | **Fixed.** New `POST /api/rws/interviews/{id}/resend-result` on VoiceHR re-delivers from the stored report (no Gemini call), with a fresh `delivery_id` so RWS's dedup doesn't swallow it. |
+> | **H2(c)** — late/corrective results discarded | **Fixed.** `record_interview_result` accepts `invited` *or* `interviewed`; `accepted`/`rejected` are still never overwritten, and the delivery stays auditable either way. |
+> | **H3** — `retry_report` never re-notified RWS | **Fixed.** It now re-notifies, so an admin correction reaches RWS instead of diverging from it. |
+> | **M8** — no test runs two real services together | **Started.** `services/voicehr/tests/test_rws_contract.py` drives RWS's real client against VoiceHR's real ASGI app; proven to catch a renamed route. Scoped to this one boundary; the helper there is the pattern to extend. |
+>
+> Also added: `POST /v1/applications/{id}/refresh-interview-result` (JWT) so
+> recovery is reachable without a service key.
+>
+> Verification across both phases: **219 VoiceHR / 206 RWS unit / 139 repo-root
+> unit / 80 Resume Intelligence / 153 integration** — all passing. Every new guard
+> was proven to fail against the pre-fix code before being accepted. The phase-2
+> loop was additionally verified live end to end against the running stack.
+>
+> **Phase 3 (Cost, reproducibility, ops) — DONE, 2026-09-25.** See milestone 49.
+>
+> | Finding | Status |
+> |---|---|
+> | **M4** — nested retry loops allowed 6 evaluation calls per interview | **Fixed.** Both loops now share one `_CallBudget` (3 calls). The first version of the test passed against the bug; it was rewritten to use the only sequence that actually multiplies, then re-verified to fail against the old code. |
+> | **M3** — N sequential Gemini calls on one matches read | **Fixed.** Capped at 5 *new* generations per request; cached ones always returned. Frontend already handles a null explanation, so no UI change. |
+> | **M7** — unpinned core dependencies | **Fixed.** All direct deps pinned to the versions actually running (read from live containers), which also surfaced real drift: uvicorn was 0.53.0 in two services, 0.52.4 in the others. Transitive deps remain unpinned — closing that needs a lock file, noted as a deliberate stopping point. |
+> | **M7** — `pytest` in the runtime image | **Recommendation withdrawn.** It is load-bearing: the integration suite must run in-container because host psycopg cannot reach Postgres through the WSL2 proxy. Documented in the requirements files. |
+> | **M6** — no automated migration step | **Fixed.** Each Dockerfile now runs `alembic upgrade head && exec uvicorn …`. Verified live on two services (alembic before uvicorn, PID 1 = uvicorn so SIGTERM still works) and against a throwaway empty database that came out fully provisioned. |
+> | **L7** — internal services published to the host | **Fixed and verified live** — unreachable from the host, still reachable by RWS, proxy endpoints 200. |
+> | **L8** — non-root containers | **Deliberately not done**, reasoning recorded: three of four services would take a one-line `USER`, but VoiceHR writes to a root-owned volume, and a hardening skipped on the one service that persists data is more misleading than none. |
+>
+> **Remaining: Phases 4–5** (skill normalization M13 and embedding `task_type`
+> M11 — both change scores, so both need versioning; then maintainability). One
+> phase-2 item is deliberately deferred to the frontend: surfacing "interviewed
+> but no result" in the UI.
+>
+> Everything below is the original audit, unedited.
 
 **Audit date:** 2026-09-22
 **Scope:** Whole repository — 4 services (Recruitment Workflow / Resume Intelligence /
