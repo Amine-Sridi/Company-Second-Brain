@@ -81,6 +81,13 @@ def generate(model: str, prompt: str, schema: dict | None, temperature: float = 
         "model": model,
         "prompt": prompt,
         "stream": False,
+        # Reasoning models (qwen3.5 here) otherwise route their whole answer into a
+        # separate `thinking` field and leave `response` empty, which reads as a total
+        # failure while the model in fact answered correctly. These are extraction
+        # tasks with no reasoning to do, so the chain of thought is pure latency:
+        # disabling it made qwen3.5's JD case 13.1s -> 10.3s. Non-thinking models
+        # accept and ignore the flag (verified on qwen2.5:3b), so it is always sent.
+        "think": False,
         "options": {"temperature": temperature},
     }
     if schema is not None:
@@ -99,8 +106,14 @@ def generate(model: str, prompt: str, schema: dict | None, temperature: float = 
 
     eval_count = body.get("eval_count") or 0
     eval_ns = body.get("eval_duration") or 0
+    # Belt and braces: if a model honours `think` only partially, or ignores the flag,
+    # take the thinking text rather than scoring a correct answer as an empty one.
+    text = body.get("response") or ""
+    if not text.strip():
+        text = body.get("thinking") or ""
+
     return {
-        "text": body.get("response", ""),
+        "text": text,
         "latency_s": round(latency, 3),
         "tokens_per_s": round(eval_count / (eval_ns / 1e9), 2) if eval_ns else None,
         "eval_tokens": eval_count,

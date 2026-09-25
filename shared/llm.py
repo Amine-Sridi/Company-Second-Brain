@@ -330,6 +330,22 @@ def ollama_compatible_schema(schema: dict) -> dict:
     return rewritten
 
 
+def _ollama_text(body: dict) -> str:
+    """
+    Reads the generated text out of an Ollama response.
+
+    Reasoning models (qwen3.5, for one) put their answer in a separate `thinking`
+    field and leave `response` empty, so a provider that reads only `response` sees
+    a correct answer as an empty one. Requests set `think: False` to suppress that --
+    these are extraction tasks with nothing to reason about -- and this reads
+    `thinking` as a fallback in case a model honours the flag only partially.
+    """
+    text = (body.get("response") or "").strip()
+    if not text:
+        text = (body.get("thinking") or "").strip()
+    return text
+
+
 class OllamaProvider(LLMProvider):
     """
     Local open-weight fallback, served by Ollama over HTTP.
@@ -401,11 +417,12 @@ class OllamaProvider(LLMProvider):
                 "model": model or self._text_model,
                 "prompt": prompt,
                 "stream": False,
+                "think": False,  # see _ollama_text
                 "options": {"temperature": 0.2},
             },
             "generate_text",
         )
-        text = (body.get("response") or "").strip()
+        text = _ollama_text(body)
         if not text:
             raise LLMProviderError("Ollama returned an empty response")
         return text
@@ -420,12 +437,13 @@ class OllamaProvider(LLMProvider):
                 "model": target,
                 "prompt": prompt,
                 "stream": False,
+                "think": False,  # see _ollama_text
                 "format": ollama_compatible_schema(schema.model_json_schema()),
                 "options": {"temperature": 0.2},
             },
             "generate_structured",
         )
-        text = (body.get("response") or "").strip()
+        text = _ollama_text(body)
         if not text:
             raise LLMProviderError(f"Ollama ({target}) returned an empty response")
         try:
@@ -544,3 +562,35 @@ class FallbackLLMProvider(LLMProvider):
         its space and versioning that space -- see LOCAL_LLM_BENCHMARK_AND_FALLBACK.md.
         """
         return await self._primary.embed_text(text, model=model, dimensions=dimensions)
+
+
+def wrap_with_local_fallback(
+    primary: LLMProvider,
+    *,
+    enabled: bool,
+    base_url: str | None,
+    text_model: str,
+    structured_model: str | None = None,
+) -> LLMProvider:
+    """
+    Returns `primary` unchanged unless a local fallback is explicitly enabled.
+
+    Opt-in by default (LOCAL_LLM_ENABLED=false) so a deployment that never installed
+    Ollama behaves exactly as it did before this existed -- the fallback is a
+    resilience feature, not a new dependency. Both services that generate text or
+    structured output call this; Second Brain deliberately does not, because it only
+    ever calls embed_text (see FallbackLLMProvider.embed_text).
+    """
+    if not enabled:
+        return primary
+    if not text_model:
+        logger.warning("local_llm_enabled_but_no_model_configured; fallback disabled")
+        return primary
+    return FallbackLLMProvider(
+        primary,
+        OllamaProvider(
+            base_url,
+            text_model=text_model,
+            structured_model=structured_model or text_model,
+        ),
+    )

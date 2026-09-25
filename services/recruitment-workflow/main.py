@@ -129,6 +129,14 @@ class Settings(BaseSettings):
     gemini_api_key: str = ""
     gemini_model: str = "gemini-3.6-flash"
     embedding_model_version: str = "gemini-embedding-001"
+    # Local open-weight fallback (Ollama on the host). Off unless explicitly enabled;
+    # see LOCAL_LLM_BENCHMARK_AND_FALLBACK.md for how the models were chosen. The
+    # default base URL is the Docker host gateway, because Ollama runs on the host
+    # rather than as a compose service.
+    local_llm_enabled: bool = False
+    local_llm_base_url: str = "http://host.docker.internal:11434"
+    local_llm_text_model: str = ""
+    local_llm_structured_model: str = ""
     jwt_secret: str = "changeme-jwt-secret"
     jwt_expiry_minutes: int = 45
     log_level: str = "INFO"
@@ -189,9 +197,15 @@ def get_llm_provider() -> LLMProvider:
     """Lazy singleton -- only instantiated on first JD structuring request."""
     global _llm_provider
     if _llm_provider is None:
-        from shared.llm import GeminiProvider
+        from shared.llm import GeminiProvider, wrap_with_local_fallback
         try:
-            _llm_provider = GeminiProvider(api_key=settings.gemini_api_key or None)
+            _llm_provider = wrap_with_local_fallback(
+                GeminiProvider(api_key=settings.gemini_api_key or None),
+                enabled=settings.local_llm_enabled,
+                base_url=settings.local_llm_base_url,
+                text_model=settings.local_llm_text_model,
+                structured_model=settings.local_llm_structured_model,
+            )
         except LLMProviderError as exc:
             raise HTTPException(status_code=503, detail=str(exc))
     return _llm_provider
@@ -211,9 +225,15 @@ def get_llm_provider_optional() -> LLMProvider | None:
     """
     global _llm_provider
     if _llm_provider is None:
-        from shared.llm import GeminiProvider
+        from shared.llm import GeminiProvider, wrap_with_local_fallback
         try:
-            _llm_provider = GeminiProvider(api_key=settings.gemini_api_key or None)
+            _llm_provider = wrap_with_local_fallback(
+                GeminiProvider(api_key=settings.gemini_api_key or None),
+                enabled=settings.local_llm_enabled,
+                base_url=settings.local_llm_base_url,
+                text_model=settings.local_llm_text_model,
+                structured_model=settings.local_llm_structured_model,
+            )
         except LLMProviderError:
             return None
     return _llm_provider
