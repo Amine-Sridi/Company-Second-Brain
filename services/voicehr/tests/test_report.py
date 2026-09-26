@@ -132,7 +132,7 @@ def test_get_report_includes_duration_recording_and_transcript(client, db):
 
 def test_get_report_structured_dimension_payload_roundtrip(client, db):
     """Every real rubric dimension survives a full write (INSERT via the same
-    columns processing.py writes) -> read (get_report) roundtrip, under both its
+    columns processing.py writes) -> read (build_report) roundtrip, under both its
     long-form rubric key and its short legacy alias."""
     token = create_interview(db, token="dimension-roundtrip-token")
     row = db.execute("SELECT id FROM interviews WHERE token = ?", (token,)).fetchone()
@@ -201,7 +201,7 @@ def test_get_report_old_stored_report_is_backward_compatible(client, db):
 
 
 def test_get_report_insufficient_evidence_survives_the_full_pipeline(client, db):
-    """process_interview -> reports table -> get_report(), end to end, for an
+    """process_interview -> reports table -> build_report(), end to end, for an
     insufficient-evidence outcome -- not just a unit test of evaluator.py in
     isolation. Confirms cefr/overall stay null and evaluation_status/
     sufficient_evidence correctly reach the report a recruiter (or RWS, via the
@@ -248,7 +248,7 @@ def test_get_report_insufficient_evidence_survives_the_full_pipeline(client, db)
 
 
 def test_get_report_never_exposes_a_hidden_reasoning_field(client, db):
-    """The response is built from a fixed, explicit key set (report.py: get_report) --
+    """The response is built from a fixed, explicit key set (report.py: build_report) --
     nothing does a catch-all `**row` spread that could leak an unexpected column."""
     token = create_interview(db, token="no-hidden-fields-token")
     row = db.execute("SELECT id FROM interviews WHERE token = ?", (token,)).fetchone()

@@ -126,8 +126,8 @@ embeddings, one role per schema, no cross-schema grants (verified live).
 | Service | Tests | Notes |
 |---|---|---|
 | Resume Intelligence | **80 passed, 6 skipped** | Runs in-container or on host. Re-confirmed milestone 46. |
-| Recruitment Workflow (RWS) | **206 passed** | `services/recruitment-workflow/tests/` — mocked-DB unit/route tests, host or in-container. +15 this session (milestone 38): a new `test_match_anomaly.py`, pure-function coverage of every branch in `match_anomaly.py` (fires under the intended conditions, doesn't fire for low semantic relevance/a passing hard gate/too small a pool/an empty list, uses the *average* semantic score rather than a single outlier, and `merge_anomaly_warning`'s own status-transition and duplicate-warning-append idempotency). Milestone 36 (JD-extraction validation) previously added +24 here; unchanged this session. |
-| VoiceHR | **220 passed** | **Host only**, and must be run from `services/voicehr` (the app mounts a relative `frontend/` directory, so running it from the repo root errors at fixture setup on 153 tests -- environmental, not a failure). Its Docker image deliberately ships without `pytest` (lean production image). +11 this session (milestone 32): 5 new `test_report.py` assessment-contract tests, `test_interview_quality.py` restructured onto the new `golden_cases.py`/`benchmark_runner.py` split (9→15 tests: 13 golden cases + 2 whole-benchmark checks). Also runnable standalone, no pytest: `cd services/voicehr && python -m tests.benchmark_runner`. |
+| Recruitment Workflow (RWS) | **211 passed** | `services/recruitment-workflow/tests/` — mocked-DB unit/route tests, host or in-container. +15 this session (milestone 38): a new `test_match_anomaly.py`, pure-function coverage of every branch in `match_anomaly.py` (fires under the intended conditions, doesn't fire for low semantic relevance/a passing hard gate/too small a pool/an empty list, uses the *average* semantic score rather than a single outlier, and `merge_anomaly_warning`'s own status-transition and duplicate-warning-append idempotency). Milestone 36 (JD-extraction validation) previously added +24 here; unchanged this session. |
+| VoiceHR | **225 passed** | **Host only**, and must be run from `services/voicehr` (the app mounts a relative `frontend/` directory, so running it from the repo root errors at fixture setup on 153 tests -- environmental, not a failure). Its Docker image deliberately ships without `pytest` (lean production image). +11 this session (milestone 32): 5 new `test_report.py` assessment-contract tests, `test_interview_quality.py` restructured onto the new `golden_cases.py`/`benchmark_runner.py` split (9→15 tests: 13 golden cases + 2 whole-benchmark checks). Also runnable standalone, no pytest: `cd services/voicehr && python -m tests.benchmark_runner`. |
 | Second Brain | none | No `tests/` directory exists. A pre-existing, accepted gap — its one real integration (Resume Intelligence → Second Brain ingest/embed) is instead covered by a live end-to-end smoke test (candidate ingested, embedded, retrieved, PII boundary confirmed via direct `psql`). |
 
 **A second test suite exists at the repo root** (`tests/unit/`,
@@ -3280,6 +3280,62 @@ evaluation cases are scored correctly by every model, and both are cases where
 *withholding* a verdict is the right answer; and `prompt_injection_attempt` scored 0.15
 for **all seven** models -- none was injected (good), all were over-conservative and
 withheld a verdict the case expected to be A1/A2 (bad).
+
+
+---
+
+### Milestone 47 — audit follow-through: M5 (webhook dedup binding) and M10 (report-token expiry)
+
+Two remaining MEDIUM findings from `PROJECT_AUDIT_AND_IMPROVEMENT_PROPOSAL.md`, both
+security/privacy, both closed with tests written before the fix.
+
+**M5 — the webhook dedup key is now bound to the HMAC signature.** The handler
+deduplicated on the `X-Delivery-Id` **header**, which is outside the signature, while
+`WebhookPayload.delivery_id` -- the same value, inside the signed body -- was parsed and
+then ignored. The practical impact was genuinely small (the body cannot be altered, so a
+replay re-applies an identical transition), but the value deciding *"have I already
+applied this?"* was the one part of the request an attacker could rewrite freely.
+`voicehr_webhook` now requires header and body to agree (422 if not) and records
+`payload.delivery_id` as the dedup key. Verified first that this breaks no sender:
+VoiceHR's `rws_client.py` puts the same uuid4 in both, and every existing test already
+sent them consistently. +5 tests (`test_webhook_delivery_id_binding.py`), including that
+the recorded key comes from the body and that a mismatch records nothing at all.
+
+**M10(2) — the unauthenticated report bearer URL now expires.**
+`GET /api/report/{report_token}` returns `candidate_name`, `candidate_email`, every score
+and the full transcript, with a uuid4 token as the only credential, and that link is
+emailed to `ADMIN_EMAIL` on completion. The token is genuinely unguessable (122 bits) --
+the defect was that it never expired and could not be revoked, so a mailbox breach years
+later still yielded a live PII endpoint. It now honours `REPORT_TOKEN_TTL_DAYS`
+(default **7**, matching the interview link's own window) and returns **410 Link expired**,
+the same status/shape `api/deps.py` already uses for an expired interview link.
+
+The part worth recording, because the obvious implementation is wrong: `get_report` was
+**both** the public route *and* an in-process helper called by the authenticated admin
+list, the RWS service-key lookup and the retry path. Putting the expiry check inside it
+would have silently removed every older interview from the recruiter's own admin list.
+It is now split -- `build_report()` (plain function, no expiry, used by the three
+authenticated callers) and `get_report_public()` (the bearer URL, which checks the TTL).
+The TTL is checked with a cheap `created_at` lookup *before* the report is assembled, so
+an expired request never materialises the candidate's name, email or transcript; an
+unknown token stays **404**, not 410, since 410 would confirm a token once existed.
++5 tests (`test_report_token_expiry.py`), one of which exists specifically to fail if
+someone later "simplifies" the expiry back into the shared builder.
+
+M10's other half -- correcting the PII invariant's wording to name VoiceHR as a
+deliberate, scoped second PII store -- was already done in `CLAUDE.md`.
+
+**Tests: 211 RWS (+5), 225 VoiceHR (+5).** Also corrected six stale `get_report`
+references in comments/docstrings across `database.py`, `test_report.py` and the
+frontend's `api/interviews.js`.
+
+**Correction to an earlier claim in this session**: I reported that the frontend's two
+`.test.js` files "never run" because no test runner is installed. That was wrong -- they
+use Node's own built-in runner deliberately (`node --test <file>`, zero new
+dependencies), and they pass: **21 + 13 = 34 frontend tests**. The real gap is narrower
+than audit M9 states: pure display logic *is* covered; component rendering is not, and
+`node --test src/constants/` (directory form) fails on this Node/Windows build while the
+per-file form works.
 
 
 ---

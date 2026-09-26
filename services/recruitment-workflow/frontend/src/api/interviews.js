@@ -10,7 +10,7 @@ import { request } from "./client.js";
  *
  * @param {string} applicationId
  * @returns {Promise<object>} the report, shaped by VoiceHR (see
- *   services/voicehr/backend/api/routes/report.py: get_report)
+ *   services/voicehr/backend/api/routes/report.py: build_report)
  */
 export function getInterviewReport(applicationId) {
   return request(`/v1/interviews/${applicationId}/report`);

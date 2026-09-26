@@ -1,7 +1,7 @@
 import json
 import mimetypes
 import sqlite3
-from datetime import datetime
+from datetime import datetime, timedelta
 from html import escape
 from pathlib import Path
 
@@ -9,6 +9,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import FileResponse, HTMLResponse
 
 from backend.api.deps import get_db, require_admin_auth
+from backend.core.config import settings
 from backend.api.routes.interview import deliver_invitation_email
 from backend.api.routes.invite import require_rws_service_key
 import backend.database as database
@@ -22,7 +23,42 @@ router = APIRouter()
 
 
 @router.get("/api/report/{report_token}")
-def get_report(report_token: str, db=Depends(get_db)):
+def get_report_public(report_token: str, db=Depends(get_db)):
+    """
+    The candidate/admin-facing bearer URL. Unauthenticated by design -- the uuid4 token
+    is the credential -- so it is the one surface that must expire (audit M10).
+
+    The TTL is checked against reports.created_at with a cheap lookup *before* the
+    report is assembled, so an expired request never materialises the candidate's name,
+    email or transcript at all. An unknown token stays 404 rather than 410: 410 would
+    confirm that a token once existed.
+    """
+    row = db.execute(
+        "SELECT created_at FROM reports WHERE report_token = ?", (report_token,)
+    ).fetchone()
+    if not row:
+        raise HTTPException(status_code=404, detail="Report not found")
+
+    ttl_days = getattr(settings, "report_token_ttl_days", 7)
+    if ttl_days > 0 and row["created_at"]:
+        try:
+            created = datetime.fromisoformat(row["created_at"])
+        except (TypeError, ValueError):
+            created = None
+        if created is not None:
+            if datetime.utcnow() - created > timedelta(days=ttl_days):
+                # Same status/shape as the interview link's own expiry (api/deps.py),
+                # and deliberately free of any candidate detail.
+                raise HTTPException(status_code=410, detail="Report link expired")
+
+    return build_report(report_token, db)
+
+
+def build_report(report_token: str, db):
+    """Assembles a report payload. Deliberately NOT a route and deliberately without an
+    expiry check: the authenticated admin surface and the RWS service-key lookup both
+    call this directly and must keep working for reports of any age. The expiry is a
+    property of the public bearer URL, not of the report -- see get_report_public."""
     row = db.execute(
         """SELECT r.*, i.candidate_name, i.candidate_email, i.language, i.status,
                   i.created_at as interview_date,
@@ -174,7 +210,7 @@ def get_rws_report(
     already uses -- a completely separate auth path from the Basic-auth admin
     surface (require_admin_auth), which this route never touches or delegates to.
 
-    Returns exactly the fields get_report() already returns for the admin surface,
+    Returns exactly the fields build_report() already returns for the admin surface,
     minus the raw recording path/URL: recording.available (bool) is kept, but the
     admin-only /recordings/{filename} path is stripped here so a raw VoiceHR-
     relative path can never reach RWS (and, from there, the browser) -- a caller
@@ -194,7 +230,7 @@ def get_rws_report(
     if not report_row:
         raise HTTPException(status_code=404, detail="Report not available")
 
-    report = get_report(report_row["report_token"], db)
+    report = build_report(report_row["report_token"], db)
     recording_available = bool(report.get("recording", {}).get("available"))
     report["recording"] = {"available": recording_available}
     report.pop("recording_url", None)
@@ -340,7 +376,7 @@ def get_admin_reports(db=Depends(get_db), _auth: None = Depends(require_admin_au
            ORDER BY r.created_at DESC"""
     ).fetchall()
     return {
-        "reports": [get_report(row["report_token"], db) for row in rows]
+        "reports": [build_report(row["report_token"], db) for row in rows]
     }
 
 
@@ -360,7 +396,7 @@ async def retry_admin_report(report_token: str, _auth: None = Depends(require_ad
     conn = sqlite3.connect(database.DB_PATH)
     conn.row_factory = sqlite3.Row
     try:
-        return get_report(report_token, conn)
+        return build_report(report_token, conn)
     finally:
         conn.close()
 

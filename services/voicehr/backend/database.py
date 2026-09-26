@@ -174,7 +174,7 @@ def init_db():
     # backend/services/evaluator.py) -- distinct from comprehension, which it used to
     # be silently folded into. VoiceHR-internal only: never sent over the RWS webhook
     # (shared/schemas.InterviewAssessment is unchanged), only surfaced via VoiceHR's
-    # own rich report (backend/api/routes/report.py: get_report), which the recruiter
+    # own rich report (backend/api/routes/report.py: build_report), which the recruiter
     # frontend's AssessmentScoreRow already renders "--" for gracefully when absent
     # (exactly how a null/missing score already displays elsewhere).
     if "interaction_score" not in report_columns:

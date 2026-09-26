@@ -2005,8 +2005,10 @@ async def get_interview_recording(
 #
 # Authenticated by HMAC-SHA256 signature only (X-Signature) -- deliberately not
 # require_service_key or require_recruiter, per the architecture's three distinct auth
-# mechanisms (recruiter JWT, service API keys, webhook signatures). X-Delivery-Id is the
-# dedup key: a duplicate delivery is rejected by interview_webhook_events' UNIQUE
+# mechanisms (recruiter JWT, service API keys, webhook signatures). The dedup key is
+# the signed body's delivery_id (the X-Delivery-Id header is required and must match it,
+# but is not itself trusted -- it is outside the HMAC): a duplicate delivery is rejected
+# by interview_webhook_events' UNIQUE
 # constraint before any application state is touched, so a duplicate can never be
 # double-applied even under a true race between two deliveries of the same event.
 # ---------------------------------------------------------------------------
@@ -2035,6 +2037,17 @@ async def voicehr_webhook(
     except ValidationError as exc:
         raise HTTPException(status_code=422, detail=f"Invalid webhook payload: {exc}")
 
+    # The dedup key must be the one the signature covers. The header is outside the
+    # HMAC and can be rewritten freely; payload.delivery_id cannot. VoiceHR sends the
+    # same value in both (rws_client.py), so requiring agreement costs a real sender
+    # nothing and removes the gap where the value deciding "have I already applied
+    # this?" was the one part of the request an attacker controlled. See audit M5.
+    if payload.delivery_id != x_delivery_id:
+        raise HTTPException(
+            status_code=422,
+            detail="X-Delivery-Id header does not match the signed body's delivery_id",
+        )
+
     try:
         application_id = uuid.UUID(payload.external_reference_id)
     except ValueError:
@@ -2042,7 +2055,7 @@ async def voicehr_webhook(
 
     # Log only identifiers and the outcome -- never payload.assessment (scores/CEFR
     # level are treated as interview content here and must never be logged).
-    log_fields = {"delivery_id": x_delivery_id, "interview_status": payload.interview_status}
+    log_fields = {"delivery_id": payload.delivery_id, "interview_status": payload.interview_status}
 
     # The receipt row and the application state change it authorizes are ONE
     # transaction, committed once at each return below. Committing the receipt
@@ -2054,7 +2067,7 @@ async def voicehr_webhook(
     try:
         event = insert_webhook_event(
             db,
-            delivery_id=x_delivery_id,
+            delivery_id=payload.delivery_id,
             application_id=application_id,
             external_reference_id=payload.external_reference_id,
             interview_status=payload.interview_status,

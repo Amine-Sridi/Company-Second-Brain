@@ -59,6 +59,7 @@ def client(monkeypatch, test_db_path, mock_settings):
     monkeypatch.setattr(backend.api.deps, "settings", mock_settings)
     monkeypatch.setattr(backend.api.routes.invite, "settings", mock_settings)
     monkeypatch.setattr(backend.api.routes.interview, "settings", mock_settings)
+    monkeypatch.setattr(backend.api.routes.report, "settings", mock_settings)
     monkeypatch.setattr(backend.services.evaluator, "settings", mock_settings)
     monkeypatch.setattr(backend.services.mailer, "settings", mock_settings)
     monkeypatch.setattr(backend.services.rws_client, "settings", mock_settings)

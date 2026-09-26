@@ -81,26 +81,30 @@ large-scale SaaS deployment.
 
 ## Summary of findings
 
-| # | Severity | Type | Area | Finding |
-|---|---|---|---|---|
-| H1 | **HIGH** | DEFECT | Privacy | Candidate email address gets persisted into RWS's own database via `interview_rounds.notification_error` |
-| H2 | **HIGH** | DEFECT | Workflow / idempotency | An interview result can be permanently lost between VoiceHR and RWS, silently blocking acceptance forever |
-| H3 | **HIGH** | DEFECT | Cross-service consistency | `retry_report` re-evaluates an interview but never re-notifies RWS — the two systems silently diverge |
-| M1 | MEDIUM | DEFECT | Correctness | A candidate with no extracted email causes a 500 from Resume Intelligence `/contact` |
-| M2 | MEDIUM | WEAKNESS | Transactions / perf | `submit_job` holds one DB transaction open across every remote call, plus N+1 cross-service fetches |
-| M3 | MEDIUM | OPTIMIZATION | AI cost | `GET /v1/jobs/{id}/matches` can fire N sequential Gemini calls in a single request |
-| M4 | MEDIUM | OPTIMIZATION | AI cost | Nested retry loops allow up to 6 full-transcript evaluation calls per interview |
-| M5 | MEDIUM | WEAKNESS | Security | The webhook dedup key is outside the HMAC signature, while a signed copy exists and is ignored |
-| M6 | MEDIUM | WEAKNESS | Operations | No automated migration step anywhere; fresh bring-up is manual and unverified |
-| M7 | MEDIUM | WEAKNESS | Supply chain | Core dependencies unpinned; `pytest` ships inside RWS's runtime image |
-| M8 | MEDIUM | WEAKNESS | Tests | No automated test ever runs two real services against each other |
-| M9 | MEDIUM | WEAKNESS | Tests | 29 frontend components/pages, 0 with automated tests |
-| M10 | MEDIUM | WEAKNESS | Privacy | VoiceHR is a second permanent PII store with unauthenticated, non-expiring report links |
-| M11 | MEDIUM | OPTIMIZATION | Retrieval quality | Embeddings never set `task_type` for an asymmetric JD↔resume retrieval task |
-| M12 | MEDIUM | WEAKNESS | Maintainability | `ApplicationsPage.jsx` — 890 lines, one component holding ~15 `useState` |
-| M13 | MEDIUM | WEAKNESS | Matching quality | Three JD-quality layers exist to detect symptoms of one brittle exact-match skill gate |
-| L1–L14 | LOW | mixed | various | See the Low-severity section |
-| E1–E2 | — | EXTERNAL | — | Resend sandbox restriction; Gemini free-tier quota |
+> **Implementation status** is tracked in `handoff.md` (milestones 44-47). This
+> document is the original audit and is left as written; the Status column below is
+> the only thing kept in sync.
+
+| # | Severity | Type | Area | Finding | Status |
+|---|---|---|---|---|---|
+| H1 | **HIGH** | DEFECT | Privacy | Candidate email address gets persisted into RWS's own database via `interview_rounds.notification_error` | **FIXED** (m44) |
+| H2 | **HIGH** | DEFECT | Workflow / idempotency | An interview result can be permanently lost between VoiceHR and RWS, silently blocking acceptance forever | **FIXED** (m44) |
+| H3 | **HIGH** | DEFECT | Cross-service consistency | `retry_report` re-evaluates an interview but never re-notifies RWS — the two systems silently diverge | **FIXED** (m44) |
+| M1 | MEDIUM | DEFECT | Correctness | A candidate with no extracted email causes a 500 from Resume Intelligence `/contact` | **FIXED** (m44) |
+| M2 | MEDIUM | WEAKNESS | Transactions / perf | `submit_job` holds one DB transaction open across every remote call, plus N+1 cross-service fetches | open |
+| M3 | MEDIUM | OPTIMIZATION | AI cost | `GET /v1/jobs/{id}/matches` can fire N sequential Gemini calls in a single request | **FIXED** (m44) |
+| M4 | MEDIUM | OPTIMIZATION | AI cost | Nested retry loops allow up to 6 full-transcript evaluation calls per interview | **FIXED** (m44) |
+| M5 | MEDIUM | WEAKNESS | Security | The webhook dedup key is outside the HMAC signature, while a signed copy exists and is ignored | **FIXED** (m47) |
+| M6 | MEDIUM | WEAKNESS | Operations | No automated migration step anywhere; fresh bring-up is manual and unverified | **FIXED** (m45) |
+| M7 | MEDIUM | WEAKNESS | Supply chain | Core dependencies unpinned; `pytest` ships inside RWS's runtime image | **FIXED** (m45) |
+| M8 | MEDIUM | WEAKNESS | Tests | No automated test ever runs two real services against each other | open |
+| M9 | MEDIUM | WEAKNESS | Tests | 29 frontend components/pages, 0 with automated tests | partial - 34 pure-logic tests exist; no component tests |
+| M10 | MEDIUM | WEAKNESS | Privacy | VoiceHR is a second permanent PII store with unauthenticated, non-expiring report links | **FIXED** (m47) - wording in CLAUDE.md + token TTL |
+| M11 | MEDIUM | OPTIMIZATION | Retrieval quality | Embeddings never set `task_type` for an asymmetric JD↔resume retrieval task | **OPEN — verified not implemented** (see note below) |
+| M12 | MEDIUM | WEAKNESS | Maintainability | `ApplicationsPage.jsx` — 890 lines, one component holding ~15 `useState` | open |
+| M13 | MEDIUM | WEAKNESS | Matching quality | Three JD-quality layers exist to detect symptoms of one brittle exact-match skill gate | open (architecture-level) |
+| L1–L14 | LOW | mixed | various | See the Low-severity section | L1/L5-L7 fixed (m44-45); L8 declined with reasons |
+| E1–E2 | — | EXTERNAL | — | Resend sandbox restriction; Gemini free-tier quota | external; Gemini quota now has a local fallback (m46) |
 
 **No CRITICAL findings.** Nothing in this codebase corrupts data, exposes an
 authentication bypass, or allows an unauthenticated actor to reach recruiter or
@@ -108,6 +112,26 @@ candidate data. That is a genuine result, not a courtesy — the auth boundaries
 checked individually and they hold (see §3).
 
 ---
+
+> **Correction (milestone 47).** M11 was briefly recorded as fixed; re-checking the
+> source shows it is not. `shared/llm.py`'s `embed_text` still passes only
+> `EmbedContentConfig(output_dimensionality=...)` — there is no `task_type` anywhere in
+> the repo.
+>
+> More importantly, M11 is **not** the one-parameter change the finding implies.
+> Setting `task_type` changes the embedding's semantic space, and this project has 9
+> candidate vectors already stored in the old space — while
+> `second_brain.candidate_knowledge` carries **no `embedding_model_version` column** at
+> all (that field lives on RWS's `MatchResult`, describing the score, not the stored
+> vector). So applying M11 alone would query task-typed vectors against non-task-typed
+> stored ones: cosine distance would still return numbers, still rank candidates, and
+> still look plausible, while being semantically meaningless — the exact failure mode
+> documented in `LOCAL_LLM_BENCHMARK_AND_FALLBACK.md` §8.
+>
+> Doing it properly means: add a version column to `candidate_knowledge`, re-embed all
+> stored candidates with the new `task_type`, and refuse to mix generations at query
+> time. That is a migration, not a config tweak. With only 9 vectors it is cheap to
+> execute, but it should be done deliberately, not folded into an "optimization".
 
 ## 1. Architecture
 

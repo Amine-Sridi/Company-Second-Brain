@@ -23,6 +23,13 @@ class Settings(BaseSettings):
     # not a user database. Change this in any real deployment.
     admin_username: str = "admin"
     admin_password: str = "changeme-admin-password"
+    # GET /api/report/{report_token} is an unauthenticated bearer URL carrying the
+    # candidate's name, email, scores and full transcript, and the link is emailed to
+    # ADMIN_EMAIL on completion. It used to live forever, so a mailbox breach years
+    # later still yielded a live PII endpoint. Matches the interview link's own 7-day
+    # window (api/routes/invite.py). The authenticated admin and RWS surfaces are
+    # deliberately NOT subject to it -- see api/routes/report.py. Audit M10.
+    report_token_ttl_days: int = 7
     report_email_timeout_seconds: float = 180.0
     # The candidate invitation email is sent synchronously inside POST /api/invite's
     # own request/response cycle (see api/routes/invite.py), which RWS calls with a
