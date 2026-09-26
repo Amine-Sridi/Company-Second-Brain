@@ -297,8 +297,29 @@ class GeminiProvider(LLMProvider):
 _OLLAMA_MAX_SAFE_MAXLENGTH = 1000
 
 
-def ollama_compatible_schema(schema: dict) -> dict:
-    """Rewrites a Pydantic JSON Schema into the subset Ollama's grammar compiler accepts."""
+def ollama_compatible_schema(schema: dict, *, require_all_keys: bool = True) -> dict:
+    """
+    Rewrites a Pydantic JSON Schema into the subset Ollama's grammar compiler accepts.
+
+    require_all_keys additionally marks every property of every object as `required`.
+    That is not cosmetic -- it fixes a measured, silent data-loss bug. These models
+    give every field a default (CandidateExtraction.basics has default_factory), so
+    Pydantic emits a schema with **no `required` list at all**. Ollama's grammar then
+    permits omitting any key, and a small model takes the cheapest path: qwen2.5:3b
+    dropped the entire `basics` object -- every candidate name, email and phone --
+    while still producing output that validated cleanly, because an absent `basics`
+    is exactly what `default_factory` fills in. Validity was True; the extraction was
+    useless. Requiring the keys raised resume-parsing quality 0.60 -> 0.85 and
+    recovered both email and phone (see LOCAL_LLM_BENCHMARK_AND_FALLBACK.md).
+
+    It is safe by construction rather than by luck: every field in these models is
+    Optional, so requiring the *key* still allows the *value* to be null. The grammar
+    only forces the model to address each field instead of skipping it -- it cannot
+    force it to invent one. Checked against the adversarial `jd_sparse_vague` case
+    (a deliberately vague JD where the correct answer is an empty extraction), which
+    scored identically with and without promotion, so this does not buy completeness
+    at the cost of fabrication.
+    """
     import copy
 
     defs = schema.get("$defs", {})
@@ -327,6 +348,20 @@ def ollama_compatible_schema(schema: dict) -> dict:
 
     rewritten = walk(copy.deepcopy(schema))
     rewritten.pop("$defs", None)
+
+    if require_all_keys:
+        def promote(node):
+            if isinstance(node, dict):
+                if node.get("type") == "object" and isinstance(node.get("properties"), dict):
+                    node["required"] = sorted(node["properties"].keys())
+                for value in node.values():
+                    promote(value)
+            elif isinstance(node, list):
+                for value in node:
+                    promote(value)
+
+        promote(rewritten)
+
     return rewritten
 
 

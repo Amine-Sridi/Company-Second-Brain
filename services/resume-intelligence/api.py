@@ -62,8 +62,12 @@ class Settings(BaseSettings):
     # rather than as a compose service.
     local_llm_enabled: bool = False
     local_llm_base_url: str = "http://host.docker.internal:11434"
-    local_llm_text_model: str = ""
-    local_llm_structured_model: str = ""
+    # Measured winner for resume extraction (LOCAL_LLM_BENCHMARK_AND_FALLBACK.md §6.3):
+    # granite4.1:3b and qwen3.5:4b both scored 1.000; granite wins on latency (7.6s vs
+    # 11.1s) and footprint (2506 MB vs 3909 MB). This service makes no generate_text
+    # calls, so text_model only exists to satisfy the wiring helper.
+    local_llm_text_model: str = "granite4.1:3b"
+    local_llm_structured_model: str = "granite4.1:3b"
 
     # Second Brain: where the PII-safe CandidateSummary is pushed after a resume
     # is successfully stored (see pipeline/candidate_summary.py).

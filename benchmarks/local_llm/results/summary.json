@@ -1,0 +1,186 @@
+{
+  "summary": {
+    "jd_structuring": {
+      "gemma4:e2b-it-qat": {
+        "quality": 0.8,
+        "latency_s": 4.97,
+        "valid_rate": 1.0,
+        "cases": 4
+      },
+      "granite4.1:3b": {
+        "quality": 0.975,
+        "latency_s": 3.53,
+        "valid_rate": 1.0,
+        "cases": 4
+      },
+      "llama3.2:3b": {
+        "quality": 0.65,
+        "latency_s": 4.02,
+        "valid_rate": 1.0,
+        "cases": 4
+      },
+      "mistral:7b": {
+        "quality": 0.8,
+        "latency_s": 5.91,
+        "valid_rate": 1.0,
+        "cases": 4
+      },
+      "phi4-mini:3.8b": {
+        "quality": 0.7083,
+        "latency_s": 4.22,
+        "valid_rate": 1.0,
+        "cases": 4
+      },
+      "qwen2.5:3b": {
+        "quality": 0.825,
+        "latency_s": 3.74,
+        "valid_rate": 1.0,
+        "cases": 4
+      },
+      "qwen3.5:4b": {
+        "quality": 0.8,
+        "latency_s": 5.09,
+        "valid_rate": 1.0,
+        "cases": 4
+      }
+    },
+    "resume_parsing": {
+      "gemma4:e2b-it-qat": {
+        "quality": 1.0,
+        "latency_s": 8.53,
+        "valid_rate": 1.0,
+        "cases": 1
+      },
+      "granite4.1:3b": {
+        "quality": 1.0,
+        "latency_s": 7.62,
+        "valid_rate": 1.0,
+        "cases": 1
+      },
+      "llama3.2:3b": {
+        "quality": 0.7,
+        "latency_s": 5.51,
+        "valid_rate": 1.0,
+        "cases": 1
+      },
+      "mistral:7b": {
+        "quality": 0.85,
+        "latency_s": 21.73,
+        "valid_rate": 1.0,
+        "cases": 1
+      },
+      "phi4-mini:3.8b": {
+        "quality": 0.85,
+        "latency_s": 10.06,
+        "valid_rate": 1.0,
+        "cases": 1
+      },
+      "qwen2.5:3b": {
+        "quality": 0.85,
+        "latency_s": 8.54,
+        "valid_rate": 1.0,
+        "cases": 1
+      },
+      "qwen3.5:4b": {
+        "quality": 1.0,
+        "latency_s": 11.05,
+        "valid_rate": 1.0,
+        "cases": 1
+      }
+    },
+    "match_explanation": {
+      "gemma4:e2b-it-qat": {
+        "quality": 1.0,
+        "latency_s": 3.68,
+        "valid_rate": 1.0,
+        "cases": 1
+      },
+      "granite4.1:3b": {
+        "quality": 0.75,
+        "latency_s": 3.52,
+        "valid_rate": 1.0,
+        "cases": 1
+      },
+      "llama3.2:3b": {
+        "quality": 1.0,
+        "latency_s": 3.63,
+        "valid_rate": 1.0,
+        "cases": 1
+      },
+      "mistral:7b": {
+        "quality": 1.0,
+        "latency_s": 9.3,
+        "valid_rate": 1.0,
+        "cases": 1
+      },
+      "phi4-mini:3.8b": {
+        "quality": 1.0,
+        "latency_s": 5.3,
+        "valid_rate": 1.0,
+        "cases": 1
+      },
+      "qwen2.5:3b": {
+        "quality": 1.0,
+        "latency_s": 4.08,
+        "valid_rate": 1.0,
+        "cases": 1
+      },
+      "qwen3.5:4b": {
+        "quality": 1.0,
+        "latency_s": 4.06,
+        "valid_rate": 1.0,
+        "cases": 1
+      }
+    },
+    "interview_evaluation": {
+      "gemma4:e2b-it-qat": {
+        "quality": 0.5692,
+        "latency_s": 5.86,
+        "valid_rate": 1.0,
+        "cases": 13
+      },
+      "granite4.1:3b": {
+        "quality": 0.4923,
+        "latency_s": 6.69,
+        "valid_rate": 1.0,
+        "cases": 13
+      },
+      "llama3.2:3b": {
+        "quality": 0.3462,
+        "latency_s": 5.49,
+        "valid_rate": 1.0,
+        "cases": 13
+      },
+      "mistral:7b": {
+        "quality": 0.6,
+        "latency_s": 21.36,
+        "valid_rate": 1.0,
+        "cases": 13
+      },
+      "phi4-mini:3.8b": {
+        "quality": 0.5846,
+        "latency_s": 6.33,
+        "valid_rate": 1.0,
+        "cases": 13
+      },
+      "qwen2.5:3b": {
+        "quality": 0.4,
+        "latency_s": 5.94,
+        "valid_rate": 1.0,
+        "cases": 13
+      },
+      "qwen3.5:4b": {
+        "quality": 0.3462,
+        "latency_s": 10.24,
+        "valid_rate": 1.0,
+        "cases": 13
+      }
+    }
+  },
+  "winners": {
+    "jd_structuring": "granite4.1:3b",
+    "resume_parsing": "granite4.1:3b",
+    "match_explanation": "llama3.2:3b",
+    "interview_evaluation": null
+  }
+}

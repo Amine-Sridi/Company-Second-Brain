@@ -1,0 +1,6 @@
+{
+  "qwen2.5:3b": "ok",
+  "qwen3.5:4b": "ok",
+  "phi4-mini:3.8b": "ok",
+  "llama3.2:3b": "ok"
+}

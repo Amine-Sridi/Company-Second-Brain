@@ -1,0 +1,6 @@
+{
+  "llama3.2:3b": "ok",
+  "granite4.1:3b": "pull_failed",
+  "gemma4:e2b-it-qat": "pull_failed",
+  "mistral:7b": "pull_failed"
+}

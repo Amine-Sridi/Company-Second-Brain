@@ -49,6 +49,15 @@ GEN_TIMEOUT_S = 300
 # Resource sampling
 # ---------------------------------------------------------------------------
 
+# nvidia-smi reports whole-GPU memory, and on Windows (WDDM) per-process VRAM comes
+# back as [N/A], so a raw reading includes the desktop compositor, the browser and any
+# other still-resident model -- qwen2.5:3b measured 2807 MB on a quiet GPU and 5188 MB
+# with another model loaded, which is not a property of qwen2.5. The model's own
+# footprint is therefore reported as a delta against a baseline sampled while no model
+# is loaded. `vram_peak_mb` keeps the absolute reading; `vram_model_mb` is the delta.
+_VRAM_BASELINE_MB: float | None = None
+
+
 def vram_used_mb() -> float | None:
     try:
         out = subprocess.run(
@@ -170,6 +179,9 @@ def _record(model, task, case_id, gen, quality_info, structured_valid, failed, e
         "prompt_tokens": gen.get("prompt_tokens") if gen else None,
         "load_time_s": gen.get("load_time_s") if gen else None,
         "vram_peak_mb": vram,
+        "vram_baseline_mb": _VRAM_BASELINE_MB,
+        "vram_model_mb": (round(vram - _VRAM_BASELINE_MB, 1)
+                          if vram is not None and _VRAM_BASELINE_MB is not None else None),
         "ram_used_mb": round(ram, 1) if ram else None,
     }
     row.update(quality_info or {})
@@ -219,6 +231,10 @@ def benchmark_model(model: str, latency_reps: int) -> list[dict]:
 
     unload(model)
     time.sleep(2)
+
+    global _VRAM_BASELINE_MB
+    _VRAM_BASELINE_MB = vram_used_mb()
+    print(f"  vram baseline (no model loaded): {_VRAM_BASELINE_MB} MB", flush=True)
 
     # --- Task 1: JD structuring -------------------------------------------------
     schema = tasks.jd_schema()

@@ -19,6 +19,7 @@ Figures produced:
 from __future__ import annotations
 
 import argparse
+import pathlib
 import json
 import statistics
 from pathlib import Path
@@ -55,12 +56,40 @@ def _style(ax, title, xlabel="", ylabel=""):
         ax.spines[spine].set_visible(False)
 
 
-def load(tag: str | None) -> tuple[list[dict], str]:
-    files = sorted(RESULTS.glob("raw_*.json"))
+def load(tag: str | None, explicit: list[str] | None = None) -> tuple[list[dict], str]:
+    """Loads result rows from explicitly-named files, or the newest sweep otherwise."""
+    if explicit:
+        rows, names = [], []
+        for name in explicit:
+            path = pathlib.Path(name)
+            if not path.exists():
+                path = RESULTS / name
+            rows.extend(json.loads(path.read_text(encoding="utf-8")))
+            names.append(path.stem)
+        return rows, "+".join(names)
+
+    files = sorted(RESULTS.glob("sweep_*.json")) or sorted(RESULTS.glob("raw_*.json"))
+    files = [f for f in files if "status" not in f.name]
     if not files:
-        raise SystemExit("No results found -- run run_benchmark.py first.")
+        raise SystemExit("No results found -- run sweep.py first.")
     path = next((f for f in files if tag and tag in f.name), files[-1])
-    return json.loads(path.read_text(encoding="utf-8")), path.stem.replace("raw_", "")
+    return json.loads(path.read_text(encoding="utf-8")), path.stem
+
+
+def vram_footprints() -> dict[str, float]:
+    """Per-model VRAM from the dedicated measure_vram.py pass.
+
+    The sweep's own inline `vram_model_mb` is deliberately NOT used: `unload()` returns
+    before the driver has released the previous model, so the baseline it subtracts is
+    sometimes still inflated by the model before it, which yields negative footprints.
+    measure_vram.py polls the GPU to a settled idle state first.
+    """
+    path = RESULTS / "vram_footprint.json"
+    if not path.exists():
+        return {}
+    data = json.loads(path.read_text(encoding="utf-8"))
+    return {r["model"]: r["model_footprint_mb"] for r in data.get("rows", [])
+            if r.get("model_footprint_mb")}
 
 
 def agg(rows, models):
@@ -103,12 +132,14 @@ def grouped_bars(ax, models, categories, values_fn, ylabel, title, fmt="{:.2f}")
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--tag", default=None)
+    ap.add_argument("results", nargs="*", help="result JSON files (default: newest sweep)")
     args = ap.parse_args()
 
-    rows, tag = load(args.tag)
+    rows, tag = load(args.tag, args.results)
     GRAPHS.mkdir(parents=True, exist_ok=True)
     models = sorted({r["model"] for r in rows})
     a = agg(rows, models)
+    footprints = vram_footprints()
 
     # 1 -- quality by task
     fig, ax = plt.subplots(figsize=(10, 5.5))
@@ -128,10 +159,11 @@ def main() -> int:
     vram, ram = [], []
     for m in models:
         sel = [r for r in rows if r["model"] == m]
-        vram.append(max([r["vram_peak_mb"] for r in sel if r.get("vram_peak_mb")] or [0]))
+        vram.append(footprints.get(m) or max(
+            [r["vram_peak_mb"] for r in sel if r.get("vram_peak_mb")] or [0]))
         ram.append(max([r["ram_used_mb"] for r in sel if r.get("ram_used_mb")] or [0]))
     xs = range(len(models))
-    ax.bar([x - 0.2 for x in xs], vram, width=0.4, label="Peak VRAM (MB)", color=PALETTE[0], edgecolor="white")
+    ax.bar([x - 0.2 for x in xs], vram, width=0.4, label="Model VRAM (MB, measured idle-to-loaded)", color=PALETTE[0], edgecolor="white")
     ax.bar([x + 0.2 for x in xs], ram, width=0.4, label="System RAM in use (MB)", color=PALETTE[1], edgecolor="white")
     for x, v in zip(xs, vram):
         ax.text(x - 0.2, v, f"{v:.0f}", ha="center", va="bottom", fontsize=8)
@@ -140,7 +172,11 @@ def main() -> int:
     ax.axhline(6144, color="#D55E00", linestyle="--", linewidth=1.2)
     ax.text(len(models) - 0.5, 6144, " RTX 3060 Laptop limit (6144 MB)", color="#D55E00",
             fontsize=8, va="bottom", ha="right")
-    ax.set_xticks(list(xs)); ax.set_xticklabels(models, fontsize=9)
+    ax.set_xticks(list(xs))
+    # Model tags are long; past ~5 of them the labels collide, so angle them.
+    ax.set_xticklabels(models, fontsize=9,
+                       rotation=20 if len(models) > 5 else 0,
+                       ha="right" if len(models) > 5 else "center")
     _style(ax, "Memory footprint per model", ylabel="MB")
     ax.legend(frameon=False, fontsize=9)
     fig.tight_layout(); fig.savefig(GRAPHS / "3_memory_footprint.png", dpi=160); plt.close(fig)
@@ -180,7 +216,8 @@ def main() -> int:
     fig, ax = plt.subplots(figsize=(9, 6))
     for mi, m in enumerate(models):
         sel = [r for r in rows if r["model"] == m]
-        v = max([r["vram_peak_mb"] for r in sel if r.get("vram_peak_mb")] or [0])
+        v = footprints.get(m) or max(
+            [r["vram_peak_mb"] for r in sel if r.get("vram_peak_mb")] or [0])
         q = statistics.mean([a[(m, t)]["quality"] for t in TASKS if (m, t) in a] or [0])
         ax.scatter(v, q, s=220, color=PALETTE[mi % len(PALETTE)], edgecolor="white",
                    linewidth=1.3, zorder=3)
@@ -189,7 +226,7 @@ def main() -> int:
     ax.axvline(6144, color="#D55E00", linestyle="--", linewidth=1.2)
     ax.text(6144, ax.get_ylim()[0], " 6 GB VRAM limit", color="#D55E00", fontsize=8, va="bottom")
     _style(ax, "Quality vs memory footprint\n(mean quality across all four tasks)",
-           xlabel="Peak VRAM (MB)", ylabel="Mean quality (0-1)")
+           xlabel="Model VRAM (MB, measured idle-to-loaded)", ylabel="Mean quality (0-1)")
     fig.tight_layout(); fig.savefig(GRAPHS / "6_quality_vs_memory.png", dpi=160); plt.close(fig)
 
     # 7 -- throughput

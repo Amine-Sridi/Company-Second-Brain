@@ -1,11 +1,102 @@
-__pycache__/
-*.pyc
+# Repo-root ignores. Several services also carry their own .gitignore
+# (services/voicehr, services/resume-intelligence, services/recruitment-workflow/frontend);
+# those are more specific and stay authoritative inside their own tree. This file covers
+# the repo root and any service that does not have one of its own (second-brain,
+# recruitment-workflow, benchmarks, infra, tests).
+
+# ---------------------------------------------------------------------------
+# Secrets and local configuration  -- NEVER commit these
+# ---------------------------------------------------------------------------
+# Every service reads its own .env (see infra/docker-compose.yml env_file:). They hold
+# GEMINI_API_KEY, RESEND_API_KEY, the JWT secret and the webhook HMAC secret. Only the
+# .env.example templates are tracked.
 .env
+.env.*
+*.env
 !.env.example
+!**/.env.example
+
+# ---------------------------------------------------------------------------
+# Candidate data (PII) -- privacy boundary, not just hygiene
+# ---------------------------------------------------------------------------
+# Interview audio is the candidate's recorded voice; transcripts are what they said.
+# Resumes are raw PII. None of it belongs in git. .gitkeep files are kept so the
+# directory structure survives a clean checkout.
+storage/**
+!storage/**/
+!storage/**/.gitkeep
+
+# Raw resume uploads, wherever they land.
+*.pdf
+*.docx
+*.doc
+!docs/**/*.pdf
+
+# ---------------------------------------------------------------------------
+# Python
+# ---------------------------------------------------------------------------
+__pycache__/
+*.py[cod]
+*$py.class
 *.egg-info/
 .venv/
 venv/
+env/
+ENV/
 .pytest_cache/
-storage/recordings/
-storage/transcripts/
+.mypy_cache/
+.ruff_cache/
+.hypothesis/
+.coverage
+.coverage.*
+htmlcov/
+build/
+dist/
+
+# ---------------------------------------------------------------------------
+# Node (services/recruitment-workflow/frontend)
+# ---------------------------------------------------------------------------
+node_modules/
+npm-debug.log*
+yarn-error.log*
+
+# ---------------------------------------------------------------------------
+# Local databases and model weights
+# ---------------------------------------------------------------------------
+# VoiceHR keeps its own SQLite store; it is per-machine state, never source.
 *.db
+*.sqlite
+*.sqlite3
+
+# Local LLM weights. Ollama keeps models in ~/.ollama, not here, but a stray GGUF is
+# multi-gigabyte and would be painful to remove from history -- so block them at the door.
+*.gguf
+*.safetensors
+*.onnx
+*.pt
+*.bin
+
+# ---------------------------------------------------------------------------
+# Logs, temp files, editors, OS
+# ---------------------------------------------------------------------------
+*.log
+*.tmp
+*.temp
+*.bak
+*.swp
+*.swo
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db
+# OneDrive drops desktop.ini into synced folders -- this repo lives in one.
+desktop.ini
+
+# ---------------------------------------------------------------------------
+# Deliberately NOT ignored -- do not "clean these up"
+# ---------------------------------------------------------------------------
+# benchmarks/local_llm/results/*.json  -- the raw measurements behind
+#   LOCAL_LLM_BENCHMARK_AND_FALLBACK.md; the report's numbers are unverifiable without them.
+# benchmarks/local_llm/graphs/*.png    -- the 11 figures referenced by the report.
+# services/voicehr/tests/benchmark_results/latest.{json,md} -- committed golden-case output.
+# Each service's .env.example          -- the template a new checkout copies from.

@@ -135,8 +135,13 @@ class Settings(BaseSettings):
     # rather than as a compose service.
     local_llm_enabled: bool = False
     local_llm_base_url: str = "http://host.docker.internal:11434"
-    local_llm_text_model: str = ""
-    local_llm_structured_model: str = ""
+    # Measured winners for this service's two tasks (LOCAL_LLM_BENCHMARK_AND_FALLBACK.md
+    # §6.3): match explanation -> llama3.2:3b (1.000, fastest of the four models that all
+    # scored 1.000); JD structuring/repair -> granite4.1:3b (0.975, and the fastest of
+    # the five -- it was also the only model to score 1.000 on the deliberately vague JD
+    # whose correct answer is an empty extraction).
+    local_llm_text_model: str = "llama3.2:3b"
+    local_llm_structured_model: str = "granite4.1:3b"
     jwt_secret: str = "changeme-jwt-secret"
     jwt_expiry_minutes: int = 45
     log_level: str = "INFO"

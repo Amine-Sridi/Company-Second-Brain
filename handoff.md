@@ -125,16 +125,15 @@ embeddings, one role per schema, no cross-schema grants (verified live).
 
 | Service | Tests | Notes |
 |---|---|---|
-| Resume Intelligence | 86 passed | Runs in-container or on host. |
-| Recruitment Workflow (RWS) | 174 passed | `services/recruitment-workflow/tests/` — mocked-DB unit/route tests, host or in-container. +15 this session (milestone 38): a new `test_match_anomaly.py`, pure-function coverage of every branch in `match_anomaly.py` (fires under the intended conditions, doesn't fire for low semantic relevance/a passing hard gate/too small a pool/an empty list, uses the *average* semantic score rather than a single outlier, and `merge_anomaly_warning`'s own status-transition and duplicate-warning-append idempotency). Milestone 36 (JD-extraction validation) previously added +24 here; unchanged this session. |
-| VoiceHR | 205 passed | **Host only** — its Docker image deliberately ships without `pytest` (lean production image). +11 this session (milestone 32): 5 new `test_report.py` assessment-contract tests, `test_interview_quality.py` restructured onto the new `golden_cases.py`/`benchmark_runner.py` split (9→15 tests: 13 golden cases + 2 whole-benchmark checks). Also runnable standalone, no pytest: `cd services/voicehr && python -m tests.benchmark_runner`. |
+| Resume Intelligence | **80 passed, 6 skipped** | Runs in-container or on host. Re-confirmed milestone 46. |
+| Recruitment Workflow (RWS) | **206 passed** | `services/recruitment-workflow/tests/` — mocked-DB unit/route tests, host or in-container. +15 this session (milestone 38): a new `test_match_anomaly.py`, pure-function coverage of every branch in `match_anomaly.py` (fires under the intended conditions, doesn't fire for low semantic relevance/a passing hard gate/too small a pool/an empty list, uses the *average* semantic score rather than a single outlier, and `merge_anomaly_warning`'s own status-transition and duplicate-warning-append idempotency). Milestone 36 (JD-extraction validation) previously added +24 here; unchanged this session. |
+| VoiceHR | **220 passed** | **Host only**, and must be run from `services/voicehr` (the app mounts a relative `frontend/` directory, so running it from the repo root errors at fixture setup on 153 tests -- environmental, not a failure). Its Docker image deliberately ships without `pytest` (lean production image). +11 this session (milestone 32): 5 new `test_report.py` assessment-contract tests, `test_interview_quality.py` restructured onto the new `golden_cases.py`/`benchmark_runner.py` split (9→15 tests: 13 golden cases + 2 whole-benchmark checks). Also runnable standalone, no pytest: `cd services/voicehr && python -m tests.benchmark_runner`. |
 | Second Brain | none | No `tests/` directory exists. A pre-existing, accepted gap — its one real integration (Resume Intelligence → Second Brain ingest/embed) is instead covered by a live end-to-end smoke test (candidate ingested, embedded, retrieved, PII boundary confirmed via direct `psql`). |
 
 **A second test suite exists at the repo root** (`tests/unit/`,
 `tests/integration/`) — discovered two sessions ago, not new work.
-`tests/unit/` (139 passed; +1 this session, milestone 31's new
-`InterviewAssessment.evaluation_status == "insufficient_evidence"` schema
-test) exercises `shared/` modules (schemas, scoring, auth, LLM interface,
+`tests/unit/` (**161 passed** + 15 subtests as of milestone 46, which added
+`test_llm_fallback.py`'s 22 tests pinning the local-fallback contract) exercises `shared/` modules (schemas, scoring, auth, LLM interface,
 observability, HTTP client) directly, no DB.
 `tests/integration/` runs each service's real FastAPI app against a **real
 Postgres** — see the test-isolation invariant immediately below for what
@@ -928,6 +927,32 @@ python services/recruitment-workflow/scripts/seed_demo_data.py --yes --job-title
 ---
 
 ## Known limitations
+
+- **The local LLM benchmark covers all 7 intended models, but nothing above 7 B
+  (milestone 46).** Three of them (`granite4.1:3b`, `gemma4:e2b-it-qat`, `mistral:7b`)
+  stalled mid-download — registry manifest HTTP 200, but blob transfer moving **16 bytes
+  in 25 s**, the same network flakiness that failed the milestone 45 image builds — and
+  were benchmarked after retrying. Nothing larger than 7 B was tried because nothing
+  larger is runnable on a 6 GB card, so the benchmark says nothing about whether a 13 B+
+  model would clear the interview-evaluation floor. Fold in a new model any time with
+  `python benchmarks/local_llm/sweep.py --models <name>`; nothing else needs to change.
+- **No fallback exists for interview evaluation, interview conduct, or embeddings, and
+  this is deliberate (milestone 46).** Each is argued in
+  `LOCAL_LLM_BENCHMARK_AND_FALLBACK.md` §6.4, §9 and §8 respectively. The one most
+  likely to be "helpfully" fixed later is embeddings: `nomic-embed-text` emits 768
+  dimensions, *exactly* matching the pgvector column, so wiring it in would insert
+  cleanly and silently corrupt retrieval rather than fail. Two unit tests exist
+  specifically to make that regression loud.
+- **When the fallback fires, output quality is a 3-4 B model, not Gemini.** Measured good
+  enough on the three chosen tasks (0.825 / 1.000 / 1.000) but not equivalent. Resume
+  extraction and match explanation each have only **one** benchmark case, so those 1.000s
+  mean "did not fail this case", not a general accuracy claim; the JD (4 cases) and
+  evaluation (13 cases) figures are the trustworthy ones.
+- **The benchmark's inline per-row VRAM figures are unreliable — ignore them.**
+  `unload()` returns before the driver releases memory, so inline baselines drifted
+  (2606-4455 MB) and some deltas came out negative. Every VRAM number quoted anywhere
+  comes from `benchmarks/local_llm/measure_vram.py`, which polls the GPU to a settled
+  idle state first. The unreliable fields are still present in the raw rows.
 
 - **RESOLVED (milestone 40): the partial-write risk in `submit_job`'s
   per-candidate scoring loop milestone 39's audit found.** `create_job_with_
@@ -3116,6 +3141,146 @@ message reads like a bad pin but is not: the *same* version downloaded
 successfully in another service's build in the same run — "from versions:
 none" means pip could not reach the index at all. Building the services
 sequentially avoids it. Worth remembering before assuming a pin is wrong.
+
+---
+
+### Milestone 46 — local open-weight LLM fallback (benchmarked, wired, default-off)
+
+Gemini stays the primary provider for every task. This adds a local fallback that fires
+**only** on availability failures, so an exhausted free-tier quota degrades to a slower
+local answer instead of a 502. Full write-up, raw data and figures:
+`LOCAL_LLM_BENCHMARK_AND_FALLBACK.md`, `benchmarks/local_llm/`.
+
+**Benchmarked, not guessed.** All seven candidate models were measured against this project's *own*
+prompts, schemas and validators (the real `jd_validation`, the real `CandidateExtraction`,
+VoiceHR's real `normalize_result` and its 13 committed golden transcripts) — not MMLU or
+any generic leaderboard. 161 rows: `sweep_clean.json` + `sweep_granite.json` + `sweep_last2.json` in
+`benchmarks/local_llm/results/`.
+
+| Task | Winner | Quality | Note |
+|---|---|---|---|
+| JD structuring (+ repair) | `granite4.1:3b` | 0.975 | 0.15 clear of the next model *and* the fastest of the five |
+| Resume extraction | `granite4.1:3b` | 1.000 | tied with `qwen3.5:4b` but 30% faster and 36% smaller |
+| Match explanation | `llama3.2:3b` | 1.000 | four models scored 1.000; chosen on latency |
+| Interview evaluation | **none** | 0.600 best | below the 0.70 usability floor — **no fallback**. The best score belongs to `mistral:7b`, the *largest* model tested, so this is not an artifact of picking small models. |
+
+Per-model cost (VRAM measured idle-to-loaded on a settled GPU, `measure_vram.py`;
+two independent runs agreed within ~2%): `qwen2.5:3b` 2245 MB / 93.5 tok/s,
+`granite4.1:3b` 2506 MB / 85.7 tok/s, `llama3.2:3b` 2566 MB / 95.0 tok/s,
+`gemma4:e2b-it-qat` 2818 MB / 99.4 tok/s, `phi4-mini:3.8b` 3074 MB / 75.4 tok/s,
+`qwen3.5:4b` 3909 MB / 65.9 tok/s, `mistral:7b` 4227 MB / **26.4 tok/s**.
+
+**The 7 B control confirmed the size ceiling by measurement.** `mistral:7b` was included
+to test whether the 3-4 B shortlist was justified or just convenient. It fits the card in
+isolation (4227 MB) but runs at roughly a quarter of the small models' throughput --
+21.7 s on resume extraction vs granite's 7.6 s, 21.4 s mean on interview evaluation vs
+~6 s -- and leaves almost nothing spare against the worst-case ~2.6 GB desktop headroom.
+
+**`granite4.1:3b` arriving late changed the answer.** It was one of three models the
+network would not deliver during the main sweep (all three eventually downloaded on retry
+and were measured identically); granite came first and won *both* structured tasks — displacing `qwen2.5:3b` on JD
+structuring (0.975 vs 0.825) and `qwen3.5:4b` on resume extraction. It was also the only
+model to score 1.000 on `jd_sparse_vague`, the deliberately vague JD whose correct answer
+is an empty extraction — i.e. the only one that reliably declined to invent requirements.
+Benchmarking only what happened to be installed would have shipped a measurably worse
+configuration. The last two stragglers (`gemma4:e2b-it-qat`, `mistral:7b`) changed no
+winner, which is the useful negative: the selection is stable across the full field. The
+winners collapse to **two** models (~2.5 GB each), fitting the worst-case VRAM budget.
+
+**Three findings worth keeping**, each of which would otherwise have produced a
+confidently wrong conclusion:
+
+1. **Ollama's grammar compiler is stricter than Gemini's.** It rejects `$ref`/`$defs`
+   (every nested Pydantic model emits them) and rejects `maxLength >= 2000` (measured:
+   <=1000 compiles). `ollama_compatible_schema()` inlines refs and drops oversized
+   bounds; Pydantic still enforces the real bounds afterwards.
+2. **A reasoning model's answer arrives in a separate `thinking` field.** `qwen3.5:4b`
+   scored 0.00 on everything until this was found — `response` was empty while the
+   correct JSON sat in `thinking`. Requests now send `think: false`; the same case then
+   scored 1.000.
+3. **Constrained decoding guarantees shape, never completeness — and the gap is silent.**
+   Every model scored `structured_valid = 1.00`, yet resume extraction capped at 0.60
+   because the models omitted the entire `basics` object — every candidate name, email
+   and phone — and the output *still validated*, because `CandidateExtraction.basics` has
+   a `default_factory` and so Pydantic emits a schema with no `required` list at all.
+   Promoting every property to `required` in the Ollama-only schema fixed it
+   (0.60 -> 0.85 on that model; qwen3.5 reached 1.000). Safe by construction: every field
+   is `Optional`, so requiring the *key* still permits a `null` *value*, and the
+   adversarial `jd_sparse_vague` case scored identically with and without promotion, so
+   completeness was not bought with fabrication.
+
+**Deliberately no fallback** for three things, each for a stated reason rather than an
+oversight:
+
+- **Embeddings.** Second Brain calls `embed_text` only, and a locally-produced vector
+  would be a *different embedding space*. The locally available `nomic-embed-text`
+  produces **768 dimensions — exactly matching the pgvector column**, so the dimension
+  check that would catch a mismatch passes, the insert succeeds, and the ranking is
+  plausible and meaningless. That feeds `semantic_score` into an immutable `MatchResult`.
+  `FallbackLLMProvider.embed_text` therefore forwards to the primary and nothing else;
+  two unit tests pin it. Second Brain is intentionally **not wired** at all.
+- **VoiceHR interview conduct.** Gemini Live is native speech-to-speech with its own
+  turn-taking; replacing it locally means rebuilding VAD + streaming STT + LLM +
+  streaming TTS concurrently on a card with ~2.6 GB free. Per CLAUDE.md that engine is
+  never rewritten. If Live is down, the interview does not start, and says so.
+- **Interview evaluation.** Measured, not assumed: local models set
+  `sufficient_evidence: false` on most transcripts, so `normalize_result` withholds the
+  CEFR verdict. A fallback would hand recruiters reports reading "insufficient evidence"
+  for interviews containing ample evidence.
+
+**Wiring, and it is now switched ON.** `wrap_with_local_fallback()` returns the primary
+unchanged unless `LOCAL_LLM_ENABLED=true`. The *code* default stays **false** (a checkout
+with no config behaves exactly as before), but each service's `.env` now sets it true with
+the measured winners, so the fallback is live on this machine:
+`LOCAL_LLM_STRUCTURED_MODEL=granite4.1:3b` (RWS + RI),
+`LOCAL_LLM_TEXT_MODEL=llama3.2:3b` (RWS). Verified in the running containers -- RWS and RI
+both report `FallbackLLMProvider`, Second Brain still reports plain `GeminiProvider`.
+Ollama must be running on the host with `granite4.1:3b` and `llama3.2:3b` pulled; if it is
+not, behaviour is unchanged (the fallback simply fails and the primary's error surfaces).
+
+**Gotcha worth remembering**: keep comments in those `.env` files on their own lines.
+Docker Compose's `env_file` parser does not reliably strip a trailing `#` comment, so
+`LOCAL_LLM_STRUCTURED_MODEL=granite4.1:3b  # winner` can reach the container as the
+literal string including the comment, producing a confusing "model not found". The values
+were read back out of the running container to confirm they arrived clean.
+
+**Proven live in-container** with the primary forced to raise `429 RESOURCE_EXHAUSTED`:
+`granite4.1:3b` returned a fully correct JD extraction (`Python, FastAPI, PostgreSQL,
+Docker`; preferred `Git, Linux`; 3 years; `Backend Engineer`) and `llama3.2:3b` produced
+the advisory explanation, both logging `llm_fallback_succeeded` over
+`host.docker.internal:11434`. RWS and Resume Intelligence are wired; Second Brain is not. Ollama runs on the **host** (already
+installed, no new compose service); containers reach it via the host gateway. Contract:
+primary success wins; `LLMProviderUnavailableError` (429/5xx/timeout/network) may fall
+back; **any other error re-raises immediately, so application bugs are never laundered
+through a second provider**; when both fail, the **primary's** error surfaces so every
+existing `except LLMProviderError` handler keeps its current meaning.
+
+**Verified.** `benchmarks/local_llm/verify_fallback.py` drives the real providers, real
+schema and real prompt against live Ollama: **9/9 checks, stable over three runs**,
+including a correct local JD extraction (`Python, FastAPI, PostgreSQL, Docker`, 3 years)
+while the primary was failing. Regression suites: **667 passing** — 161 unit (incl. 22
+new fallback tests), 206 RWS, 80 RI, 220 VoiceHR (run from `services/voicehr`).
+`tests/integration` was **not** run: its `conftest.py` defaults `DATABASE_URL` to the
+**live** database, and this change touches no database code, so it was not worth the
+risk. Nothing executed there (all failures were at connection setup) and the live DB was
+confirmed intact afterwards (8 candidates, 14 jobs, 101 match results, 9 knowledge rows).
+
+**Graphs** (11, for the internship report): `benchmarks/local_llm/graphs/`.
+Bars/scatter (`make_graphs.py`): quality by task, latency by task, memory footprint,
+structured-output validity, quality vs latency, quality vs memory, throughput.
+Line views (`make_line_charts.py`): quality profile by task, latency profile by task,
+per-golden-case evaluation quality as small multiples, and quality-per-MB with a Pareto
+frontier. Colours come from the validated categorical palette and were checked with the
+dataviz validator; because 7 series fails the all-pairs CVD gate (green vs orange at
+protan deltaE 3.2), the line charts use composite hue x shape encoding rather than colour
+alone.
+
+**Two things the per-case view exposes that the task means hide**: only **2 of 13**
+evaluation cases are scored correctly by every model, and both are cases where
+*withholding* a verdict is the right answer; and `prompt_injection_attempt` scored 0.15
+for **all seven** models -- none was injected (good), all were over-conservative and
+withheld a verdict the case expected to be A1/A2 (bad).
+
 
 ---
 
