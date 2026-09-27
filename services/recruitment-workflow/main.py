@@ -102,6 +102,7 @@ from jd_validation import ExtractionWarning, validate_and_normalize
 from language_gate import BLOCKING_STATUSES, compute_language_gate
 from scoring import CandidateScoringInput, JobRequirements, ScoringWeights, score_candidate
 from shared.llm import LLMProvider, LLMProviderError
+from shared.rate_limit import RateLimiter, client_ip
 from shared.observability import CorrelationIdMiddleware, configure_json_logging
 from shared.schemas import WebhookPayload
 from voicehr_client import VoiceHRClientError
@@ -317,16 +318,57 @@ def health():
     return {"status": "ok", "service": "recruitment-workflow"}
 
 
+# The only unauthenticated, credential-accepting endpoint in this service, and therefore
+# the only one worth brute-forcing. bcrypt makes each guess expensive for the *server*
+# too, so an unlimited login is also a cheap way to saturate this process.
+#
+# Two buckets on purpose, and an attempt consumes both:
+#   - per IP    stops one host grinding through passwords;
+#   - per email stops a distributed attempt on ONE account, which the IP bucket cannot
+#               see (each source address gets its own fresh quota).
+# An attacker can forge X-Forwarded-For to vary the IP key; they cannot vary the account
+# they are trying to break into.
+_login_ip_limiter = RateLimiter(limit=10, window_seconds=300)
+_login_account_limiter = RateLimiter(limit=5, window_seconds=300)
+
+
 @app.post("/v1/auth/login", response_model=LoginResponse)
-def login(payload: LoginRequest, db: Session = Depends(get_db)):
+def login(request: Request, payload: LoginRequest, db: Session = Depends(get_db)):
     """
     Recruiter login. One seeded account, no registration system (per architecture).
     Returns a short-lived JWT (JWT_EXPIRY_MINUTES) -- never a service API key, and this
     endpoint never accepts or checks X-Api-Key.
+
+    Rate limited: 10 attempts per IP and 5 per account per 5 minutes. A successful login
+    clears the account bucket, so a legitimate recruiter who mistyped twice is not left
+    locked out by their own correction.
     """
+    ip_key = client_ip(request)
+    account_key = (payload.email or "").strip().lower()
+
+    for limiter, key in ((_login_ip_limiter, ip_key), (_login_account_limiter, account_key)):
+        allowed, retry_after = limiter.check(key)
+        if not allowed:
+            # Deliberately the same generic wording for both buckets: saying which one
+            # tripped would tell an attacker whether the account exists.
+            logger.warning(
+                "login_rate_limited",
+                extra={"scope": "ip" if limiter is _login_ip_limiter else "account"},
+            )
+            raise HTTPException(
+                status_code=429,
+                detail="Too many login attempts. Try again later.",
+                headers={"Retry-After": str(int(retry_after) + 1)},
+            )
+
     recruiter = get_recruiter_by_email(db, payload.email)
     if recruiter is None or not verify_password(payload.password, recruiter.password_hash):
         raise HTTPException(status_code=401, detail="Invalid email or password")
+
+    # Only a *successful* login clears the account bucket. The IP bucket is left alone:
+    # one valid credential must not wipe the evidence of nine failed guesses from the
+    # same host.
+    _login_account_limiter.reset(account_key)
 
     token, expires_at = create_access_token(
         recruiter.id, recruiter.email, settings.jwt_secret, settings.jwt_expiry_minutes
@@ -557,19 +599,29 @@ async def submit_job(
         titles=normalized.titles,
     )
 
+    # ONE call for every retrieved candidate, not one per candidate (audit M2). The old
+    # loop made N sequential HTTP round-trips -- 20 at the default top_k, 100 at the
+    # maximum -- and made every one of them while this request's DB transaction was
+    # already open, holding a connection for the whole fan-out. Fetching up front also
+    # means the transaction now only spans local work.
+    retrieved_ids = [uuid.UUID(entry["candidate_id"]) for entry in retrieved]
+    try:
+        candidates_by_id = await clients.get_candidates_batch(
+            settings.second_brain_url, settings.second_brain_api_key, retrieved_ids
+        )
+    except SecondBrainClientError as exc:
+        raise HTTPException(
+            status_code=502, detail=f"Second Brain candidate lookup failed: {exc}"
+        )
+
     match_responses: list[MatchResultResponse] = []
     for entry in retrieved:
         candidate_id = uuid.UUID(entry["candidate_id"])
-        try:
-            candidate = await clients.get_candidate(
-                settings.second_brain_url, settings.second_brain_api_key, candidate_id
-            )
-        except SecondBrainClientError as exc:
-            raise HTTPException(
-                status_code=502, detail=f"Second Brain candidate lookup failed: {exc}"
-            )
+        candidate = candidates_by_id.get(candidate_id)
         if candidate is None:
             # Retrieved by the index but deleted before we could fetch details; skip.
+            # Unchanged behaviour -- the batch endpoint omits unknown ids exactly as the
+            # single-candidate endpoint returned 404 for them.
             continue
 
         scoring_input = CandidateScoringInput(

@@ -5,9 +5,10 @@ Auth-boundary, response-shape and error-semantics tests for
 GET /v1/candidates/{candidate_id}/knowledge on RWS.
 
 Architecture under test: this route transiently proxies Second Brain's own
-GET /v1/knowledge/candidates/{candidate_id} (via clients.get_candidate -- the same
-function POST /v1/jobs already calls per retrieved candidate during scoring) and
-persists nothing in RWS -- the same shape as GET /v1/candidates/{id}/identity (see
+GET /v1/knowledge/candidates/{candidate_id} (via clients.get_candidate) and
+persists nothing in RWS. Note that POST /v1/jobs no longer uses this function: scoring
+now fetches every retrieved candidate in one clients.get_candidates_batch call (audit
+M2), so this route is the remaining single-candidate caller -- the same shape as GET /v1/candidates/{id}/identity (see
 test_candidate_identity.py). No real Postgres or Second Brain is required: clients.
 get_candidate is mocked.
 """

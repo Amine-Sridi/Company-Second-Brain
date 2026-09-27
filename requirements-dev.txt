@@ -1,0 +1,23 @@
+# Test-only dependencies, shared by every suite.
+#
+# Deliberately NOT in any service's requirements.txt: they must not ship in a runtime
+# image. (Three services *do* ship pytest, for the reason documented in their own
+# requirements files -- host psycopg cannot reach the Docker Postgres through the WSL2
+# port proxy, so the integration suite has to run inside a container. Different concern.)
+pytest==9.1.1
+
+# Required, not optional: VoiceHR's suite uses async test functions and
+# @pytest.mark.asyncio (tests/test_report.py, test_processing.py and others). Without
+# this plugin pytest does not run them -- it reports "async def functions are not
+# natively supported" and **31 of VoiceHR's 225 tests fail**.
+#
+# It was installed on the development machine and declared nowhere, so the suite passed
+# locally and would have failed on any clean checkout. Building the CI workflow in a
+# fresh virtualenv is what surfaced it; that is precisely the class of bug CI exists to
+# catch, and it had been latent for the whole project.
+pytest-asyncio==1.4.0
+
+# No pytest-subtests here on purpose: the suites use unittest subTest
+# (tests/unit/test_llm_fallback.py has 15) and pytest 9 reports those natively --
+# verified against a clean interpreter with only pytest installed. Adding the plugin
+# would be a dependency that buys nothing.

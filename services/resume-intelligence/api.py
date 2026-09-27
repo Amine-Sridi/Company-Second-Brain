@@ -69,6 +69,13 @@ class Settings(BaseSettings):
     local_llm_text_model: str = "granite4.1:3b"
     local_llm_structured_model: str = "granite4.1:3b"
 
+    # Queue broker for ingestion (see CLAUDE.md's amended constraint). Redis is a broker
+    # and cache only -- never a source of truth and it never receives PII.
+    redis_url: str = "redis://redis:6379"
+    # Raw uploads (PII) land here while queued. Mounted only by this service and its
+    # worker, so the PII boundary is unchanged.
+    upload_dir: str = "storage/uploads"
+
     # Second Brain: where the PII-safe CandidateSummary is pushed after a resume
     # is successfully stored (see pipeline/candidate_summary.py).
     second_brain_url: str = "http://second-brain:8000"
@@ -89,15 +96,11 @@ _llm_provider: LLMProvider | None = None
 def get_llm_provider() -> LLMProvider:
     global _llm_provider
     if _llm_provider is None:
-        from shared.llm import GeminiProvider, wrap_with_local_fallback
+        # Built by llm_provider.build_llm_provider so the ARQ worker -- which runs
+        # outside FastAPI and cannot use Depends -- uses an identical configuration.
+        from llm_provider import build_llm_provider
         try:
-            _llm_provider = wrap_with_local_fallback(
-                GeminiProvider(api_key=settings.gemini_api_key or None),
-                enabled=settings.local_llm_enabled,
-                base_url=settings.local_llm_base_url,
-                text_model=settings.local_llm_text_model,
-                structured_model=settings.local_llm_structured_model,
-            )
+            _llm_provider = build_llm_provider(settings)
         except LLMProviderError as exc:
             # Safe to include verbatim: this is a startup/config error (missing
             # GEMINI_API_KEY or the google-genai package), never candidate data.
@@ -274,6 +277,112 @@ async def ingest_resume(
             pass
 
     return {"candidate_id": str(candidate_id), "is_new": is_new}
+
+
+# ---------------------------------------------------------------------------
+# Queued ingestion (the path built for volume)
+#
+# POST /v1/resumes runs the whole ~10s pipeline inside the request, holding one HTTP
+# worker per CV. That is fine at demo volume and is the ceiling at scale: against the
+# stated 100,000 CVs/day target (~3.5/s over a working day) it is reached in the low
+# hundreds. These two endpoints are the path that scales -- accept, enqueue, poll.
+#
+# The synchronous endpoint is deliberately left in place and unchanged, so RWS keeps
+# working while it migrates. Both run the SAME pipeline (ingestion.run_ingestion), so
+# they cannot drift.
+# ---------------------------------------------------------------------------
+
+class IngestJobResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    job_id: UUID4
+    status: str
+    candidate_id: Optional[UUID4] = None
+    is_new: Optional[bool] = None
+    error: Optional[str] = None
+    attempts: int = 0
+
+
+def _job_response(job) -> IngestJobResponse:
+    return IngestJobResponse(
+        job_id=job.id,
+        status=job.status,
+        candidate_id=job.candidate_id,
+        is_new=job.is_new,
+        error=job.error,
+        attempts=job.attempts,
+    )
+
+
+@app.post("/v1/resumes/jobs", status_code=status.HTTP_202_ACCEPTED, response_model=IngestJobResponse)
+async def enqueue_resume(
+    file: UploadFile = File(...),
+    db: Session = Depends(get_db),
+    _auth: None = Depends(require_service_key),
+):
+    """
+    Accept a resume and queue it. Returns 202 with a job id to poll.
+
+    Ordering matters and is not arbitrary: the file is written, then the `ingest_jobs`
+    row is committed, and only then is the job enqueued. So a Redis that is down or
+    flushed leaves a durable `queued` row that can be re-enqueued -- the upload is never
+    silently lost. The reverse order would lose it.
+    """
+    suffix = Path(file.filename or "resume").suffix.lower() or ".bin"
+    if suffix not in _ALLOWED_SUFFIXES:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail=f"Unsupported file type '{suffix}'. Allowed: {sorted(_ALLOWED_SUFFIXES)}",
+        )
+
+    from db import create_ingest_job
+
+    upload_dir = Path(settings.upload_dir)
+    upload_dir.mkdir(parents=True, exist_ok=True)
+    upload_path = upload_dir / f"{uuid.uuid4()}{suffix}"
+    upload_path.write_bytes(await file.read())
+
+    job = create_ingest_job(db, str(upload_path), file.filename)
+
+    try:
+        from arq import create_pool
+        from arq.connections import RedisSettings
+
+        pool = await create_pool(RedisSettings.from_dsn(settings.redis_url))
+        try:
+            # Only the opaque job id crosses into Redis -- never the file, never any
+            # extracted field. See CLAUDE.md's amended constraint.
+            await pool.enqueue_job("ingest_resume_job", str(job.id))
+        finally:
+            await pool.close()
+    except Exception as exc:
+        # The row survives as `queued`, so this is recoverable rather than a lost CV.
+        logger.error(
+            "ingest_enqueue_failed",
+            extra={"error_type": type(exc).__name__, "job_id": str(job.id)},
+        )
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=f"Queued (job_id={job.id}) but the queue is unreachable; it can be retried.",
+        )
+
+    return _job_response(job)
+
+
+@app.get("/v1/resumes/jobs/{job_id}", response_model=IngestJobResponse)
+def get_resume_job(
+    job_id: UUID4,
+    db: Session = Depends(get_db),
+    _auth: None = Depends(require_service_key),
+):
+    """Poll one ingestion. Read from Postgres, not Redis -- job state must outlive the
+    broker (see db.IngestJob)."""
+    from db import get_ingest_job
+
+    job = get_ingest_job(db, job_id)
+    if job is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Job not found")
+    return _job_response(job)
 
 
 @app.get(

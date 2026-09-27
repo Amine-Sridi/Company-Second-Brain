@@ -1,0 +1,201 @@
+name: CI
+
+# Every suite in this repo, run the way it actually has to be run. Until now all 667
+# tests were only ever executed by hand on one machine, so a regression was caught
+# whenever someone remembered to look. See SCALING_AND_FUTURE_IMPROVEMENTS.md §12.
+#
+# Three non-obvious constraints are encoded below; none of them are style choices:
+#
+#  1. Resume Intelligence and Recruitment Workflow CANNOT be collected in the same pytest
+#     run. Both ship a top-level module named `schemas` (a package in one, a .py in the
+#     other), so a single invocation resolves whichever is first on sys.path and the
+#     other's tests fail to import. They get separate jobs.
+#  2. VoiceHR's suite MUST run from services/voicehr. Its app mounts a *relative*
+#     `frontend` directory, so running from the repo root fails 153 tests at fixture
+#     setup with "Directory 'frontend' does not exist" -- environmental, not a real
+#     failure.
+#  3. The frontend tests use Node's own runner and must be invoked per file. The
+#     directory form (`node --test src/constants/`) fails on some Node builds while the
+#     per-file form passes.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+env:
+  PYTHON_VERSION: "3.12"   # matches the services' own `FROM python:3.12-slim`
+
+jobs:
+  unit:
+    name: Shared unit tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+      - name: Install
+        run: |
+          python -m pip install --upgrade pip
+          # shared/ is exercised directly; RWS's requirements are the superset that
+          # covers scoring/auth/db imports these tests pull in.
+          pip install -r services/recruitment-workflow/requirements.txt
+          pip install -r requirements-dev.txt
+      - name: Run
+        run: python -m pytest tests/unit -q
+
+  recruitment-workflow:
+    name: Recruitment Workflow
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+      - name: Install
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r services/recruitment-workflow/requirements.txt
+          pip install -r requirements-dev.txt
+      - name: Run
+        run: python -m pytest services/recruitment-workflow/tests -q
+
+  resume-intelligence:
+    name: Resume Intelligence
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+      - name: Install
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r services/resume-intelligence/requirements.txt
+          pip install -r requirements-dev.txt
+      - name: Run
+        run: python -m pytest services/resume-intelligence/tests -q
+
+  second-brain:
+    name: Second Brain
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+      - name: Install
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r services/second-brain/requirements.txt
+          pip install -r requirements-dev.txt
+      - name: Run
+        run: python -m pytest services/second-brain/tests -q
+
+  voicehr:
+    name: VoiceHR
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+      - name: Install
+        run: |
+          python -m pip install --upgrade pip
+          # VoiceHR's image deliberately ships without pytest (lean runtime), so the
+          # test runner comes from requirements-dev.txt rather than its own file.
+          pip install -r services/voicehr/requirements.txt
+          pip install -r requirements-dev.txt
+      - name: Run
+        working-directory: services/voicehr   # see constraint 2 above
+        run: python -m pytest tests -q
+
+  frontend:
+    name: Frontend (node --test)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+      - name: Run
+        working-directory: services/recruitment-workflow/frontend
+        # Per-file, not directory -- see constraint 3 above. `set -e` plus the loop means
+        # any failing file fails the job.
+        run: |
+          set -e
+          for f in src/constants/*.test.js; do
+            echo "--- $f"
+            node --test "$f"
+          done
+
+  integration:
+    name: Integration (real Postgres)
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: pgvector/pgvector:pg16
+        env:
+          POSTGRES_USER: csb_admin
+          POSTGRES_PASSWORD: changeme
+          POSTGRES_DB: company_second_brain_test
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U csb_admin"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+      - name: Install
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r services/recruitment-workflow/requirements.txt
+          pip install -r requirements-dev.txt
+      - name: Create schemas and least-privilege roles
+        env:
+          PGPASSWORD: changeme
+        run: |
+          psql -h localhost -U csb_admin -d company_second_brain_test <<'SQL'
+          CREATE EXTENSION IF NOT EXISTS vector;
+          CREATE SCHEMA IF NOT EXISTS recruitment;
+          CREATE SCHEMA IF NOT EXISTS resume_intel;
+          CREATE SCHEMA IF NOT EXISTS second_brain;
+          DO $$ BEGIN
+            CREATE ROLE recruitment_role LOGIN PASSWORD 'changeme';
+          EXCEPTION WHEN duplicate_object THEN NULL; END $$;
+          GRANT ALL ON SCHEMA recruitment TO recruitment_role;
+          SQL
+      - name: Migrate
+        working-directory: services/recruitment-workflow
+        env:
+          DATABASE_URL: postgresql+psycopg://csb_admin:changeme@localhost:5432/company_second_brain_test?options=-csearch_path%3Drecruitment
+        run: alembic upgrade head
+      - name: Run
+        working-directory: tests/integration
+        env:
+          # Both are required. TEST_DATABASE_URL satisfies db_safety.py's guard; DATABASE_URL
+          # must ALSO be set because tests/integration/conftest.py otherwise defaults it to
+          # a *live* database name. That default has destroyed this project's demo data once
+          # already -- in CI there is nothing to destroy, but setting it explicitly keeps the
+          # job honest rather than relying on the default being harmless here.
+          TEST_DATABASE_URL: postgresql+psycopg://recruitment_role:changeme@localhost:5432/company_second_brain_test?options=-csearch_path%3Drecruitment
+          DATABASE_URL: postgresql+psycopg://recruitment_role:changeme@localhost:5432/company_second_brain_test?options=-csearch_path%3Drecruitment
+          SERVICE_API_KEY: test-service-key
+        # Reported as non-blocking for now: this suite has never run in CI and its
+        # fixtures assume more setup than the schema above provides. Flip `continue-on-error`
+        # to false once it is green -- leaving it silently absent would be worse.
+        continue-on-error: true
+        run: python -m pytest . -q

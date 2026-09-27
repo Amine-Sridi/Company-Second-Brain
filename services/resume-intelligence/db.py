@@ -12,7 +12,7 @@ import uuid
 from datetime import datetime
 from typing import Generator, Optional
 
-from sqlalchemy import Column, DateTime, Text, create_engine, text
+from sqlalchemy import Boolean, Column, DateTime, Integer, Text, create_engine, text
 from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import DeclarativeBase, Session, sessionmaker
 
@@ -92,6 +92,49 @@ class Candidate(Base):
     )
 
 
+class IngestJob(Base):
+    """
+    Durable state for one queued resume ingestion.
+
+    This exists so **Redis is never the source of truth**. ARQ keeps its own job records,
+    but Redis is a cache/broker here: it can be flushed, evicted or restarted, and when
+    that happens the only acceptable loss is throughput, never the knowledge that a
+    recruiter uploaded a CV. A row lands here before anything is enqueued, so a job that
+    Redis loses is still visible as `queued` and can be re-enqueued.
+
+    Deliberately holds **no PII**: no name, no email, no extracted text. `candidate_id`
+    is the opaque link to the real record once parsing succeeds, and `error` is a generic
+    string (the pipeline's own exception messages can embed extracted candidate data,
+    which is why api.py already refuses to log them).
+    """
+
+    __tablename__ = "ingest_jobs"
+    __table_args__ = {"schema": "resume_intel"}
+
+    id: uuid.UUID = Column(
+        UUID(as_uuid=True),
+        primary_key=True,
+        default=uuid.uuid4,
+        server_default=text("gen_random_uuid()"),
+    )
+    # queued -> running -> succeeded | failed
+    status: str = Column(Text, nullable=False, server_default=text("'queued'"))
+    # Path on the resume_uploads volume, mounted only by this service and its worker.
+    upload_path: str = Column(Text, nullable=False)
+    original_filename: Optional[str] = Column(Text, nullable=True)
+    candidate_id: Optional[uuid.UUID] = Column(UUID(as_uuid=True), nullable=True)
+    is_new: Optional[bool] = Column(Boolean, nullable=True)
+    # Generic reason only -- never an exception message (may contain PII).
+    error: Optional[str] = Column(Text, nullable=True)
+    attempts: int = Column(Integer, nullable=False, server_default=text("0"))
+    created_at: datetime = Column(
+        DateTime(timezone=True), server_default=text("now()"), nullable=False
+    )
+    updated_at: datetime = Column(
+        DateTime(timezone=True), server_default=text("now()"), nullable=False
+    )
+
+
 # ---------------------------------------------------------------------------
 # Business logic
 # ---------------------------------------------------------------------------
@@ -163,3 +206,68 @@ def list_candidates(db: Session) -> list[Candidate]:
     (api.py's CandidateListItem), not here.
     """
     return db.query(Candidate).order_by(Candidate.created_at.desc()).all()
+
+
+# ---------------------------------------------------------------------------
+# Ingest job state
+#
+# Every transition is its own small committed write. The worker runs outside any
+# request, so there is no surrounding transaction to ride on, and a crash mid-pipeline
+# must leave a row that says so rather than an invisible one.
+# ---------------------------------------------------------------------------
+
+def create_ingest_job(db: Session, upload_path: str, original_filename: str | None) -> IngestJob:
+    """Records the job as `queued` BEFORE it is enqueued, so a job Redis never receives
+    is still visible and re-enqueueable rather than silently lost."""
+    job = IngestJob(upload_path=upload_path, original_filename=original_filename, status="queued")
+    db.add(job)
+    db.commit()
+    db.refresh(job)
+    return job
+
+
+def get_ingest_job(db: Session, job_id: uuid.UUID) -> Optional[IngestJob]:
+    return db.query(IngestJob).filter(IngestJob.id == job_id).one_or_none()
+
+
+def mark_ingest_job_running(db: Session, job_id: uuid.UUID) -> None:
+    db.query(IngestJob).filter(IngestJob.id == job_id).update(
+        {
+            IngestJob.status: "running",
+            IngestJob.attempts: IngestJob.attempts + 1,
+            IngestJob.updated_at: text("now()"),
+        },
+        synchronize_session=False,
+    )
+    db.commit()
+
+
+def mark_ingest_job_succeeded(
+    db: Session, job_id: uuid.UUID, candidate_id: uuid.UUID, is_new: bool
+) -> None:
+    db.query(IngestJob).filter(IngestJob.id == job_id).update(
+        {
+            IngestJob.status: "succeeded",
+            IngestJob.candidate_id: candidate_id,
+            IngestJob.is_new: is_new,
+            IngestJob.error: None,
+            IngestJob.updated_at: text("now()"),
+        },
+        synchronize_session=False,
+    )
+    db.commit()
+
+
+def mark_ingest_job_failed(db: Session, job_id: uuid.UUID, error: str) -> None:
+    """`error` must be a generic, caller-chosen reason -- never an exception message.
+    The extraction pipeline's exceptions can embed candidate name/email/phone, which is
+    exactly why api.py logs only the exception *type*."""
+    db.query(IngestJob).filter(IngestJob.id == job_id).update(
+        {
+            IngestJob.status: "failed",
+            IngestJob.error: error,
+            IngestJob.updated_at: text("now()"),
+        },
+        synchronize_session=False,
+    )
+    db.commit()

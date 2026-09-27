@@ -5,11 +5,12 @@ from datetime import datetime, timedelta
 from html import escape
 from pathlib import Path
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import FileResponse, HTMLResponse
 
 from backend.api.deps import get_db, require_admin_auth
 from backend.core.config import settings
+from backend.core.rate_limit import RateLimiter, client_ip
 from backend.api.routes.interview import deliver_invitation_email
 from backend.api.routes.invite import require_rws_service_key
 import backend.database as database
@@ -22,8 +23,15 @@ from backend.services.rws_client import (
 router = APIRouter()
 
 
+# GET /api/report/{token} is unauthenticated by design -- the uuid4 token IS the
+# credential -- which makes it the one route here worth guessing at. 122 bits is not
+# brute-forceable, but an unlimited endpoint still lets an attacker probe freely and
+# costs a DB round-trip per try. Keyed by IP: there is no account to key on.
+_report_limiter = RateLimiter(limit=30, window_seconds=60)
+
+
 @router.get("/api/report/{report_token}")
-def get_report_public(report_token: str, db=Depends(get_db)):
+def get_report_public(request: Request, report_token: str, db=Depends(get_db)):
     """
     The candidate/admin-facing bearer URL. Unauthenticated by design -- the uuid4 token
     is the credential -- so it is the one surface that must expire (audit M10).
@@ -33,6 +41,14 @@ def get_report_public(report_token: str, db=Depends(get_db)):
     email or transcript at all. An unknown token stays 404 rather than 410: 410 would
     confirm that a token once existed.
     """
+    allowed, retry_after = _report_limiter.check(client_ip(request))
+    if not allowed:
+        raise HTTPException(
+            status_code=429,
+            detail="Too many requests. Try again shortly.",
+            headers={"Retry-After": str(int(retry_after) + 1)},
+        )
+
     row = db.execute(
         "SELECT created_at FROM reports WHERE report_token = ?", (report_token,)
     ).fetchone()

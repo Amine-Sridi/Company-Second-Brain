@@ -11,7 +11,6 @@
         * { box-sizing: border-box; margin: 0; padding: 0; }
         .step { display: none; }
         .step.active { display: block; }
-        .task-steps .step { display: block; }
     </style>
     <link rel="stylesheet" href="/theme.css">
 </head>
@@ -67,7 +66,7 @@
                  <div class="interview-top"><span class="candidate-name" id="interview-candidate"></span><span class="elapsed-timer" id="timer">00:00</span></div>
                   <div class="orb-wrap"><div class="orb speaking" id="sarah-orb"><div class="orb-core"></div></div><p class="orb-label" id="sarah-label">Connecting to Sarah…</p></div>
                  <div class="wave" id="wave"><div class="bar"></div><div class="bar"></div><div class="bar"></div><div class="bar"></div><div class="bar"></div><div class="bar"></div><div class="bar"></div><div class="bar"></div><div class="bar"></div><div class="bar"></div><div class="bar"></div><div class="bar"></div></div>
-                    <div class="task-card"><p class="task-label task-indicator">Interview in progress</p><p class="task-text">Sarah will guide you through 4 tasks. Speak naturally and give Sarah examples when you can.</p><div class="task-steps"><div class="step current"></div><div class="step"></div><div class="step"></div><div class="step"></div></div></div>
+                    <div class="task-card"><p class="task-label task-indicator">Interview in progress</p><p class="task-text">Sarah will guide you through 4 tasks. Speak naturally and give Sarah examples when you can.</p></div>
                     <div class="live-transcript" id="live-transcript" aria-live="polite" aria-label="Live transcript">
                         <p class="live-transcript-title">Live transcript</p>
                         <div id="live-transcript-lines"><p class="live-transcript-placeholder">Your conversation will appear here.</p></div>
@@ -611,32 +610,20 @@
                            renderLiveTranscriptEvent(message);
                            return;
                       }
-                      if (message.type === 'progress') {
-                         const completed = message.completed || [];
-                         const phaseLabels = {
-                             clarifying: 'Sarah is asking for a little more detail',
-                             discussion: 'Conversation in progress',
-                             task: `Task ${message.task} of ${message.total || 4}`,
-                         };
-                         document.querySelector('.task-indicator').textContent =
-                             phaseLabels[message.phase] || phaseLabels.task;
-                         document.querySelectorAll('.task-steps .step').forEach((step, index) => {
-                             const number = index + 1;
-                             step.classList.toggle('done', completed.includes(number));
-                             step.classList.toggle('current', number === message.task && !completed.includes(number));
-                         });
-                         return;
-                     }
                      if (message.type === 'task') {
-                         const total = message.total || 4;
-                         document.querySelector('.task-text').textContent = message.text;
-                         document.querySelector('.task-indicator').textContent = message.follow_up
-                             ? `Follow-up question · Task ${message.task}`
-                             : `Task ${message.task} of ${total}`;
-                         if (message.phase === 'clarifying') {
-                             document.querySelector('.task-indicator').textContent =
-                                 'Sarah is asking for a little more detail';
-                         }
+                         // Deliberately no "Task N of 4" counter and no step dots.
+                         // The server sends exactly one `task` event, for the opening
+                         // question (backend/services/gemini_live.py calls send_task
+                         // once); Sarah then runs the rest of the interview herself from
+                         // the system instruction, paraphrasing as she goes. Any counter
+                         // rendered here therefore froze at "Task 1 of 4" for the whole
+                         // interview and told the candidate something false. What is
+                         // actually happening is already shown, live and accurately, by
+                         // the transcript panel (renderLiveTranscriptEvent).
+                         document.querySelector('.task-indicator').textContent =
+                             message.phase === 'clarifying'
+                                 ? 'Sarah is asking for a little more detail'
+                                 : 'Interview in progress';
                         return;
                     }
                      if (message.type === 'audio_start') {
@@ -728,10 +715,6 @@
                            showStep('step-retry');
                            return;
                       }
-                    if (message.type === 'follow_up') {
-                        document.querySelector('.task-indicator').textContent = `Follow-up question · Task ${message.task}`;
-                        return;
-                    }
                     if (message.type === 'status') {
                         document.querySelector('.task-indicator').textContent = message.audio_error
                             ? 'Sarah audio unavailable. You can continue speaking.'

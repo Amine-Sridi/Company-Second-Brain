@@ -62,10 +62,21 @@ contradiction — and if you do, follow the process in "If you think a decision 
 - Gemini is the default AI provider (extraction, JD structuring, explanation, embeddings,
   VoiceHR evaluation), behind a thin `LLMProvider` interface so switching providers is a config
   change, not a rewrite.
-- No Kafka / RabbitMQ / Temporal / Redis / Celery / Kubernetes / ELK / Prometheus-Grafana. The
-  one genuine async boundary (VoiceHR → RWS interview completion) is a signed, idempotent
-  webhook — no broker. Background work uses FastAPI `BackgroundTasks` and in-process
-  `APScheduler` only.
+- No Kafka / RabbitMQ / Temporal / Celery / Kubernetes / ELK. The one genuine async
+  boundary (VoiceHR → RWS interview completion) is a signed, idempotent webhook.
+- **AMENDED: Redis + ARQ are allowed, for resume ingestion only.** The original ban was
+  correct for a system whose only async need was one webhook. The stated target is now
+  100,000 CVs/day (~3.5/s over a working day); resume parsing was a ~10s Gemini call
+  awaited inside the upload request, holding one HTTP worker per CV — a ceiling reached
+  in the low hundreds per day. Scope, deliberately narrow:
+  - Redis is a queue broker and cache only. Never a source of truth, and it never
+    stores PII — jobs carry an opaque id; the file stays on a volume only Resume
+    Intelligence and its worker mount.
+  - Durable job state lives in Postgres (`resume_intel.ingest_jobs`), so a flushed Redis
+    loses throughput, never a candidate record.
+  - Everything else still uses `BackgroundTasks`/`APScheduler`. Matching, webhooks and
+    notifications are not on the queue.
+- Prometheus-Grafana remains deferred until there is a throughput number worth tuning.
 - Explicitly deferred, do not implement speculatively: GDPR erasure automation, full
   IAM/OAuth/SSO, reconciliation polling for lost webhooks, skill taxonomy/synonym
   normalization, learned ranking model, horizontal scaling, secrets manager, separate Postgres

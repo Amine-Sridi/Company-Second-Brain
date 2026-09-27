@@ -1,0 +1,20 @@
+{
+  "measured_at": "2026-09-27T16:39:01.393833+00:00",
+  "requested": 4,
+  "accepted": 4,
+  "upload_concurrency": 2,
+  "counts": {
+    "succeeded": 4
+  },
+  "enqueue_seconds": 0.53,
+  "drain_seconds": 20.81,
+  "wall_seconds": 21.34,
+  "succeeded_per_hour": 674.7,
+  "projected_per_day_24h": 16192,
+  "per_job_seconds": {
+    "n": 4,
+    "min": 10.36,
+    "median": 11.1,
+    "max": 16.2
+  }
+}

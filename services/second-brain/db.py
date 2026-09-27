@@ -82,6 +82,13 @@ class CandidateKnowledge(Base):
     raw_text: str = Column(Text, nullable=False)
     source_version: str = Column(Text, nullable=False)
     embedding = Column(Vector(EMBEDDING_DIMENSIONS), nullable=False)
+    # Which embedding space this vector belongs to. Cosine similarity is only meaningful
+    # within one space, and a cross-space query returns plausible nonsense rather than an
+    # error -- see migration 0004 and SCALING_AND_FUTURE_IMPROVEMENTS.md §5.
+    embedding_model_version: str = Column(Text, nullable=False)
+    # NULL means "no task_type was set", which is the state of every vector written
+    # before this column existed. Setting a task_type changes the space.
+    embedding_task_type: Optional[str] = Column(Text, nullable=True)
     created_at: datetime = Column(
         DateTime(timezone=True), server_default=text("now()"), nullable=False
     )
@@ -134,6 +141,8 @@ def upsert_candidate_knowledge(
     raw_text: str,
     source_version: str,
     embedding: list[float],
+    embedding_model_version: str,
+    embedding_task_type: Optional[str] = None,
 ) -> None:
     """
     Insert or update candidate knowledge by candidate_id.
@@ -151,6 +160,8 @@ def upsert_candidate_knowledge(
             raw_text=raw_text,
             source_version=source_version,
             embedding=embedding,
+            embedding_model_version=embedding_model_version,
+            embedding_task_type=embedding_task_type,
         )
         .on_conflict_do_update(
             index_elements=["candidate_id"],
@@ -161,6 +172,8 @@ def upsert_candidate_knowledge(
                 "raw_text": raw_text,
                 "source_version": source_version,
                 "embedding": embedding,
+                "embedding_model_version": embedding_model_version,
+                "embedding_task_type": embedding_task_type,
                 "updated_at": func.now(),
             },
         )
@@ -180,11 +193,36 @@ def get_candidate_knowledge(
     )
 
 
+def get_candidate_knowledge_many(
+    db: Session, candidate_ids: list[uuid.UUID]
+) -> list[CandidateKnowledge]:
+    """
+    Fetch many candidates in one query.
+
+    Exists because RWS's submit_job looped `await get_candidate(...)` once per retrieved
+    candidate -- N sequential cross-service round-trips inside a single open transaction
+    (audit M2). One `IN` query replaces N.
+
+    Missing ids are simply absent from the result rather than raising: retrieval can
+    return a candidate that was deleted moments later, and the caller already has to
+    tolerate that. Order is not guaranteed, so callers index by candidate_id.
+    """
+    if not candidate_ids:
+        return []
+    return (
+        db.query(CandidateKnowledge)
+        .filter(CandidateKnowledge.candidate_id.in_(candidate_ids))
+        .all()
+    )
+
+
 def search_candidates(
     db: Session,
     query_embedding: list[float],
     top_k: int,
     candidate_ids: list[uuid.UUID] | None = None,
+    embedding_model_version: str | None = None,
+    embedding_task_type: str | None = None,
 ) -> list[tuple[uuid.UUID, float]]:
     """
     Return up to top_k candidates ordered by cosine similarity (descending).
@@ -195,6 +233,15 @@ def search_candidates(
 
     candidate_ids: when provided, restricts the search to that subset.
     An empty list returns nothing immediately.
+
+    embedding_model_version / embedding_task_type: when given, **only vectors from that
+    same embedding space are searched**. This is a correctness gate, not a filter for
+    convenience. Cosine distance across two spaces still returns numbers and still ranks
+    candidates -- it is simply meaningless, and it would flow into `semantic_score` and
+    then into an immutable MatchResult with no trace. Returning *fewer* results (or none)
+    during a re-embed is the loud, correct behaviour; returning plausible nonsense is not.
+    Passing None searches every generation and is only appropriate for maintenance tooling
+    that knows what it is doing.
     """
     if candidate_ids is not None and len(candidate_ids) == 0:
         return []
@@ -206,27 +253,35 @@ def search_candidates(
     # where ::vector casts on bound parameters fail to compile.
     vec_literal = "[" + ",".join(map(str, query_embedding)) + "]"
 
+    conditions: list[str] = []
+    params: dict = {"top_k": top_k}
+
     if candidate_ids:
         # UUIDs are Pydantic-validated hex strings — safe to format directly.
         placeholders = ", ".join(f"'{cid}'" for cid in candidate_ids)
-        sql = text(f"""
-            SELECT candidate_id,
-                   GREATEST(0.0, LEAST(1.0, 1.0 - (embedding <=> '{vec_literal}'::vector))) AS similarity
-            FROM second_brain.candidate_knowledge
-            WHERE candidate_id IN ({placeholders})
-            ORDER BY embedding <=> '{vec_literal}'::vector
-            LIMIT :top_k
-        """)
-    else:
-        sql = text(f"""
-            SELECT candidate_id,
-                   GREATEST(0.0, LEAST(1.0, 1.0 - (embedding <=> '{vec_literal}'::vector))) AS similarity
-            FROM second_brain.candidate_knowledge
-            ORDER BY embedding <=> '{vec_literal}'::vector
-            LIMIT :top_k
-        """)
+        conditions.append(f"candidate_id IN ({placeholders})")
 
-    rows = db.execute(sql, {"top_k": top_k}).fetchall()
+    if embedding_model_version is not None:
+        # Bound parameter, not interpolated: unlike the vector literal and the UUIDs,
+        # this is a plain string and has no reason to be formatted into the SQL.
+        conditions.append("embedding_model_version = :embedding_model_version")
+        params["embedding_model_version"] = embedding_model_version
+        # IS NOT DISTINCT FROM so NULL matches NULL -- "no task_type set" is itself a
+        # space, and it is the one every pre-0004 vector belongs to.
+        conditions.append("embedding_task_type IS NOT DISTINCT FROM :embedding_task_type")
+        params["embedding_task_type"] = embedding_task_type
+
+    where = f"WHERE {' AND '.join(conditions)}" if conditions else ""
+    sql = text(f"""
+        SELECT candidate_id,
+               GREATEST(0.0, LEAST(1.0, 1.0 - (embedding <=> '{vec_literal}'::vector))) AS similarity
+        FROM second_brain.candidate_knowledge
+        {where}
+        ORDER BY embedding <=> '{vec_literal}'::vector
+        LIMIT :top_k
+    """)
+
+    rows = db.execute(sql, params).fetchall()
     return [(uuid.UUID(str(row.candidate_id)), float(row.similarity)) for row in rows]
 
 

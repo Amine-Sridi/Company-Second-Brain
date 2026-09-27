@@ -2,10 +2,11 @@ import secrets
 import sqlite3
 from datetime import datetime, timedelta
 
-from fastapi import Depends, HTTPException, status
+from fastapi import Depends, HTTPException, status, Request
 from fastapi.security import HTTPBasic, HTTPBasicCredentials
 
 from backend.core.config import settings
+from backend.core.rate_limit import RateLimiter, client_ip
 from backend.database import DB_PATH, MAX_INTERVIEW_RECONNECTS
 
 
@@ -67,7 +68,29 @@ def require_admin_auth(credentials: HTTPBasicCredentials = Depends(_admin_securi
         )
 
 
-def validate_interview_start(token: str, db=Depends(get_db)):
+# Rate limit for the unauthenticated, token-guessing surface.
+#
+# This lives here, as a dependency the token validators depend on, for a reason that was
+# a real bug first: applying it inside the route handler meant `validate_interview_start`
+# had already run and 404'd an invalid token, so a probe never reached the limiter at all
+# -- the limit applied only to *valid* tokens, which is precisely the traffic that does
+# not need limiting. Ordering by dependency graph, not by declaration order.
+_token_probe_limiter = RateLimiter(limit=20, window_seconds=60)
+
+
+def enforce_token_probe_limit(request: Request) -> None:
+    allowed, retry_after = _token_probe_limiter.check(client_ip(request))
+    if not allowed:
+        raise HTTPException(
+            status_code=429,
+            detail="Too many requests. Try again shortly.",
+            headers={"Retry-After": str(int(retry_after) + 1)},
+        )
+
+
+def validate_interview_start(
+    token: str, db=Depends(get_db), _rl: None = Depends(enforce_token_probe_limit)
+):
     """
     Validate a start request and recover a session that looks abandoned before a real
     WebSocket connect (or after one dropped) landed -- e.g. the candidate closed the

@@ -100,7 +100,7 @@ large-scale SaaS deployment.
 | M8 | MEDIUM | WEAKNESS | Tests | No automated test ever runs two real services against each other | open |
 | M9 | MEDIUM | WEAKNESS | Tests | 29 frontend components/pages, 0 with automated tests | partial - 34 pure-logic tests exist; no component tests |
 | M10 | MEDIUM | WEAKNESS | Privacy | VoiceHR is a second permanent PII store with unauthenticated, non-expiring report links | **FIXED** (m47) - wording in CLAUDE.md + token TTL |
-| M11 | MEDIUM | OPTIMIZATION | Retrieval quality | Embeddings never set `task_type` for an asymmetric JD↔resume retrieval task | **OPEN — verified not implemented** (see note below) |
+| M11 | MEDIUM | OPTIMIZATION | Retrieval quality | Embeddings never set `task_type` for an asymmetric JD↔resume retrieval task | **OPEN, but now safe to do** (m55 versioned the embedding space; see note below) |
 | M12 | MEDIUM | WEAKNESS | Maintainability | `ApplicationsPage.jsx` — 890 lines, one component holding ~15 `useState` | open |
 | M13 | MEDIUM | WEAKNESS | Matching quality | Three JD-quality layers exist to detect symptoms of one brittle exact-match skill gate | open (architecture-level) |
 | L1–L14 | LOW | mixed | various | See the Low-severity section | L1/L5-L7 fixed (m44-45); L8 declined with reasons |

@@ -31,3 +31,9 @@ google-genai==2.18.0
 # is the only way those real-database tests run at all. Removing it would trade a
 # few MB of image size for the loss of the entire integration suite.
 pytest==9.1.1
+
+# Queue client + worker for resume ingestion (CLAUDE.md's amended constraint). ARQ rather
+# than Celery: asyncio-native, so the existing async pipeline runs unchanged, and small
+# enough that the whole worker is one module. Celery would impose a conceptual weight
+# this codebase has no use for.
+arq==0.27.0

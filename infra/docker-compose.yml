@@ -22,6 +22,27 @@ services:
       timeout: 5s
       retries: 10
 
+  # Queue broker for resume ingestion only (see CLAUDE.md's amended constraint).
+  # Deliberately NOT a source of truth and it never holds PII: jobs carry an opaque job
+  # id, durable job state lives in Postgres (resume_intel.ingest_jobs), and the uploaded
+  # file stays on a volume only Resume Intelligence and its worker mount. A flushed Redis
+  # costs throughput, never a candidate record.
+  redis:
+    image: redis:7-alpine
+    container_name: csb-redis
+    restart: unless-stopped
+    # appendonly keeps queued-but-unstarted jobs across a restart. Even without it the
+    # system is correct -- ingest_jobs rows stay 'queued' and can be re-enqueued -- but
+    # losing them silently would be a worse default.
+    command: ["redis-server", "--appendonly", "yes"]
+    expose:
+      - "6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
   resume-intelligence:
     build:
       context: ..
@@ -33,6 +54,12 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
+      redis:
+        condition: service_healthy
+    volumes:
+      # Raw uploads are PII. This volume is mounted ONLY here and on the worker, so the
+      # "candidate PII lives only in Resume Intelligence" boundary is unchanged.
+      - resume_uploads:/app/storage/uploads
     # Deliberately not published to the host. Only RWS calls this service, over the
     # compose network, and the browser never does -- publishing it only widened the
     # attack surface for a PII-owning service. Reach it for debugging with
@@ -45,6 +72,37 @@ services:
       timeout: 5s
       retries: 5
       start_period: 15s
+
+
+  # Runs the ingestion pipeline off the request path. Same image and env as the API so
+  # there is exactly one codebase and one config; only the command differs.
+  resume-intelligence-worker:
+    build:
+      context: ..
+      dockerfile: services/resume-intelligence/Dockerfile
+    container_name: csb-resume-intelligence-worker
+    restart: unless-stopped
+    env_file:
+      - ../services/resume-intelligence/.env
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    volumes:
+      - resume_uploads:/app/storage/uploads
+    # No migrations here: the API container owns `alembic upgrade head` (milestone 45).
+    # Two containers racing the same migration on startup is a real failure mode.
+    command: ["arq", "jobs.WorkerSettings"]
+    healthcheck:
+      # Checks the worker can still reach Redis, which is what "healthy" means for a
+      # queue consumer. Not pgrep: procps is not in python:3.12-slim, so a pgrep-based
+      # check reports unhealthy even while the worker is happily draining jobs.
+      test: ["CMD-SHELL", "python -c \"import os,redis;redis.from_url(os.environ.get('REDIS_URL','redis://redis:6379')).ping()\""]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
 
   second-brain:
     build:
@@ -109,3 +167,4 @@ services:
 volumes:
   postgres_data:
   voicehr_data:
+  resume_uploads:

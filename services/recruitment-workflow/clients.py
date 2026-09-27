@@ -64,6 +64,49 @@ async def get_candidate(
     return resp.json()
 
 
+async def get_candidates_batch(
+    base_url: str, api_key: str, candidate_ids: list[uuid.UUID]
+) -> dict[uuid.UUID, dict]:
+    """
+    Fetch many candidates' knowledge in ONE call, keyed by candidate_id.
+
+    Replaces the per-candidate loop in submit_job, which made N sequential HTTP
+    round-trips inside a single open DB transaction (audit M2). At top_k=20 that was 20
+    round-trips before scoring could begin.
+
+    Ids Second Brain does not know are simply absent from the returned mapping -- the
+    same tolerance the single-candidate path had via its 404-means-skip branch, since
+    retrieval can name a candidate deleted moments later.
+    """
+    if not candidate_ids:
+        return {}
+    try:
+        resp = await call_service(
+            "POST",
+            f"{base_url}/v1/knowledge/candidates/batch",
+            api_key=api_key,
+            json={"candidate_ids": [str(cid) for cid in candidate_ids]},
+        )
+    except ServiceCallError as exc:
+        raise SecondBrainClientError(str(exc)) from exc
+
+    if resp.status_code != 200:
+        raise SecondBrainClientError(
+            f"Second Brain batch candidate lookup returned {resp.status_code}: {resp.text}"
+        )
+
+    body = resp.json()
+    out: dict[uuid.UUID, dict] = {}
+    for entry in body.get("candidates", []):
+        try:
+            out[uuid.UUID(str(entry["candidate_id"]))] = entry
+        except (KeyError, ValueError):
+            # A malformed row must not sink the whole submission; the caller treats a
+            # missing candidate as "skip", which is the same outcome.
+            continue
+    return out
+
+
 async def send_candidate_feedback(
     base_url: str,
     api_key: str,

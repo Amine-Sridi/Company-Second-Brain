@@ -3417,6 +3417,378 @@ during this session hit the fallback correctly and still failed because Ollama w
 
 ---
 
+### Milestone 49 — the interview page no longer tells the candidate a false position
+
+Milestone 48's finding, now acted on: `send_task()` is called exactly once, so the
+candidate-facing task card froze at **"Task 1 of 4"** with the first of four step dots lit
+for the entire interview, while Sarah had long since moved on. The card also pinned task
+1's wording on screen (*"To begin, could you tell me a little about yourself?"*) while she
+was asking about something else entirely.
+
+Fixed by removing the claim rather than inventing the tracking. The server genuinely
+cannot know which task Sarah is on -- she runs the interview herself from the system
+instruction and paraphrases as she goes (milestone 48) -- so any counter rendered here is
+a guess presented as fact. Inferring progress from the model's speech would be exactly the
+speculative infrastructure this project's own rules reject.
+
+What changed in `frontend/interview.html`:
+
+- The `task` handler no longer writes `Task N of 4` (or `Follow-up question · Task N`).
+  It now sets a truthful, non-positional label -- `Interview in progress`, or
+  `Sarah is asking for a little more detail` for the clarifying phase -- which is what
+  the card already showed before the first event arrived.
+- The four step dots are gone from the card, along with the now-unused
+  `.task-steps .step` rule. With nothing able to advance them, one perpetually-lit dot was
+  just the visual half of the same false claim.
+- Two **dead handlers** removed: `message.type === 'progress'` and
+  `message.type === 'follow_up'`. Neither type is ever sent by the server
+  (`follow_up` is a *field* on the `task` event, not a type of its own), and each wrote
+  its own version of the frozen counter. `progress` was also the only thing that would
+  ever have advanced the dots.
+
+**Nothing was lost by removing it.** The page already renders a live transcript
+(`renderLiveTranscriptEvent`, driven by the `transcript_delta` / `transcript_turn_end`
+events the server really does send), so the candidate still sees what Sarah is asking --
+accurately, and updated as she speaks, which the task card never was.
+
+**Left alone deliberately**: `message.type === 'status'` is also a handler for a message
+the server never sends, but unlike the other two it does not assert anything false, so
+removing it would have been scope creep rather than a fix. Noted here so the next reader
+does not assume it is wired up.
+
+Verified: the page's inline script still parses (`node --check` on the extracted block),
+VoiceHR's suite is **225 passing**, and the rebuilt image serves the corrected page.
+
+
+---
+
+### Milestone 50 — `SCALING_AND_FUTURE_IMPROVEMENTS.md` (planning, no code changed)
+
+A grounded roadmap for what to add *when*, written as triggers rather than a wishlist,
+because `CLAUDE.md`'s "what concrete problem does this solve" rule makes an undated
+technology list worse than useless. Every claim is tied to a real line, a measured number
+or an incident from this project's own history -- including the N+1 at `submit_job`'s
+per-candidate loop, the in-memory state that silently breaks at `replicas: 2`
+(`_resend_cooldowns` main.py:1789, `_interview_round_resend_cooldowns` main.py:1390,
+`_active_interview_locks` session.py:33), and the dangling cross-schema candidate
+references observed live (4 of 5 `selected` applications).
+
+Two things it credits as already correct and warns against "improving": the HNSW cosine
+index on `candidate_knowledge.embedding` (retrieval is already index-backed), and the
+one-Postgres/three-schema split (which makes a future service split a deployment change,
+not a rewrite). It also lists what to **refuse** -- Kubernetes, Kafka, a separate vector
+DB, a learned ranker -- with the reasoning, since being able to defend an omission is
+worth as much at a jury as a feature.
+
+Top five, in order: add CI; version the embedding space **before** touching `task_type`
+(trivial at 9 vectors, a migration at 50k); batch the Second Brain candidate fetch; make
+Ollama a managed service with a startup probe; alert on interview completion rate -- the
+`history_config` defect (milestone 48) broke every interview for several sessions and one
+such alert would have caught it in hours.
+
+
+---
+
+### Milestone 51 — CI (GitHub Actions), and the missing dependency it immediately found
+
+First item from `SCALING_AND_FUTURE_IMPROVEMENTS.md` §15. Until now all tests were run by
+hand on one machine, so a regression was caught whenever someone remembered to look.
+
+`.github/workflows/ci.yml` runs six jobs on push/PR: shared unit, Recruitment Workflow,
+Resume Intelligence, VoiceHR, frontend, and an integration job against a real
+`pgvector/pgvector:pg16` service container. Three non-obvious constraints are encoded in
+the workflow *with the reason*, because each one silently breaks a naive setup:
+
+1. **RI and RWS cannot share a pytest run** -- both ship a top-level `schemas` module, so
+   one invocation resolves whichever is first on sys.path. Separate jobs.
+2. **VoiceHR must run from `services/voicehr`** -- its app mounts a *relative* `frontend`
+   directory; from the repo root 153 tests error at fixture setup.
+3. **Frontend tests must be invoked per file** -- `node --test src/constants/` fails on
+   some Node builds while the per-file form passes.
+
+**The dependency CI found before it ever ran.** Building the workflow meant validating
+each job in a clean virtualenv, and VoiceHR failed **31 of 225 tests** there while passing
+locally: `pytest-asyncio` was installed on the development machine and **declared in no
+requirements file**. Its async tests (`@pytest.mark.asyncio` in `test_report.py`,
+`test_processing.py` and others) were simply not running anywhere except this one machine.
+Any clean checkout -- a new contributor, a fresh container, a grader -- would have failed.
+Now pinned in a new root `requirements-dev.txt` (test-only, deliberately kept out of the
+runtime images).
+
+Also verified and recorded there: `pytest-subtests` is **not** needed. pytest 9 reports
+unittest `subTest` natively (the 15 in `test_llm_fallback.py`), checked against a clean
+interpreter -- so it is documented as an intentional omission rather than left as a
+question for the next reader.
+
+All four Python jobs were validated in clean virtualenvs, not assumed:
+**unit 161, RWS 211, RI 80 (+6 skipped), VoiceHR 225** -- 677 Python tests plus 34
+frontend. The RI skips are graceful (no `GEMINI_API_KEY`, no `DATABASE_URL`), so CI needs
+no secrets.
+
+The integration job is `continue-on-error: true` for now: that suite has never run in CI
+and its fixtures assume more setup than the workflow's schema bootstrap provides. Flip it
+to blocking once green -- leaving it silently absent would be worse than marking it
+visibly provisional. Its env also sets `DATABASE_URL` explicitly, because
+`tests/integration/conftest.py` otherwise defaults it to a *live* database name.
+
+
+---
+
+### Milestone 52 — resume ingestion moved onto a queue (Redis + ARQ)
+
+Phase A item 1 of `SCALING_AND_FUTURE_IMPROVEMENTS.md`, after the target was stated
+explicitly: **100,000 CVs/day** (~3.5/s over a working day). `POST /v1/resumes` `await`ed
+the whole ~10s extraction pipeline *inside the HTTP request*, holding one worker per CV --
+a ceiling reached in the low hundreds per day, not the hundred-thousands.
+
+**New shape**: `POST /v1/resumes/jobs` accepts the file, writes it to the `resume_uploads`
+volume, commits a `resume_intel.ingest_jobs` row, enqueues an opaque job id, and returns
+**202** with that id. `GET /v1/resumes/jobs/{id}` polls. A new `resume-intelligence-worker`
+container (`arq jobs.WorkerSettings`, same image and `.env` as the API) runs the pipeline.
+
+**The synchronous `POST /v1/resumes` is untouched and still works**, so RWS keeps
+functioning while it migrates. Both paths call the same `ingestion.run_ingestion`, so they
+cannot drift -- that extraction is the substance of the change.
+
+Ordering is a correctness decision, not a style one: file written -> row committed ->
+*then* enqueued. A Redis that is down leaves a durable `queued` row and the file on disk,
+so the endpoint returns 503 naming the job id and the CV is recoverable. The reverse order
+loses it.
+
+**PII boundary unchanged.** Redis is a broker and cache only: the enqueued payload is a
+job id and nothing else -- no file, no extracted field. Durable state is Postgres.
+`ingest_jobs` stores no name/email/phone/text; `error` is a fixed reason string, never
+`str(exc)`, because the pipeline's own exceptions can embed candidate data. The uploads
+volume is mounted **only** by this service and its worker. A test asserts the enqueued
+payload contains no PII.
+
+**A defect found by actually running it.** The first real upload spent 258s failing, and
+the cause was a retry budget I had introduced: `parse_resume_text` already retries 3x
+internally, and `MAX_TRIES = 3` on the ARQ job multiplied rather than added -- up to
+**9 full Gemini extractions for one CV**. That is precisely audit M4's nested-budget
+defect ("3 x 2 meant one interview could burn six full-transcript evaluation calls")
+reappearing in a new place. Now `MAX_TRIES = 1`: the pipeline owns retry and the queue
+does not second-guess it; a worker killed mid-job leaves a `running` row that is
+re-enqueueable, which is what `ingest_jobs` exists for.
+
+**Verified end to end, not just unit-tested.** A real .docx through the live stack:
+202 -> queued -> worker picked it up -> DOCX extracted -> Gemini extraction -> candidate
+`3a6205b9` stored -> Second Brain vector created (1 row) -> job `succeeded`. File hygiene
+confirmed too: the succeeded job's upload was deleted, the earlier failed job's was
+**kept** so it can be retried without re-uploading.
+
+The first attempt failed honestly (Gemini unavailable *and* Ollama not running on the
+host -- it still does not auto-start, the limitation milestone 46 recorded), which also
+demonstrated the failure path writing a PII-free reason.
+
+**Tests: RI 89 (+9), unit 161, RWS 211, VoiceHR 225.** Two worker-startup bugs were found
+and fixed on the way: `WorkerSettings.redis_settings` must be an *attribute* holding a
+`RedisSettings` (arq reads `.host` off it; a `staticmethod` crashes at startup), and the
+worker's `configure_json_logging` import must be `shared.observability`.
+
+**Not done here, and it needs you**: `CLAUDE.md`'s constraint list still bans Redis. I am
+blocked from editing that file (self-modification guard), so the amendment text is in the
+session notes for a human to paste. Until then the code and that document disagree.
+
+
+---
+
+### Milestone 53 — the N+1 in submit_job is gone (audit M2)
+
+Phase A item 2. `submit_job` looped `await clients.get_candidate(...)` once per retrieved
+candidate: **N sequential cross-service HTTP round-trips**, made while this request's DB
+transaction was already open, before any scoring could start. At the default `top_k=20`
+that is 20 round-trips; at the maximum 100, it is 100.
+
+**Now one call.** New `POST /v1/knowledge/candidates/batch` on Second Brain (backed by a
+single `IN` query, `db.get_candidate_knowledge_many`) and `clients.get_candidates_batch`
+on RWS, which returns a mapping keyed by `candidate_id`. The fetch also moved *above* the
+scoring loop, so the transaction now spans local work only rather than the whole fan-out.
+
+**Tolerances preserved deliberately.** The old loop skipped a candidate Second Brain
+404'd, because semantic retrieval can name a candidate deleted moments later. The batch
+endpoint expresses that as an **omitted entry rather than an error**, and the caller
+treats the two identically -- a regression here would turn ordinary data churn into failed
+job submissions. A malformed row is likewise skipped rather than sinking a submission that
+had 19 good candidates. Both are tested.
+
+**Verified on the live stack, not just mocked.** A real submission returned 10 matches,
+and the logs settle it:
+
+```
+RWS         -> 1 x "POST /v1/knowledge/candidates/batch"
+Second Brain-> batch requests: 2 (one manual probe + this submission)
+               single-candidate requests: 0
+```
+
+A direct probe of the endpoint with 5 real ids plus 1 fake returned **200 with 5
+candidates** -- the unknown id omitted, not an error -- and the response carried exactly
+the PII-free fields (`candidate_id`, `skills`, `years_of_experience`, `job_titles`,
+`raw_text`, `source_version`).
+
+**Tests: RWS 217 (+6), RI 89, unit 161, VoiceHR 225.** The new tests live in
+`test_candidates_batch.py` and pin the tolerances above plus "20 candidates cost exactly
+one round-trip".
+
+Two accuracy fixes made along the way rather than left to rot: `test_candidate_knowledge.py`'s
+docstring claimed `POST /v1/jobs` calls `get_candidate` per candidate, which is no longer
+true (that route is now the only single-candidate caller); and a comment I first wrote
+claiming the batch route had to be registered before `/{candidate_id}` to avoid shadowing
+was **wrong** -- that route is a GET and this is a POST, so they cannot collide today. The
+ordering is kept as a precaution and the comment now says exactly that.
+
+
+---
+
+### Milestone 54 — ingestion throughput measured, and it contradicted the plan
+
+`CLAUDE.md` now says Prometheus-Grafana stays deferred "until there is a throughput number
+worth tuning". This produces that number.
+
+`benchmarks/load/ingest_load_test.py` enqueues N synthetic CVs (unique emails -- identical
+ones would short-circuit on email dedup and measure nothing) and polls
+`resume_intel.ingest_jobs` until all are terminal. It measures how fast jobs **drain**,
+not how fast the endpoint returns 202; a generic HTTP load tool would have measured the
+easy half.
+
+| Run | max_jobs | Throughput | Per-job min / median / max |
+|---|---|---|---|
+| 4 CVs, conc 2 | 4 | 674.7 CV/h | 10.4 / 11.1 / 16.2 s |
+| 24 CVs, conc 8 | 4 | **908.8 CV/h** | 8.4 / 48.2 / 92.0 s |
+| 24 CVs, conc 8 | 12 | 822.7 CV/h | 7.6 / 53.7 / 103.6 s |
+
+100% succeeded in all three runs.
+
+**The result overturned my own recommendation.** `SCALING_AND_FUTURE_IMPROVEMENTS.md`
+implied more concurrency means more CVs/hour, and the first 24-CV run looked like
+confirmation: `running` pinned at 4 for the whole run, per-job median 48.2s against a
+floor of 8.4s -- five-sixths of each job's life was queue wait. So I raised `max_jobs`
+4 -> 12 and re-measured.
+
+Throughput got **worse** (908.8 -> 822.7 CV/h). The worker log says why: **23 of 24
+extractions were served by the local Ollama fallback**, Gemini being quota-exhausted, and
+Ollama serialises on one laptop GPU. Extra concurrency queued at a saturated resource
+rather than filling an idle one. `max_jobs` is back to 4 -- the measured-better value *in
+fallback mode* -- with the evidence recorded in `jobs.py` and an explicit note that the
+healthy-Gemini path remains untuned, because quota never allowed a clean run.
+
+**Two things this changes.** First, ~909 CV/h is the *local model's* ceiling on one GPU,
+not the system's, so extrapolating it to "21,811/day" describes a degraded mode -- the
+load test's own footer now says to check the provider mix before reading anything into a
+result. Second, it prices the local-first extraction idea: one GPU buys ~900 CV/h, so the
+100,000/day target (~4,167 CV/h) needs on the order of **five GPUs** continuously. That is
+now a grounded number to weigh against the Gemini bill rather than an assertion.
+
+`SCALING_AND_FUTURE_IMPROVEMENTS.md` §17 carries the full results, and its "no load test
+has ever been run" caveat is retired.
+
+**Still deferred, correctly**: Prometheus. The number exists now, but the bottleneck it
+would have been bought to find was identified from a 20-line log grep. Metrics earn their
+place when the question is *continuous* ("is it slow right now?"), not one-off.
+
+
+---
+
+### Milestone 55 — the embedding space is versioned, and M11 is now safe to do
+
+Phase B, and the item `SCALING_AND_FUTURE_IMPROVEMENTS.md` called the clearest
+cheap-now/expensive-later decision in the project.
+
+**The problem.** Cosine similarity is only meaningful *within one embedding space*. A
+vector from a different model -- or the same model with a different `task_type` -- lives
+in a different space, and querying across spaces does not error: it returns numbers, ranks
+candidates, and looks entirely plausible while being meaningless. That ranking becomes
+`semantic_score`, half of `final_score`, persisted into an immutable `MatchResult` this
+project presents as auditable. Nothing recorded which space a stored vector belonged to
+(RWS's `MatchResult.embedding_model_version` describes the *score*, not the vector), and
+the obvious guard misses it: `nomic-embed-text` emits exactly 768 dimensions, so a
+dimension check passes cleanly.
+
+**The fix.** Migration `0004` adds `embedding_model_version` (NOT NULL) and
+`embedding_task_type` (nullable) to `second_brain.candidate_knowledge`, plus an index for
+the filter. `search_candidates` now gates on both, and `upsert_candidate_knowledge`
+**requires** the model version -- no default, so writing a vector without declaring its
+space is impossible rather than merely discouraged. NULL task_type is matched with
+`IS NOT DISTINCT FROM`, because "no task_type set" is itself a real space and the one
+every pre-migration vector belongs to; plain `=` would never match it and the active space
+would silently retrieve nothing.
+
+The backfill is not a guess: every existing row was written by `gemini-embedding-001`
+with no task_type, so the server default describes them accurately. Verified live -- all
+**62** vectors backfilled as `gemini-embedding-001 / (null)`.
+
+**Verified the gate actually gates**, against the live database:
+
+| query space | result |
+|---|---|
+| active (`gemini-embedding-001` / none) | 5 results |
+| different model (`nomic-embed-text`) | **0 results** |
+| same model, different `task_type` | **0 results** |
+| ungated (maintenance tooling only) | 5 results |
+
+That third row is the point: **audit M11 -- "set `task_type` on embeddings" -- can no
+longer silently corrupt retrieval.** It would now return zero results, loudly wrong,
+instead of plausible nonsense. M11 remains open, but it is now a safe migration
+(add column -> re-embed -> flip the active space) rather than a one-line change that
+quietly breaks matching. A real job submission still returns 20 matches with the gate
+active, so nothing regressed.
+
+**Second Brain has a test suite for the first time** (audit's "no `tests/` directory
+exists" gap): `test_embedding_space.py`, 8 tests, no Postgres required -- a capturing
+session asserts on the SQL actually built. It pins the space filter, the NULL-matching
+semantics, that the version is a bound parameter rather than interpolated, that the
+ungated path stays available for re-embedding tooling, and that `upsert` has no default
+for the version. A `second-brain` job was added to the CI workflow.
+
+**Tests: SB 8 (new), RI 89, RWS 217, unit 161, VoiceHR 225.**
+
+
+---
+
+### Milestone 56 — partitioning `match_results`: investigated, costed, and deliberately not done
+
+Asked to continue with Phase B's partitioning item. Investigated it first, and the
+investigation changed the answer -- recorded in `SCALING_AND_FUTURE_IMPROVEMENTS.md` §18
+so nobody re-derives it.
+
+**The blocker.** Postgres requires the partition key in every unique constraint, so
+partitioning by `created_at` forces the PK from `(id)` to `(id, created_at)`. That breaks
+every FK referencing `match_results(id)` -- and there are two:
+`applications.match_result_id` and `match_explanations.match_result_id`. So the change is
+not "partition one table"; it is: add a denormalised `match_result_created_at` to **both**
+referencing tables, backfill, rewrite both FKs as composite, update the ORM and every
+insert, *then* partition.
+
+**Why that flips the decision.** Those steps are permanent complexity, paid immediately,
+and cost the same at 140 rows as at 50 million -- only the data copy gets worse with time.
+That is the opposite of the embedding-versioning case (m55), which was cheap *and* closed
+a live correctness hole. This is performance only.
+
+**The measurements that say wait:**
+
+| | |
+|---|---|
+| Rows today | **140** (184 kB, ~1.3 kB/row) |
+| Hot query `WHERE job_id = ?` | **already indexed** (`match_results_job_id_idx`) |
+| Growth at 200 jobs/day x top_k 100 | 7.3M rows/year (~10 GB) |
+
+Growth is `jobs x top_k`, **not** CVs/day -- 100,000 CVs/day does not multiply this table
+unless jobs are posted at that rate. Postgres handles a well-indexed 10M-row table without
+partitioning, and §8's own stated trigger ("a few million rows") is years out even at the
+busiest projection.
+
+**What was delivered instead**: §18 records the blocker, the growth model, the trigger
+(~5M rows, or a retention policy needing O(1) partition drops) and a five-step executable
+migration plan that solves the composite-FK problem. The work is now *pre-decided* rather
+than *pre-done*.
+
+No schema changed. Implementing it now would be precisely the "it's more scalable"
+reasoning `CLAUDE.md` rejects -- and I would rather be able to defend the omission than
+carry the complexity.
+
+
+---
+
 ## [NEXT]
 
 **One real human interview, for rubric calibration.** Milestone 48 closed the pipeline
@@ -3432,12 +3804,10 @@ interview in a real browser answering genuinely, and check that the resulting CE
 and dimension scores are defensible for that speaker. Remember the Resend sandbox only
 delivers to **aminesridi58@gmail.com**, so the candidate's stored email must be that one.
 
-Two smaller items, both cheap and both now unblocked:
+One smaller item, also needing a human rather than more code (the other, the false
+"1/4" progress indicator, was closed by milestone 49):
 
-1. **The frontend progress indicator reads "1/4" for an entire interview** (milestone 48:
-   `send_task` is only ever called once). Either drive it from the transcript or remove
-   it -- as it stands it tells the candidate something false.
-2. **Send one real interview-round notification** (milestones 41-42) to a deliverable
+1. **Send one real interview-round notification** (milestones 41-42) to a deliverable
    address and confirm a real calendar client offers "Add to calendar", and that a
    reschedule/cancel updates the same entry rather than duplicating it. The ICS itself is
    proven by 16 unit tests and milestone 43 proved delivery; only the visual render
