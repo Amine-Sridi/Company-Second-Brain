@@ -127,12 +127,21 @@ def _live_config(types, prompt: str, language: str):
         kwargs["thinking_config"] = types.ThinkingConfig(thinking_level="minimal")
     except (AttributeError, TypeError):
         pass
-    try:
-        kwargs["history_config"] = types.HistoryConfig(
-            initial_history_in_client_content=True,
-        )
-    except (AttributeError, TypeError):
-        pass
+    # history_config=HistoryConfig(initial_history_in_client_content=True) is
+    # deliberately NOT set. It was added defensively (guarded by try/except, so it
+    # silently became active once the SDK grew the attribute), and against
+    # gemini-3.1-flash-live-preview it stops the model producing any audio at all:
+    # the session connects, accepts the opening turn, and then emits nothing until
+    # this module's own first-activity watchdog kills it at 30s -- which is exactly
+    # the "Sarah is temporarily unavailable" failure that made a complete interview
+    # impossible. Bisected option-by-option against a live session:
+    #
+    #   baseline / +system_instruction / +speech_config / +transcription /
+    #   +thinking_config          -> audio in ~1.5s
+    #   +history_config           -> 0 bytes after 52s
+    #
+    # The full pipeline config minus this one option produces audio in 1.4s. If it is
+    # ever reinstated, re-run that bisect first.
     return types.LiveConnectConfig(**kwargs)
 
 

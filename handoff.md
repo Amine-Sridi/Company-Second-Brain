@@ -3340,53 +3340,108 @@ per-file form works.
 
 ---
 
+### Milestone 48 — the [NEXT] interview, finally observed end to end (and the defect that was blocking it)
+
+`[NEXT]` has been open for several sessions: "a fresh, complete interview reaching Section
+E, producing a real `interaction_spontaneity` score, a webhook RWS applies, and a computed
+language gate." It was never a missing-effort problem. **Gemini Live was broken**, and the
+bug is now fixed.
+
+**Root cause: one Live config option silenced the model entirely.**
+`_live_config` set `history_config=HistoryConfig(initial_history_in_client_content=True)`.
+It was added defensively inside a `try/except`, so it silently became active once the SDK
+grew the attribute. Against `gemini-3.1-flash-live-preview` it makes the model emit **no
+audio at all**: the session connects, accepts the opening turn, then produces nothing
+until this module's own first-activity watchdog kills it at 30s -- surfacing to the
+candidate as *"Sarah is temporarily unavailable."* That is exactly the failure that made a
+complete interview impossible.
+
+Bisected option-by-option against a live session (no invite consumed):
+
+| config | result |
+|---|---|
+| baseline / +system_instruction / +speech_config / +transcription / +thinking_config | audio in ~1.5s |
+| **+history_config** | **0 bytes after 52s** |
+
+Full pipeline config minus that one option: audio in 1.4s. Removed, with the bisect
+recorded in the code so it cannot be reinstated blindly. `test_session.py` was asserting
+the broken value (`initial_history_in_client_content is True`) and now asserts
+`history_config is None`, guarding the fix. VoiceHR: **225 passing**.
+
+**How the interview was conducted without a human**: `scripts/synthetic_interview.py`
+speaks the browser's own protocol (`POST /start`, WS, 16 kHz mono s16le PCM paced in
+realtime, `speech_end` per turn, `{"type":"end"}` to finish). Gemini Live is real -- real
+audio in, real audio out, real turn-taking; only the candidate's voice is synthesised.
+TTS is pluggable: `edge` (Microsoft neural voices, free, no key -- the default),
+`sapi` (Windows, free), `elevenlabs`.
+
+**All four [NEXT] criteria observed**, on application `e14b74b5` / job `51364e5d`:
+
+| criterion | result |
+|---|---|
+| Section E adaptive follow-up fires | **YES -- `abstract` tier**: *"how do you think that might look different from someone else's point of view?"* |
+| `interaction_spontaneity` gets a real score | **YES -- 15** (all dimensions scored: fluency 60, vocabulary 80, grammar 85, comprehension 20; pronunciation correctly `None`) |
+| Webhook reaches and is applied by RWS | **YES** -- receipt `9fa4ca8d`, `processed=true`, application advanced `invited -> interviewed` |
+| Language gate computes | **YES -- `needs_review`**, correct for a null assessed CEFR |
+
+The report came back `evaluation_status: insufficient_evidence` with
+comprehension 20 / interaction 15. That is the rubric working, not failing: the synthetic
+candidate answered from a fixed script regardless of what was asked, and the evaluator
+correctly detected a fluent-but-non-responsive speaker rather than rewarding fluent noise.
+
+**Two findings about how the interview actually runs**, both worth knowing:
+
+1. **`send_task()` is called exactly once** (task 1). There is no task-advancement logic
+   anywhere -- the four tasks and Section E are driven entirely by Gemini Live through the
+   system instruction. Consequences: the frontend's progress indicator reads **1/4 for the
+   whole interview**, and Section E can only ever be verified from the transcript, never
+   from the `task` event's `follow_up` flag (which is never sent with `phase != "task"`).
+2. **Sarah paraphrases rather than reciting.** Only task 1 appeared verbatim; tasks 2 and
+   4 and the Section E probe were all delivered in the model's own words. Any future check
+   for "did Section E fire" must match semantically, not by substring -- an exact-match
+   check reports a false negative, which is what happened on the first pass here.
+
+**Limits of this result, stated plainly.** This validates the *pipeline*, not the rubric's
+calibration against a human: a TTS voice is fluent by construction, and the scripted
+answers were deliberately non-responsive. It says Section E fires, the evaluator scores
+every dimension, the webhook applies and the gate computes -- it does not say the CEFR
+scoring is accurate for real candidates. That still needs one real human interview.
+
+**Operational notes**: Gemini Live drops at ~10 minutes with `APIError 1006 keepalive ping
+timeout` if the conversation never concludes, and `process_interview` only runs on a clean
+close -- so an interview that runs to the 720s cap produces **no report at all**. The
+harness therefore ends deliberately after `--max-answers`. Also: the fallback is only as
+available as the host Ollama process, which does not auto-start -- a real Gemini 503
+during this session hit the fallback correctly and still failed because Ollama was down.
+
+
+---
+
 ## [NEXT]
 
-**A real, fresh end-to-end VoiceHR interview.** Every automatable
-prerequisite is now done — the last remaining step is not a coding task.
-**Real finding this session**: the milestone 44 interview link was, in fact,
-already used once (found live via `/admin`'s Completed Reports list while
-regression-checking the redesign above) — "Amine Verified Demo Candidate"
-shows `status: inconclusive` in VoiceHR's own SQLite (`started_at`/
-`completed_at` only ~30 seconds apart) and the admin reports list shows
-"Evaluation unavailable" / `OVERALL: N/A`. This was not a fresh, complete,
-five-section attempt — 30 seconds cannot have reached Section E — so this
-task's actual goal (confirm Section E's adaptive follow-up and a real
-`interaction_spontaneity` score) is still open. Whether that short attempt
-was a deliberate quick check of the page/link or a real failed attempt is
-not something this session determined; either way, a genuine, complete,
-five-section attempt still has not been observed since milestone 31's
-rubric rewrite. A fresh interview would need a new invite (the existing
-application is now past `invited`) or VoiceHR's own direct link/admin
-surface as a fallback (see VoiceHR's README).
+**One real human interview, for rubric calibration.** Milestone 48 closed the pipeline
+question: Section E fires (`abstract` tier), `interaction_spontaneity` scores, the webhook
+applies, the gate computes. What it deliberately did *not* establish is whether the CEFR
+scoring is accurate for a real person -- the candidate was a TTS voice reading a fixed
+script, which is fluent by construction and was correctly marked
+`insufficient_evidence` for non-responsiveness.
 
-Milestone 35 confirmed VoiceHR's Gemini access itself works again (a real
-Live session generating real audio, a real evaluator call producing a real
-result) — but only at the raw connectivity level. Two things have never been
-observed together since milestone 31's rubric rewrite: a *fresh* interview
-actually reaching the new Section E adaptive follow-up question, and a real
-transcript producing the new `interaction_spontaneity` dimension score.
-Concrete scope when picked up: using the real invite link already sent
-(milestone 44) or VoiceHR's own direct interview link/admin surface as a
-fallback (see VoiceHR's README), conduct one real,
-controlled interview end to end in a real browser — mic permissions, the
-full five-section flow including Section E, a real completion — then check the
-resulting report: does `interaction_spontaneity` get a real score, does the
-rest of the rubric look sane, does the webhook reach RWS correctly, does the
-language gate compute correctly against it.
+Concrete scope: invite a real person (or yourself) through
+`POST /v1/matches/{match_id}/select` then `POST /v1/applications/{id}/invite`, conduct one
+interview in a real browser answering genuinely, and check that the resulting CEFR level
+and dimension scores are defensible for that speaker. Remember the Resend sandbox only
+delivers to **aminesridi58@gmail.com**, so the candidate's stored email must be that one.
 
-Separately, also opportunistic and also needing a human with inbox access,
-not more code: send one real interview-round notification (milestones
-41-42) to a deliverable address and confirm a real calendar client (Gmail/
-Outlook) actually offers "Add to calendar" from the received email, and that
-a follow-up reschedule/cancel updates or removes that same calendar entry
-rather than creating a duplicate. The ICS's own correctness is fully proven
-by direct inspection and 16 unit tests, and milestone 43 proved the email
-itself genuinely arrives — only the visual "does a real calendar client
-render it right" step remains.
+Two smaller items, both cheap and both now unblocked:
 
-Everything else in Known Limitations above (no pagination, Second Brain's
-missing test suite, the write-only `candidate_feedback` sink, VoiceHR's
-unauthenticated `admin.html`) remains deliberately deferred per this
-project's own "no infra/refactor ahead of demonstrated need" rule, not a gap
-waiting on the next session.
+1. **The frontend progress indicator reads "1/4" for an entire interview** (milestone 48:
+   `send_task` is only ever called once). Either drive it from the transcript or remove
+   it -- as it stands it tells the candidate something false.
+2. **Send one real interview-round notification** (milestones 41-42) to a deliverable
+   address and confirm a real calendar client offers "Add to calendar", and that a
+   reschedule/cancel updates the same entry rather than duplicating it. The ICS itself is
+   proven by 16 unit tests and milestone 43 proved delivery; only the visual render
+   remains.
+
+Everything else in Known Limitations above remains deliberately deferred per this
+project's own "no infra/refactor ahead of demonstrated need" rule.

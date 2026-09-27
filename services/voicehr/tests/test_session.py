@@ -136,7 +136,10 @@ def test_gemini_live_transcription_config_uses_interview_language():
     assert config.input_audio_transcription.language_codes == ["fr-FR"]
     assert config.output_audio_transcription.language_codes == ["fr-FR"]
     assert config.thinking_config.thinking_level.value == "MINIMAL"
-    assert config.history_config.initial_history_in_client_content is True
+    # Deliberately unset: initial_history_in_client_content makes
+    # gemini-3.1-flash-live-preview emit no audio at all (bisected -- see
+    # gemini_live.py: _live_config). This assertion guards the fix, not a preference.
+    assert config.history_config is None
 
     buffer = []
     _append_transcription_delta(buffer, "I manage")
