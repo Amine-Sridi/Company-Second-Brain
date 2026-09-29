@@ -3960,35 +3960,42 @@ websocket.close()`, so the side-effect being asserted happens once the client ha
 gone away; the test asserted on it immediately after the `with` block exited. Windows
 timing happened to win that race and Linux did not.
 
-**My first fix for this was wrong, and the second CI run said so.** I assumed a slow
-await and added a `threading.Event` wait *after* the websocket context manager. CI came
-back with "process_interview was never awaited" after the full 5-second timeout -- not
-late, never.
+**Two attempted fixes were wrong before the right one, and both were wrong the same
+way: trying to make a timing-dependent assertion time correctly.**
 
-The actual mechanism: `session.py` does `await websocket.close(code=1000)` and only then
-`await process_interview(...)`. Leaving the `with` block disconnects the client; if that
-disconnect lands first, the server's `close()` raises, control jumps to the
-`except WebSocketDisconnect` branch, and **process_interview is never called at all**.
-A skipped await, not a slow one. Same code, different scheduling order, which is why
-Windows passed and Linux did not.
+- Attempt 1 assumed a *slow* await and waited on a `threading.Event` after the websocket
+  context manager. CI: still "never awaited", after the full 5-second timeout.
+- Attempt 2 moved that wait *inside* the connection, reasoning that leaving the block
+  disconnects the client, so the server's `await websocket.close(code=1000)` (which
+  precedes `process_interview` in `session.py`) raises and control jumps to
+  `except WebSocketDisconnect`, skipping the call entirely. That reproduced and passed in
+  a Linux container -- and still failed in CI.
 
-The fix is to wait *inside* the connection, before disconnecting -- which is also what a
-real browser does: it stays on the page until the server closes the socket.
+What settled it was noticing that `test_websocket_session_runs_pipeline_and_processes`,
+in this same file, does *exactly* what attempt 0 did -- `send_text`, leave the block,
+then `process.assert_awaited_once()` -- and is **green in CI**. So the pattern is not
+broken; something specific to opening and closing a *second* connection inside the first
+one's lifetime makes the interleaving unreliable.
 
-**Verified on Linux rather than reasoned about**, after getting it wrong once by
-reasoning: pytest was installed into the running `csb-voicehr` container (Debian) and the
-test run there. The original failed, my first fix failed with the 5s timeout, and the
-corrected version passes in 0.32s. The whole suite then ran green on Linux -- **236
-passed** (excluding `test_rws_contract.py`, whose `parents[3]` resolves to the repo root
-in a real checkout but not in the container's flat `/app` layout; that is an artifact of
-this ad-hoc harness, not a CI problem, and CI already passes that file). The container was
-restarted afterwards to discard pytest and the copied tests.
+**The fix was to delete the assertion, not to time it.** This test is named for, and
+uniquely covers, one thing: a second concurrent socket for the same interview is rejected
+and leaves interview state untouched. That `process_interview` runs on normal completion
+is already covered by the neighbouring session test and directly by ~14 tests in
+`test_processing.py` -- so the flaky assertion was redundant as well as fragile. What
+remains is the durable claim: `retry_count == 0` (had the rejected connection run its own
+pipeline, or fallen through to the disconnect/error handling, it would have incremented)
+plus a check that the interview was not torn down.
 
-Worth recording: neither failure was reproducible on the development machine, and both
-would have stayed hidden indefinitely without CI. The Resume Intelligence one in
-particular means that test had **never** run on any machine but this one. And the VoiceHR
-one needed two attempts -- the first plausible explanation was the wrong one, and only a
-Linux reproduction settled it.
+Verified on Linux via the container harness -- full suite **236 passed**, and
+`test_session.py` green on three consecutive runs.
+
+Worth recording as method, not just outcome: neither failure was reproducible on the
+development machine, and both would have stayed hidden indefinitely without CI. The
+Resume Intelligence one means that test had **never** run on any machine but this one.
+The VoiceHR one took three attempts, and the lesson is that two of them were spent
+defending an assertion that should not have been in that test at all -- the reproduction
+that mattered was not a better timing model but noticing a green neighbour doing the same
+thing.
 
 ---
 
