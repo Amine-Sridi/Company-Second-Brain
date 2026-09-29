@@ -119,23 +119,30 @@ jobs:
         run: python -m pytest tests -q
 
   frontend:
-    name: Frontend (node --test)
+    name: Frontend (node --test + vitest)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
           node-version: "20"
-      - name: Run
+      - name: Install
+        working-directory: services/recruitment-workflow/frontend
+        run: npm ci
+      - name: Pure-logic tests (Node's own runner)
         working-directory: services/recruitment-workflow/frontend
         # Per-file, not directory -- see constraint 3 above. `set -e` plus the loop means
-        # any failing file fails the job.
+        # any failing file fails the job. These need no DOM and no dependencies, which is
+        # why they were written for node --test and stay there.
         run: |
           set -e
           for f in src/constants/*.test.js; do
             echo "--- $f"
             node --test "$f"
           done
+      - name: Component tests (vitest + jsdom)
+        working-directory: services/recruitment-workflow/frontend
+        run: npm test
 
   integration:
     name: Integration (real Postgres)

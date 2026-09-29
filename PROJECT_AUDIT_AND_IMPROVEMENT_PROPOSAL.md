@@ -98,7 +98,7 @@ large-scale SaaS deployment.
 | M6 | MEDIUM | WEAKNESS | Operations | No automated migration step anywhere; fresh bring-up is manual and unverified | **FIXED** (m45) |
 | M7 | MEDIUM | WEAKNESS | Supply chain | Core dependencies unpinned; `pytest` ships inside RWS's runtime image | **FIXED** (m45) |
 | M8 | MEDIUM | WEAKNESS | Tests | No automated test ever runs two real services against each other | open |
-| M9 | MEDIUM | WEAKNESS | Tests | 29 frontend components/pages, 0 with automated tests | partial - 34 pure-logic tests exist; no component tests |
+| M9 | MEDIUM | WEAKNESS | Tests | 29 frontend components/pages, 0 with automated tests | **partially fixed** (m58) - 34 pure-logic + 15 component tests; pages still uncovered |
 | M10 | MEDIUM | WEAKNESS | Privacy | VoiceHR is a second permanent PII store with unauthenticated, non-expiring report links | **FIXED** (m47) - wording in CLAUDE.md + token TTL |
 | M11 | MEDIUM | OPTIMIZATION | Retrieval quality | Embeddings never set `task_type` for an asymmetric JD↔resume retrieval task | **OPEN, but now safe to do** (m55 versioned the embedding space; see note below) |
 | M12 | MEDIUM | WEAKNESS | Maintainability | `ApplicationsPage.jsx` — 890 lines, one component holding ~15 `useState` | open |

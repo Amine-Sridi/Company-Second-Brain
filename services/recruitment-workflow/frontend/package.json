@@ -6,7 +6,10 @@
   "scripts": {
     "dev": "vite",
     "build": "vite build",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "test:all": "node --test src/constants/interviewRounds.test.js && node --test src/constants/language.test.js && vitest run"
   },
   "dependencies": {
     "3d-force-graph": "^1.80.0",
@@ -19,7 +22,11 @@
     "three": "^0.180.0"
   },
   "devDependencies": {
+    "@testing-library/jest-dom": "^6.9.1",
+    "@testing-library/react": "^16.3.3",
     "@vitejs/plugin-react": "^4.3.2",
-    "vite": "^5.4.8"
+    "jsdom": "^25.0.1",
+    "vite": "^5.4.8",
+    "vitest": "^2.1.9"
   }
 }

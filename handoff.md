@@ -3789,29 +3789,202 @@ carry the complexity.
 
 ---
 
+### Milestone 57 — rate limiting on the unauthenticated surface
+
+There was none anywhere. Three routes accept traffic with no credential beyond a token,
+and one of them accepts passwords.
+
+`shared/rate_limit.py`: an in-process sliding-window limiter, ~60 lines, no new
+dependency. Hand-rolled rather than SlowAPI because the problem is two endpoints on a
+single-instance deployment, and `CLAUDE.md`'s amended constraint scopes Redis to resume
+ingestion only. Sliding rather than fixed-window: a fixed window lets 2x the limit through
+across a boundary, which for a login gate is exactly the burst worth preventing. VoiceHR
+gets a **deliberate copy** at `backend/core/rate_limit.py` -- it imports nothing from
+`shared/` by design, and `CLAUDE.md` prefers duplication across independent services to a
+premature shared dependency.
+
+**RWS login** (`POST /v1/auth/login`): 10/IP and 5/account per 5 minutes, and an attempt
+consumes both. The per-account bucket is the one that is easy to omit and the one that
+matters -- an attacker distributing attempts across source addresses gets a fresh IP quota
+each time, so only the account bucket protects a specific recruiter. A successful login
+clears the **account** bucket (a recruiter who mistyped twice is not left penalised) but
+deliberately **not** the IP bucket (one valid credential must not erase evidence of nine
+failed guesses from the same host). Both buckets return an identical message, because a
+distinct "account locked" reply would confirm the account exists.
+
+**VoiceHR**: `/api/report/{token}` at 30/min per IP, and token-probing at 20/min.
+
+**A real bug the tests caught.** The interview limiter was first placed in the route
+handler -- but `validate_interview_start` is a *dependency*, so an invalid token 404'd
+before the limiter ran. The limit therefore applied only to **valid** tokens, i.e. exactly
+the traffic that does not need limiting, while a probe was never counted at all. It now
+lives in `deps.py` as a dependency the validators themselves depend on, so ordering is
+guaranteed by the dependency graph rather than by declaration order.
+
+The limiter is also bounded on purpose: a table keyed by client IP is itself a DoS target,
+so expired windows are pruned on every check and the key count is hard-capped. A blocked
+attempt is deliberately **not** recorded -- otherwise a client that keeps retrying pushes
+its own window forward forever and a rate limit degrades into a permanent ban. Both have
+tests.
+
+**Verified live** against the running stack: `401 401 401 401 401 429 429`.
+
+**Tests: unit 174 (+13), RWS 224 (+7), VoiceHR 230 (+5).** Still single-instance -- with
+two replicas each process allows the full quota, which is listed with the rest of the
+in-memory state in `SCALING_AND_FUTURE_IMPROVEMENTS.md` §9.
+
+
+---
+
+### Milestone 58 — frontend component tests (audit M9, partially closed)
+
+The audit recorded "29 components/pages, 0 with automated tests". That was slightly
+pessimistic -- 34 pure-logic tests already existed under Node's own runner -- but
+component *rendering* genuinely had none.
+
+Vitest + Testing Library + jsdom added, with `vitest.config.js` kept **separate from
+`vite.config.js`** on purpose: that file configures the dev server and the production
+build, and a test-only option there is one more thing that can affect a shipped bundle.
+The production build was re-run afterwards to confirm it is untouched.
+
+Two components chosen for real reasons rather than coverage percentage -- `CLAUDE.md`
+asks for tests that prove an invariant, not tests that re-assert a mock:
+
+**`AssessmentPanel`** (9 tests) is the component that *decides* what a recruiter sees
+about an interview, and its three branches map to backend states that are easy to
+conflate:
+- `failed` -> no scores exist at all;
+- `insufficient_evidence` without a CEFR level -> scores exist but the verdict was
+  withheld;
+- otherwise -> the full grid.
+
+Conflating the middle with a failure would misrepresent the result, and milestone 48's
+real interview produced exactly that state. Also pinned: a **deliberate omission** --
+pronunciation is never rendered, because the evaluator only ever sees a text transcript
+so the value is always null; a well-meaning future change "completing" the grid would
+reintroduce a permanently blank row. And `0` renders as `0/100`, not `—`: a `value ||`
+check would silently hide a genuine zero, which for a language score is a real reading.
+
+**`StatusBadge`** (6 tests) is the shared pill behind every status label, and its failure
+mode is silent: an unrecognised tone must fall back to `neutral` rather than rendering an
+unstyled pill. A backend that grows a new status would otherwise ship an invisible badge
+and nothing would throw.
+
+**15 component tests**, alongside the existing 34 pure-logic ones. The CI frontend job now
+runs **both** runners (`npm ci`, then `node --test` per file, then `npm test`); the
+lockfile carries the new devDependencies so `npm ci` resolves.
+
+Still open in M9: the pages, including `ApplicationsPage.jsx` (890 lines, audit M12). The
+components with branching logic were the ones worth starting on.
+
+
+---
+
+### Milestone 59 — retention: a way to bound the PII footprint
+
+Nothing in VoiceHR ever expired except report tokens. Recordings (the candidate's
+recorded voice), transcript files, `recordings.raw_transcript` (verbatim text of what
+they said) and the identity fields accumulated indefinitely. Currently 52 recording files
+and 17 transcript files on disk against 15 interviews.
+
+**Scoped deliberately away from what `CLAUDE.md` defers.** That file defers "GDPR erasure
+automation"; this is not that:
+- it is **retention / data minimisation**, acting on *age*, never on a named candidate,
+  so it needs none of the cross-service identity resolution a right-to-be-forgotten flow
+  requires;
+- it is **explicitly invoked** -- no APScheduler job, no cron -- and **dry-run by
+  default**, with `--apply` required to delete anything.
+
+**What goes and what stays is the design:**
+
+| Removed | Kept |
+|---|---|
+| the recorded voice (`.webm`) | the `reports` row: scores, CEFR, evaluation_status |
+| the transcript file | the `interviews` row, its status and `external_reference_id` |
+| `recordings.raw_transcript` | everything RWS needs to explain a past decision |
+| `candidate_name` / `candidate_email` | |
+
+Deleting the decision record to protect privacy would trade one accountability problem
+for another -- a rejected candidate asking "why?" deserves an answer. So the decision
+survives and the raw material around it does not. Identity is **overwritten** with
+`[redacted]` rather than nulled: `candidate_name` is NOT NULL, and a visible marker
+distinguishes a deliberate redaction from data that was never captured.
+
+**The logic lives in `backend/core/retention.py`, not in the script.** It started as an
+embedded SQL string inside the CLI, which meant the most destructive code in the
+repository could not be tested at all. `scripts/retention_sweep.py` now only supplies the
+connection and arguments.
+
+**10 tests**, weighted towards what it must *refuse* to touch: dry-run changes nothing;
+**pending and active interviews survive regardless of age** (live work -- an old
+`pending` row may belong to a candidate about to sit it); the `reports` row and
+`external_reference_id` survive; a second sweep is safe and does not re-count; a missing
+file is reported rather than fatal, and its dangling pointer is still cleared; a mixed
+batch touches only the eligible row.
+
+Verified live in dry-run against the real stack: with a 20-day cutoff it correctly finds
+1 eligible interview, 1 recording, 1 transcript, 1 identity -- and changed nothing.
+
+**Known gap, not fixed here**: the sweep only sees files referenced by a `recordings`
+row. There are currently 52 files on disk against 4 recording rows, so **orphaned files
+from aborted runs are not collected**. That wants a separate reconciliation pass that
+walks the directory rather than the table.
+
+**Tests: VoiceHR 240 (+10), unit 174, RWS 224.**
+
+
+---
+
 ## [NEXT]
 
-**One real human interview, for rubric calibration.** Milestone 48 closed the pipeline
-question: Section E fires (`abstract` tier), `interaction_spontaneity` scores, the webhook
-applies, the gate computes. What it deliberately did *not* establish is whether the CEFR
-scoring is accurate for a real person -- the candidate was a TTS voice reading a fixed
-script, which is fluent by construction and was correctly marked
-`insufficient_evidence` for non-responsiveness.
+**1. Confirm CI actually passes on GitHub, and commit the work that is not yet pushed.**
 
-Concrete scope: invite a real person (or yourself) through
-`POST /v1/matches/{match_id}/select` then `POST /v1/applications/{id}/invite`, conduct one
-interview in a real browser answering genuinely, and check that the resulting CEFR level
-and dimension scores are defensible for that speaker. Remember the Resend sandbox only
-delivers to **aminesridi58@gmail.com**, so the candidate's stored email must be that one.
+`.github/workflows/ci.yml` is committed and pushed, so a run has been triggered -- but
+nobody has looked at the result, and a silently red CI is worse than none. The local
+validation was done in clean virtualenvs **on Windows**; the runners are Ubuntu, and
+three things in that workflow are plausibly OS-sensitive and have never executed there:
 
-One smaller item, also needing a human rather than more code (the other, the false
-"1/4" progress indicator, was closed by milestone 49):
+- the `node --test` per-file loop with `set -e`,
+- the `psql` heredoc that bootstraps schemas in the `integration` job,
+- VoiceHR's `working-directory` constraint.
 
-1. **Send one real interview-round notification** (milestones 41-42) to a deliverable
-   address and confirm a real calendar client offers "Add to calendar", and that a
-   reschedule/cancel updates the same entry rather than duplicating it. The ICS itself is
-   proven by 16 unit tests and milestone 43 proved delivery; only the visual render
-   remains.
+The `integration` job is also `continue-on-error: true` and has never run anywhere; flip
+it to blocking once it is green, or delete it if its fixtures need more than the workflow
+bootstraps. Either is better than leaving it permanently amber.
 
-Everything else in Known Limitations above remains deliberately deferred per this
-project's own "no infra/refactor ahead of demonstrated need" rule.
+Then: **12 files from milestones 57-59 are uncommitted** (rate limiting, frontend
+component tests, retention sweep). CI has not seen any of it.
+
+*To check: authenticate `gh auth login`, then `gh run list`. Or open the repo's Actions
+tab.*
+
+**2. Orphaned recording files.** Milestone 59's sweep only sees files referenced by a
+`recordings` row. There are currently **52 files on disk against 4 rows** -- aborted runs
+leave voice recordings behind that no retention policy will ever collect. This wants a
+reconciliation pass that walks `storage/recordings` and `storage/transcripts` and removes
+what no row points at. Small, bounded, and it is candidate voice data.
+
+**3. Still needing a human, not more code:**
+
+- **One real interview for rubric calibration.** Milestone 48 proved the pipeline
+  (Section E fires, `interaction_spontaneity` scores, webhook applies, gate computes) but
+  the candidate was a TTS voice reading a fixed script -- fluent by construction, and
+  correctly marked `insufficient_evidence` for non-responsiveness. Whether the CEFR
+  scoring is *accurate for a real person* is still unestablished. Invite via
+  `POST /v1/matches/{match_id}/select` then `POST /v1/applications/{id}/invite`; the
+  Resend sandbox only delivers to **aminesridi58@gmail.com**, so the candidate's stored
+  email must be that one.
+- **One real interview-round notification** to a deliverable address, to confirm a real
+  calendar client offers "Add to calendar" and that a reschedule updates rather than
+  duplicates the entry. The ICS is proven by 16 unit tests and milestone 43 proved
+  delivery; only the visual render remains.
+
+**4. Measurements still owed** (both recorded in `SCALING_AND_FUTURE_IMPROVEMENTS.md`):
+a clean-quota ingestion run to separate the Gemini path from the local-fallback path
+(`max_jobs` is currently tuned only for fallback mode), and a `submit_job` end-to-end
+number now that the N+1 is gone.
+
+Everything else in Known Limitations remains deliberately deferred per this project's own
+"no infra/refactor ahead of demonstrated need" rule. Partitioning `match_results` was
+investigated and explicitly declined -- see milestone 56 and
+`SCALING_AND_FUTURE_IMPROVEMENTS.md` §18.
