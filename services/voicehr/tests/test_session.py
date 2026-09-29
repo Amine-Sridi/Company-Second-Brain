@@ -579,8 +579,21 @@ def test_second_concurrent_websocket_for_same_interview_is_rejected(client, db):
         await websocket.receive()
         return [{"role": "user", "text": "hi", "timestamp": 1}], 5.0, "completed"
 
+    # session.py runs process_interview *after* `await websocket.close()`, so the
+    # side-effect this test asserts on happens once the client has already gone away.
+    # Asserting on it straight after the `with` block is therefore a race: it passed on
+    # Windows and failed in CI on Linux with "Awaited 0 times". Signalling an event from
+    # the mock and waiting for it turns the race into a deterministic wait, without
+    # weakening what is being checked.
+    processed = threading.Event()
+
+    async def fake_process(*args, **kwargs):
+        processed.set()
+
+    process = AsyncMock(side_effect=fake_process)
+
     with patch("backend.api.routes.session.run_sarah_pipeline", new=slow_pipeline), \
-         patch("backend.api.routes.session.process_interview", new=AsyncMock()) as process:
+         patch("backend.api.routes.session.process_interview", new=process):
         with client.websocket_connect(f"/ws/interview/{token}") as first:
             assert first.receive_json() == {"type": "ready"}
             assert entered.wait(timeout=2), "first connection's pipeline never started"
@@ -594,6 +607,8 @@ def test_second_concurrent_websocket_for_same_interview_is_rejected(client, db):
 
             release.set()
             first.send_text('{"type":"end"}')
+
+        assert processed.wait(timeout=5), "process_interview was never awaited"
 
     process.assert_awaited_once()
     row = db.execute("SELECT * FROM interviews WHERE token = ?", (token,)).fetchone()

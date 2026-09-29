@@ -3932,6 +3932,42 @@ walks the directory rather than the table.
 
 **Tests: VoiceHR 240 (+10), unit 174, RWS 224.**
 
+---
+
+### Milestone 60 — the first real CI run found two failures, both invisible locally
+
+CI ran on GitHub for the first time and went red on two jobs. Both passed on the
+development machine and could only fail elsewhere, which is exactly the class of bug the
+workflow was added for (milestone 51).
+
+**1. Resume Intelligence: `FileNotFoundError` on `sample_resumes/DEV_LINKEDIN_Jean
+DUPONT.docx`.** Not a broken test -- a fixture that is *deliberately* not in git. This
+service's own `.gitignore` ignores `tests/sample_resumes/*` under the heading "Sensitive /
+Binary Input Resumes", keeping realistic CVs out of the repository. So the file exists on
+a developer machine and on no clean checkout, and the test had no guard.
+
+Committing the fixture would be the wrong fix: it is precisely the raw candidate data this
+project keeps out of version control. `test_real_upload_happy_path_through_real_extraction_and_parsing`
+now **skips** when the sample is absent, following the pattern
+`tests/test_extraction_integration.py` already uses (`pytest.skip("No sample resume files
+found...")`) and the `GEMINI_API_KEY` / `DATABASE_URL` skips elsewhere in the same suite.
+`pytest` also had to be imported -- the module had never needed it.
+
+**2. VoiceHR: `test_second_concurrent_websocket_for_same_interview_is_rejected` --
+"Expected mock to have been awaited once. Awaited 0 times."** A genuine race in the test,
+not in the product. `session.py` calls `process_interview` *after* `await
+websocket.close()`, so the side-effect being asserted happens once the client has already
+gone away; the test asserted on it immediately after the `with` block exited. Windows
+timing happened to win that race and Linux did not.
+
+Fixed by signalling a `threading.Event` from the mock and waiting on it
+(`assert processed.wait(timeout=5)`) before the assertion, which turns the race into a
+deterministic wait without weakening what is checked. The failure message is also now
+explicit if it ever does time out, rather than a bare "awaited 0 times".
+
+Worth recording: neither failure was reproducible locally, and both would have stayed
+hidden indefinitely without CI. The Resume Intelligence one in particular means that test
+had **never** run on any machine but this one.
 
 ---
 

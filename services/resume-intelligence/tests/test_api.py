@@ -17,6 +17,8 @@ import sys
 import uuid
 from pathlib import Path
 
+import pytest
+
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
@@ -336,6 +338,23 @@ def test_unknown_extension_rejected_with_422():
 # ---------------------------------------------------------------------------
 
 def test_real_upload_happy_path_through_real_extraction_and_parsing(monkeypatch):
+    # The sample .docx is a realistic CV and is deliberately NOT in git -- see this
+    # service's own .gitignore ("Sensitive / Binary Input Resumes":
+    # tests/sample_resumes/* is ignored, only .gitkeep is tracked). So it exists on a
+    # developer machine and never on a clean checkout or a CI runner, where this test
+    # previously died with FileNotFoundError.
+    #
+    # Skipping is the right answer rather than committing the fixture: the file is exactly
+    # the kind of raw candidate data this project keeps out of the repository. Same
+    # pattern as tests/test_extraction_integration.py, and as the GEMINI_API_KEY /
+    # DATABASE_URL skips elsewhere in this suite.
+    sample = ROOT / "tests" / "sample_resumes" / "DEV_LINKEDIN_Jean DUPONT.docx"
+    if not sample.exists():
+        pytest.skip(
+            f"Sample resume not present ({sample.name}); it is gitignored as raw "
+            "candidate data, so this real-extraction test only runs where one exists."
+        )
+
     from schemas.candidate_extraction import CandidateBasics, CandidateExtraction, WorkExperience
 
     async def fake_generate_structured(prompt, schema, *, model=None):
@@ -370,7 +389,6 @@ def test_real_upload_happy_path_through_real_extraction_and_parsing(monkeypatch)
     api.app.dependency_overrides[api.get_llm_provider] = lambda: _RealLLM()
     client = TestClient(api.app)
     try:
-        sample = ROOT / "tests" / "sample_resumes" / "DEV_LINKEDIN_Jean DUPONT.docx"
         with open(sample, "rb") as f:
             resp = client.post(
                 "/v1/resumes",
