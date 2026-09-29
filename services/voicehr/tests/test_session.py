@@ -579,12 +579,18 @@ def test_second_concurrent_websocket_for_same_interview_is_rejected(client, db):
         await websocket.receive()
         return [{"role": "user", "text": "hi", "timestamp": 1}], 5.0, "completed"
 
-    # session.py runs process_interview *after* `await websocket.close()`, so the
-    # side-effect this test asserts on happens once the client has already gone away.
-    # Asserting on it straight after the `with` block is therefore a race: it passed on
-    # Windows and failed in CI on Linux with "Awaited 0 times". Signalling an event from
-    # the mock and waiting for it turns the race into a deterministic wait, without
-    # weakening what is being checked.
+    # Why the wait below sits *inside* the websocket context manager.
+    #
+    # session.py does `await websocket.close(code=1000)` and only then
+    # `await process_interview(...)`. Leaving the `with` block disconnects the client, and
+    # if that disconnect lands first the server's close() raises, control jumps to the
+    # `except WebSocketDisconnect` branch, and process_interview is never called at all.
+    # It is not a slow await -- it is a skipped one.
+    #
+    # That is why this failed on Linux and passed on Windows: the same code, a different
+    # scheduling order. Waiting for the event *before* leaving the block keeps the client
+    # attached until the server has finished, which is also what a real browser does (it
+    # stays on the page until the server closes the socket).
     processed = threading.Event()
 
     async def fake_process(*args, **kwargs):
@@ -608,7 +614,8 @@ def test_second_concurrent_websocket_for_same_interview_is_rejected(client, db):
             release.set()
             first.send_text('{"type":"end"}')
 
-        assert processed.wait(timeout=5), "process_interview was never awaited"
+            # Still inside the connection -- see the comment above.
+            assert processed.wait(timeout=5), "process_interview was never awaited"
 
     process.assert_awaited_once()
     row = db.execute("SELECT * FROM interviews WHERE token = ?", (token,)).fetchone()

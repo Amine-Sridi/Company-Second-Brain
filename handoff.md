@@ -3960,14 +3960,35 @@ websocket.close()`, so the side-effect being asserted happens once the client ha
 gone away; the test asserted on it immediately after the `with` block exited. Windows
 timing happened to win that race and Linux did not.
 
-Fixed by signalling a `threading.Event` from the mock and waiting on it
-(`assert processed.wait(timeout=5)`) before the assertion, which turns the race into a
-deterministic wait without weakening what is checked. The failure message is also now
-explicit if it ever does time out, rather than a bare "awaited 0 times".
+**My first fix for this was wrong, and the second CI run said so.** I assumed a slow
+await and added a `threading.Event` wait *after* the websocket context manager. CI came
+back with "process_interview was never awaited" after the full 5-second timeout -- not
+late, never.
 
-Worth recording: neither failure was reproducible locally, and both would have stayed
-hidden indefinitely without CI. The Resume Intelligence one in particular means that test
-had **never** run on any machine but this one.
+The actual mechanism: `session.py` does `await websocket.close(code=1000)` and only then
+`await process_interview(...)`. Leaving the `with` block disconnects the client; if that
+disconnect lands first, the server's `close()` raises, control jumps to the
+`except WebSocketDisconnect` branch, and **process_interview is never called at all**.
+A skipped await, not a slow one. Same code, different scheduling order, which is why
+Windows passed and Linux did not.
+
+The fix is to wait *inside* the connection, before disconnecting -- which is also what a
+real browser does: it stays on the page until the server closes the socket.
+
+**Verified on Linux rather than reasoned about**, after getting it wrong once by
+reasoning: pytest was installed into the running `csb-voicehr` container (Debian) and the
+test run there. The original failed, my first fix failed with the 5s timeout, and the
+corrected version passes in 0.32s. The whole suite then ran green on Linux -- **236
+passed** (excluding `test_rws_contract.py`, whose `parents[3]` resolves to the repo root
+in a real checkout but not in the container's flat `/app` layout; that is an artifact of
+this ad-hoc harness, not a CI problem, and CI already passes that file). The container was
+restarted afterwards to discard pytest and the copied tests.
+
+Worth recording: neither failure was reproducible on the development machine, and both
+would have stayed hidden indefinitely without CI. The Resume Intelligence one in
+particular means that test had **never** run on any machine but this one. And the VoiceHR
+one needed two attempts -- the first plausible explanation was the wrong one, and only a
+Linux reproduction settled it.
 
 ---
 
