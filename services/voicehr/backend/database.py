@@ -158,6 +158,7 @@ def init_db():
              word_count INTEGER,
              evaluation_status TEXT NOT NULL DEFAULT 'completed',
              evaluation_error TEXT,
+             sufficiency_reason TEXT,
              created_at TEXT NOT NULL,
              FOREIGN KEY (interview_id) REFERENCES interviews(id)
          )
@@ -179,6 +180,16 @@ def init_db():
     # (exactly how a null/missing score already displays elsewhere).
     if "interaction_score" not in report_columns:
         cursor.execute("ALTER TABLE reports ADD COLUMN interaction_score INTEGER")
+    # Why a CEFR verdict was withheld, as a short code from backend/services/sufficiency.py
+    # ("insufficient_language", "off_topic", "terminated", "pathologically_short"). Until
+    # this existed, `evaluation_status = 'insufficient_evidence'` recorded the decision
+    # and nothing about its cause, so the two genuinely different reasons -- too little
+    # speech, versus plenty of speech that answered nothing -- were indistinguishable
+    # afterwards. Nullable, and null on every pre-existing row: this is not backfilled,
+    # because the counts that produced those decisions were never stored and inventing a
+    # reason for them would be worse than admitting it is unknown.
+    if "sufficiency_reason" not in report_columns:
+        cursor.execute("ALTER TABLE reports ADD COLUMN sufficiency_reason TEXT")
     cursor.execute(
         """UPDATE reports SET evaluation_status = CASE
                WHEN overall_score IS NULL THEN 'failed' ELSE 'completed' END

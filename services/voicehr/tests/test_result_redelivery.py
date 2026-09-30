@@ -192,7 +192,16 @@ def test_retry_report_re_notifies_rws_with_the_corrected_result(client, db):
         "INSERT INTO recordings (interview_id, raw_transcript, duration_seconds) VALUES (?, ?, ?)",
         (
             interview_id,
-            json.dumps([{"role": "user", "text": "a genuinely real answer", "timestamp": 5}] * 5),
+            # Long enough to clear the measured sufficiency gate (sufficiency.py): this test
+            # is about re-notifying RWS after a retry, and a transcript too thin to grade
+            # would make the retry produce an inconclusive result instead of the corrected
+            # one it is asserting on.
+            json.dumps([
+                {"role": "user", "timestamp": 5 + i * 30, "text":
+                 "I spent several years building and supporting backend services, and the "
+                 "hardest part was usually coordinating releases between separate teams."}
+                for i in range(5)
+            ]),
             600,
         ),
     )

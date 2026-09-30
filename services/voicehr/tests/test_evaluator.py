@@ -161,7 +161,11 @@ class TestEvaluator(unittest.TestCase):
         # 80*.25 + 60*.25 + 70*.20 + 50*.15 + 90*.15 = 70.
         self.assertEqual(result["overall_score"], 70)
         self.assertEqual(result["cefr_level"], "B2")
-        self.assertEqual(result["confidence"], "High")
+        # Low, not High: confidence is now driven by the candidate's language sample
+        # rather than the clock (sufficiency.py). This transcript is 11 candidate words;
+        # the old rule called it "High" purely because duration_seconds was 600, which is
+        # exactly the behaviour that change set out to remove.
+        self.assertEqual(result["confidence"], "Low")
         self.assertEqual(result["word_count"], 11)
         self.assertGreater(result["candidate_speaking_time"], 0)
         self.assertEqual(result["interaction_score"], 90)

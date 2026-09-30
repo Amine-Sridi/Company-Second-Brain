@@ -59,9 +59,18 @@ def test_full_interview_flow(client, db):
 
         transcript = [
             {"role": "assistant", "text": "Hello Alice", "timestamp": 0},
-            {"role": "user", "text": "Hi Sarah, I manage the project.", "timestamp": 5},
-            {"role": "user", "text": "I resolved a delivery issue last quarter.", "timestamp": 60},
-            {"role": "user", "text": "Remote work suits our team well.", "timestamp": 120},
+            # Full answers rather than one-liners: the end-to-end flow this test covers
+            # ends in a graded report, and sufficiency is now measured from the
+            # candidate's own language rather than the session duration (sufficiency.py).
+            {"role": "user", "timestamp": 5, "text":
+             "Hi Sarah, I manage the project and I have been leading that team for "
+             "roughly three years, mostly coordinating delivery across two time zones."},
+            {"role": "user", "timestamp": 60, "text":
+             "I resolved a delivery issue last quarter where a dependency slipped, so we "
+             "resequenced the remaining work and kept the original launch date."},
+            {"role": "user", "timestamp": 120, "text":
+             "Remote work suits our team well, provided we write decisions down and keep "
+             "a few hours of deliberate overlap for the harder conversations."},
         ]
 
         asyncio.run(process_interview(token, transcript, "storage/recordings/x.webm", 650, "completed"))

@@ -94,7 +94,8 @@ def test_reports_table_schema(temp_db, monkeypatch):
                 "inconclusive", "fluency_score", "vocabulary_score", "grammar_score",
                 "pronunciation_score", "comprehension_score", "interaction_score", "strengths", "concerns",
                 "evidence", "candidate_speaking_time", "word_count", "evaluation_status",
-                "evaluation_error", "created_at"}
+                "evaluation_error",
+        "sufficiency_reason", "created_at"}
     assert columns == expected
     conn.close()
 

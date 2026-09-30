@@ -51,15 +51,30 @@ def mock_notify_rws():
         yield mock
 
 
-# Three candidate turns and >=300s duration -> not inconclusive by either rule in
-# processing.process_interview, so a "completed" (not "inconclusive") status is exercised.
+# A transcript carrying enough candidate language to be gradeable, so these tests
+# exercise the "completed" (not "inconclusive") status.
+#
+# The answers are long on purpose. This fixture used to be three one-sentence replies
+# (~26 candidate words) and still reached "completed", because the old gate asked only
+# whether the *session* lasted 300s. Sufficiency is now measured from the candidate's
+# own language (backend/services/sufficiency.py), and 26 words across three short
+# sentences is genuinely too thin to support a CEFR verdict -- so the fixture was
+# unrealistic rather than the threshold being wrong. Lengthening it keeps every test
+# below testing what it is actually about (RWS notification, claiming, redelivery)
+# instead of depending on a lenient gate.
 _TRANSCRIPT = [
     {"role": "assistant", "text": "Tell me about yourself.", "timestamp": 0},
-    {"role": "user", "text": "I've worked in backend engineering for six years.", "timestamp": 5},
+    {"role": "user", "timestamp": 5, "text":
+        "I have worked in backend engineering for about six years now, mostly building "
+        "and maintaining REST APIs in Python with FastAPI and PostgreSQL behind them."},
     {"role": "assistant", "text": "Tell me about a challenge you faced.", "timestamp": 20},
-    {"role": "user", "text": "I once resolved a major production outage under pressure.", "timestamp": 25},
+    {"role": "user", "timestamp": 25, "text":
+        "I once resolved a major production outage under a lot of pressure. The queue "
+        "had backed up overnight and we had to drain it carefully without losing work."},
     {"role": "assistant", "text": "What's your opinion on remote work?", "timestamp": 40},
-    {"role": "user", "text": "I think remote work is effective when done well.", "timestamp": 45},
+    {"role": "user", "timestamp": 45, "text":
+        "I think remote work is effective when it is done well, which usually means "
+        "writing things down properly and being deliberate about how the team overlaps."},
 ]
 
 

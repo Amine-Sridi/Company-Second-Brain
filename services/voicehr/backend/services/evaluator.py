@@ -5,6 +5,7 @@ import asyncio
 import logging
 
 from backend.core.config import settings
+from backend.services import sufficiency
 
 logger = logging.getLogger(__name__)
 
@@ -370,7 +371,26 @@ def cefr_level_for_score(score: int | None) -> str | None:
     return "C2"
 
 
-def confidence_for_interview(duration_seconds: float | None, candidate_turn_count: int, inconclusive: bool = False) -> str:
+def confidence_for_interview(
+    duration_seconds: float | None,
+    candidate_turn_count: int,
+    inconclusive: bool = False,
+    transcript: list[dict] | None = None,
+) -> str:
+    """Confidence in the verdict.
+
+    Now driven by how much candidate language there is (sufficiency.py) rather than by
+    clock time, because duration measures the session and not the candidate: a dense
+    284-second interview with 485 candidate words used to be rated Low purely for being
+    under 300 s. Duration survives only as a secondary signal.
+
+    `transcript` is optional so existing callers and tests that pass only a duration and
+    a turn count keep working; without it this falls back to the original clock-based
+    rule, which is the best that can be done from those two numbers alone.
+    """
+    if transcript is not None:
+        sample = sufficiency.measure(transcript)
+        return sufficiency.confidence_for_sample(sample, duration_seconds, inconclusive)
     if inconclusive or candidate_turn_count < 3 or duration_seconds is None or duration_seconds < 300:
         return "Low"
     return "High" if duration_seconds >= 480 else "Medium"
@@ -421,8 +441,11 @@ def normalize_result(
     result = {
         "overall_score": overall_score,
         "cefr_level": cefr_level_for_score(overall_score),
-        "confidence": confidence_for_interview(duration_seconds, len(candidate_turns), inconclusive)
-            if duration_seconds is not None else str(raw.get("confidence", "Low")).capitalize(),
+        # transcript is passed so confidence comes from the candidate's language sample
+        # rather than the clock -- see confidence_for_interview and sufficiency.py.
+        "confidence": confidence_for_interview(
+            duration_seconds, len(candidate_turns), inconclusive, transcript=transcript,
+        ) if duration_seconds is not None else str(raw.get("confidence", "Low")).capitalize(),
         "fluency_score": dimension_scores["fluency_coherence"],
         "vocabulary_score": dimension_scores["vocabulary_range"],
         "grammar_score": dimension_scores["grammar_language_control"],
@@ -466,6 +489,7 @@ def _insufficient_evidence_result(
     transcript: list[dict],
     duration_seconds: float | None,
     inconclusive: bool,
+    reason: str | None = None,
 ) -> dict:
     """The 'not enough to grade' path (CLAUDE.md/handoff.md: never force a confident
     CEFR grade from too little evidence). overall_score/cefr_level are None here by
@@ -475,6 +499,13 @@ def _insufficient_evidence_result(
     change to that file at all -- it already treats a missing assessed CEFR that way."""
     result = normalize_result(raw, transcript, duration_seconds, inconclusive, insufficient=True)
     result["evaluation_status"] = "insufficient_evidence"
+    # Which kind of insufficiency, and the counts behind it. Previously this path
+    # recorded no reason at all, so "why was this one withheld?" was unanswerable from
+    # the data -- see sufficiency.py on the two distinct kinds.
+    sample = sufficiency.measure(transcript)
+    result["sufficiency_reason"] = reason or sufficiency.INSUFFICIENT_LANGUAGE
+    result["sufficiency_metrics"] = sample.as_dict()
+    result["error"] = sufficiency.explain(result["sufficiency_reason"], sample)
     return result
 
 
@@ -533,6 +564,7 @@ async def evaluate(
     language: str = "en",
     inconclusive: bool = False,
     duration_seconds: float | None = None,
+    sufficiency_reason: str | None = None,
 ) -> dict:
     note = "Note: This interview was incomplete. Set sufficient_evidence: false." if inconclusive else ""
     prompt = EVALUATION_PROMPT.format(
@@ -552,9 +584,19 @@ async def evaluate(
             # eligibility decision, just "is there enough language sample to grade
             # at all," the same kind of structural fact the duration/turn-count
             # pre-check already is.
-            insufficient = inconclusive or raw.get("sufficient_evidence") is False
+            model_vetoed = raw.get("sufficient_evidence") is False
+            insufficient = inconclusive or model_vetoed
             if insufficient:
-                return _insufficient_evidence_result(raw, transcript, duration_seconds, inconclusive)
+                # The caller's deterministic reason wins when it has one: it is the
+                # stronger statement ("there is not enough speech here") and it carries
+                # the counts. Only when the deterministic half passed and the model
+                # still objected is this an off-topic judgment.
+                reason = sufficiency_reason or (
+                    sufficiency.OFF_TOPIC if model_vetoed else sufficiency.INSUFFICIENT_LANGUAGE
+                )
+                return _insufficient_evidence_result(
+                    raw, transcript, duration_seconds, inconclusive, reason=reason,
+                )
             return _validated_result(raw, transcript, duration_seconds, inconclusive)
         except ValueError as exc:
             # Syntactically valid JSON that failed our completeness check (e.g. a

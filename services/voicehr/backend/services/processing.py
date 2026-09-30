@@ -7,6 +7,7 @@ from backend.core.config import settings
 from backend.core.security import generate_report_token
 import backend.database as database
 from backend.services.evaluator import FALLBACK_ADVISORY_STATUS, evaluate
+from backend.services.sufficiency import assess as assess_sufficiency
 from backend.services.mailer import send_report_email
 from backend.services.rws_client import notify_and_record_interview_result
 
@@ -54,9 +55,16 @@ async def process_interview(token: str, transcript: list[dict], audio_path: str 
         # transcript's content even when this pre-check found nothing structurally
         # wrong (e.g. long enough, enough turns, but almost entirely off-topic or
         # non-answers).
-        pre_check_inconclusive = terminated or duration_seconds < 300 or sum(
-            1 for turn in transcript if turn.get("role") in ("user", "candidate")
-        ) < 3
+        # Measures the candidate's language sample rather than the clock. The old gate
+        # was `duration_seconds < 300 or candidate_turns < 3`, which rejected a stored
+        # interview carrying 485 candidate words across 15 substantive turns for being
+        # 16 seconds short, and accepted three one-word answers because it counted any
+        # turn at all. See sufficiency.py for the measurements behind the thresholds and
+        # why the relevance half stays with the model.
+        sufficient, sufficiency_reason, _sample = assess_sufficiency(
+            transcript, duration_seconds=duration_seconds, terminated=terminated,
+        )
+        pre_check_inconclusive = not sufficient
         os.makedirs("storage/transcripts", exist_ok=True)
         transcript_path = f"storage/transcripts/{interview_id}.json"
         with open(transcript_path, "w", encoding="utf-8") as transcript_file:
@@ -67,6 +75,7 @@ async def process_interview(token: str, transcript: list[dict], audio_path: str 
             language=row["language"],
             inconclusive=pre_check_inconclusive,
             duration_seconds=duration_seconds,
+            sufficiency_reason=None if sufficient else sufficiency_reason,
         )
         # The single source of truth from here on: either half (the deterministic
         # pre-check, or the model's own sufficient_evidence: false) is enough to
@@ -89,8 +98,8 @@ async def process_interview(token: str, transcript: list[dict], audio_path: str 
             """INSERT INTO reports (interview_id, report_token, overall_score, cefr_level, confidence,
                inconclusive, fluency_score, vocabulary_score, grammar_score, pronunciation_score,
                comprehension_score, interaction_score, strengths, concerns, evidence, candidate_speaking_time,
-               word_count, evaluation_status, evaluation_error, created_at)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+               word_count, evaluation_status, evaluation_error, sufficiency_reason, created_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
             (interview_id, report_token, scores.get("overall_score"), scores.get("cefr_level"),
              scores.get("confidence"), int(inconclusive), scores.get("fluency_score"),
              scores.get("vocabulary_score"), scores.get("grammar_score"), scores.get("pronunciation_score"),
@@ -98,7 +107,7 @@ async def process_interview(token: str, transcript: list[dict], audio_path: str 
              json.dumps(scores.get("concerns", [])), json.dumps(scores.get("evidence", [])),
              scores.get("candidate_speaking_time"), scores.get("word_count"),
              scores.get("evaluation_status", "failed" if scores.get("overall_score") is None else "completed"),
-             scores.get("error"), now),
+             scores.get("error"), scores.get("sufficiency_reason"), now),
         )
         conn.execute(
             """INSERT INTO recordings (interview_id, recording_path, transcript_path, duration_seconds,
@@ -176,14 +185,19 @@ async def retry_report(report_token: str) -> dict:
             raise ValueError("No transcript is available for evaluation")
 
         duration_seconds = row["duration_seconds"] or 0
-        pre_check_inconclusive = duration_seconds < 300 or sum(
-            1 for turn in transcript if turn.get("role") in ("user", "candidate")
-        ) < 3
+        # Same measured gate as process_interview -- if these two disagreed, a retry
+        # could issue a CEFR for an interview the original run judged ungradeable (or
+        # the reverse), and the two records would contradict each other.
+        sufficient, sufficiency_reason, _sample = assess_sufficiency(
+            transcript, duration_seconds=duration_seconds, terminated=False,
+        )
+        pre_check_inconclusive = not sufficient
         scores = await evaluate(
             transcript,
             language=row["language"],
             inconclusive=pre_check_inconclusive,
             duration_seconds=duration_seconds,
+            sufficiency_reason=None if sufficient else sufficiency_reason,
         )
         evaluation_status = scores.get("evaluation_status", "failed" if scores.get("overall_score") is None else "completed")
         inconclusive = pre_check_inconclusive or evaluation_status in (
@@ -203,14 +217,16 @@ async def retry_report(report_token: str) -> dict:
             """UPDATE reports SET overall_score = ?, cefr_level = ?, confidence = ?, inconclusive = ?,
                fluency_score = ?, vocabulary_score = ?, grammar_score = ?, pronunciation_score = ?,
                comprehension_score = ?, interaction_score = ?, strengths = ?, concerns = ?, evidence = ?,
-               candidate_speaking_time = ?, word_count = ?, evaluation_status = ?, evaluation_error = ?
+               candidate_speaking_time = ?, word_count = ?, evaluation_status = ?, evaluation_error = ?,
+               sufficiency_reason = ?
                WHERE report_token = ?""",
             (scores.get("overall_score"), scores.get("cefr_level"), scores.get("confidence"), int(inconclusive),
              scores.get("fluency_score"), scores.get("vocabulary_score"), scores.get("grammar_score"),
              scores.get("pronunciation_score"), scores.get("comprehension_score"), scores.get("interaction_score"),
              json.dumps(scores.get("strengths", [])), json.dumps(scores.get("concerns", [])),
              json.dumps(scores.get("evidence", [])), scores.get("candidate_speaking_time"),
-             scores.get("word_count"), evaluation_status, None, report_token),
+             scores.get("word_count"), evaluation_status, scores.get("error"),
+             scores.get("sufficiency_reason"), report_token),
         )
         conn.execute(
             "UPDATE interviews SET status = ?, completed_at = ? WHERE id = ?",

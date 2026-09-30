@@ -956,6 +956,16 @@ python services/recruitment-workflow/scripts/seed_demo_data.py --yes --job-title
   63).** 8 CVs at concurrency 4 with the fallback disabled produced 15 × 429 and 6 × 503,
   failing 7 of 8 jobs. The quota, not `max_jobs`, is the ceiling on that path, so the
   Gemini-path concurrency tuning M54 left open cannot be answered without paid quota.
+- **The sufficiency thresholds are provisional, not measured against real speech
+  (milestone 66).** 30 candidate words / 3 substantive turns / 8 distinct words each sit
+  inside the clean gap the 13 golden cases leave, but those transcripts are compact by
+  construction -- the tightest case that must still score has 35 candidate words -- so the
+  gate cannot be raised to what real interviews would warrant without contradicting the
+  committed expectations. A 42-word real sample clears it today (interview 32). The tier
+  is what absorbs this: anything under 150 candidate words yields
+  `confidence: "Low"` rather than being withheld. Anchoring the numbers needs ~5
+  substantial real transcripts; there are 2. The constants are marked provisional in
+  `backend/services/sufficiency.py`.
 - **The orphan reconciliation cannot recognise imported data (milestone 62).** It
   decides what is abandoned from the absence of a `recordings` row, so any file placed
   into `storage/` by hand -- such as the archive imported from the previous standalone
@@ -4505,6 +4515,105 @@ host process. Roughly 1.7x slower per job. The plausible cause is reading weight
 a Windows bind mount rather than the native filesystem. It does not affect correctness and
 a fallback is allowed to be slow, but do not compare this run's throughput against
 pre-milestone-65 numbers without accounting for it.
+
+### Milestone 66 — sufficiency measures the candidate's language, not the clock
+
+The deterministic half of "is there enough here to grade?" was:
+
+    terminated or duration_seconds < 300 or candidate_turns < 3
+
+Both terms were proxies for the thing that matters, and both were unmeasured constants.
+`duration_seconds` describes the **session** -- it counts the interviewer's speech, the
+silences and the reconnect gaps -- so a ten-minute interview in which someone said "yes"
+five times passed, while the richest real interview in the database was discarded. That
+is not hypothetical: interview 18 ran **284 seconds with 485 candidate words across 15
+substantive turns** and was withheld for being 16 seconds short. The turn count had the
+matching flaw: it counted *any* candidate turn, so three one-word answers satisfied it.
+
+**Measured first.** Computing candidate-language features over the 13 committed golden
+cases showed that **no single quantity metric separates them** -- and the reason is
+structural rather than a bad threshold. There are two different kinds of insufficiency:
+
+| | detectable how |
+|---|---|
+| **not enough language** -- too few words to observe range | countable |
+| **enough words, wrong content** -- off-topic, non-answers | judgment |
+
+`off_topic_severely_thin` carries 60 words and 12 distinct words -- *more* than
+`prompt_injection_attempt` (35 words), which must score. No counter can ever separate
+those. Set the relevance case aside and the quantity features separate **cleanly**:
+
+| metric | should-score min | should-withhold max | viable thresholds |
+|---|---|---|---|
+| candidate words | 35 | 10 | 11-35 |
+| substantive turns (>= 5 words) | 4 | 2 | 3-4 |
+| distinct words | 10 | 5 | 6-10 |
+
+**So the split was kept and the halves were fixed.** New `backend/services/sufficiency.py`
+owns the countable half -- candidate word count, substantive turns (>= 5 words, so "yes"
+no longer counts), distinct word count -- and the model's own `sufficient_evidence` keeps
+the relevance half, which is the only thing it is better at than arithmetic. Either half
+still withholds a verdict.
+
+**Tiered, not binary.** The gate is deliberately permissive (30 words / 3 substantive
+turns / 8 distinct words) because it cannot be raised above what the golden set requires:
+the tightest case that must still score has 35 candidate words. Real interviews are
+wordier, so a thin-but-passing sample now yields a verdict carrying
+`confidence: "Low"` rather than nothing -- `confidence_for_sample` is driven by candidate
+words (Low below 150) with duration surviving only as a secondary High/Medium signal.
+**These constants are marked provisional in the source**, because anchoring them to real
+speech needs ~5 substantial real transcripts and there are 2.
+
+Duration survives only as a 60-second pathological floor -- a session that short cannot
+have covered enough prompts, whatever the word count -- set far below 300 so it can never
+again be the operative reason a substantial interview is discarded. `terminated` remains
+an absolute veto.
+
+**Reason codes, because "why was this withheld?" had no answer.** The withheld path
+recorded `evaluation_status = 'insufficient_evidence'` and nothing about its cause, so the
+two genuinely different reasons were indistinguishable afterwards. Now
+`insufficient_language` / `off_topic` / `terminated` / `pathologically_short`, persisted in
+a new nullable `reports.sufficiency_reason` column (ad-hoc ALTER, matching the existing
+pattern; **not backfilled** -- the counts behind old decisions were never stored and
+inventing a reason for them would be worse than recording it as unknown). The result also
+carries `sufficiency_metrics` and a readable sentence: *"Not enough candidate speech to
+support a defensible CEFR level: 2 candidate words, 0 substantive turns (>= 5 words), 2
+distinct words. Minimums are 30..."*
+
+`evaluation_status` is deliberately **unchanged** -- still `insufficient_evidence` -- so
+`shared/schemas.InterviewAssessment` and RWS need no change at all.
+
+**Effect on the real data** (verified in the container, all 16 stored transcripts):
+
+| | before | after |
+|---|---|---|
+| gradeable | 0 | 5 (ids 18, 28, 32, 50, 55) |
+| withheld | 16 | 11, each with an explicit reason |
+
+Interview 18 -- the single richest real sample -- is now gradeable. Interviews 12 and 14
+(18 s and 4 s) are now correctly labelled `pathologically_short` rather than lumped in
+with thin-but-real ones. Interview 32 passes at 42 words and will carry `confidence: Low`,
+which is exactly what the tier is for.
+
+**Verified:** 27 new tests in `services/voicehr/tests/test_sufficiency.py`, including one
+parameterised over every golden case and one that asserts the off-topic case **must**
+pass the counter (a documented limitation, not an oversight). Full suites: **VoiceHR 288
+passed, 1 skipped** (was 261), **RWS 224 passed**. End-to-end through the rebuilt
+container: a thin transcript returns `insufficient_evidence` +
+`sufficiency_reason: insufficient_language` + metrics + explanation, `cefr_level` None,
+`confidence` Low.
+
+**Four test fixtures were changed, and it is worth being explicit about why**, because
+"the tests failed so I changed the tests" deserves scrutiny. Three fixtures
+(`test_processing._TRANSCRIPT`, `test_result_redelivery`, `test_integration`) were three
+one-line answers -- 20 to 26 candidate words -- that reached `completed` only because the
+old gate asked about the session's duration. Those tests are about RWS notification,
+retry redelivery and the end-to-end flow; their thin transcripts were incidental, and
+26 words genuinely cannot support a CEFR verdict, so the fixtures were unrealistic rather
+than the threshold being wrong. They now carry full answers. The fourth was a direct
+expectation change: `test_normalize_result_...` asserted `confidence == "High"` for an
+**11-word** transcript, purely because `duration_seconds` was 600 -- the exact behaviour
+this milestone removes. It now asserts `"Low"`.
 
 ## [NEXT]
 
