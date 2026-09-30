@@ -254,9 +254,22 @@ async def _evaluate_with_local_model(prompt: str) -> dict:
     evaluation rather than trying harder with a model that is not the primary."""
     import httpx
 
-    from shared.llm import ollama_compatible_schema
-
-    base_url = getattr(settings, "local_llm_base_url", "http://host.docker.internal:11434")
+    # EVALUATION_SCHEMA is passed to Ollama as-is, with no adaptation.
+    #
+    # This deliberately does NOT use shared/llm.py's ollama_compatible_schema, for two
+    # independent reasons. First, it cannot: VoiceHR's image is built from
+    # `context: ../services/voicehr` (infra/docker-compose.yml), so the repo's /shared is
+    # not in it, and `from shared.llm import ...` raises ModuleNotFoundError at runtime --
+    # invisible to the test suite, which runs from the repo root where the import
+    # resolves. Second, it does not need to: that adapter exists to inline `$ref`/`$defs`,
+    # drop over-long `maxLength`, and promote properties to `required` because Pydantic
+    # emits schemas with no `required` list at all. EVALUATION_SCHEMA is hand-written
+    # above -- no `$ref`, no `$defs`, no `maxLength`, and it already declares `required`
+    # for every field a verdict depends on. Running it through the adapter would be a
+    # no-op purchased with a cross-service dependency this service does not otherwise
+    # have (CLAUDE.md: duplication across the three services beats a premature shared
+    # abstraction, and VoiceHR stays standalone).
+    base_url = getattr(settings, "local_llm_base_url", "http://ollama:11434")
     url = f"{base_url.rstrip('/')}/api/generate"
     payload = {
         "model": _fallback_model(),
@@ -265,7 +278,7 @@ async def _evaluate_with_local_model(prompt: str) -> dict:
         # Thinking models return their content in a separate `thinking` field and
         # leave `response` empty, which reads as a total failure downstream.
         "think": False,
-        "format": ollama_compatible_schema(EVALUATION_SCHEMA),
+        "format": EVALUATION_SCHEMA,
         "options": {"temperature": 0.2},
     }
     timeout = getattr(settings, "local_llm_evaluation_timeout_seconds", 300.0)

@@ -936,14 +936,22 @@ python services/recruitment-workflow/scripts/seed_demo_data.py --yes --job-title
   larger is runnable on a 6 GB card, so the benchmark says nothing about whether a 13 B+
   model would clear the interview-evaluation floor. Fold in a new model any time with
   `python benchmarks/local_llm/sweep.py --models <name>`; nothing else needs to change.
-- **The local fallback is silently dead from the containers unless Ollama is bound to
-  `0.0.0.0` (milestone 63).** `LOCAL_LLM_BASE_URL=http://host.docker.internal:11434`
-  resolves fine and is then *refused*, because Ollama's default binding is 127.0.0.1,
-  which no container can reach. Nothing surfaces this: the only symptom is a transient
-  Gemini error turning into a hard job failure instead of a fallback. Start it with
-  `OLLAMA_HOST=0.0.0.0 ollama serve`, and confirm with
-  `docker exec csb-resume-intelligence-worker python -c "import httpx;
-  print(httpx.get('http://host.docker.internal:11434/api/tags').status_code)"`.
+- **RESOLVED (milestone 65): the local fallback was silently dead from the containers.**
+  Ollama is now a Compose service (`csb-ollama`, GPU passthrough, the host's model store
+  bind-mounted, port 11434 published) rather than a hand-started host process, so the
+  `host.docker.internal` binding trap, the not-running case, and VoiceHR's missing `.env`
+  keys are all gone. Verify with **`python scripts/check_llm_fallback.py --generate`**,
+  which checks every service from inside its own container and exits non-zero on any
+  problem. Re-run it after bumping the Ollama image: 0.12.3 could not load
+  `gemma4:e2b-it-qat` at all, and only an actual completion catches that.
+- **The test suites cannot catch container-only breakage (milestone 65).** They run on the
+  host against the repo, so an import that resolves from the repo root but not inside a
+  service image passes every test and fails in production -- which is exactly what
+  happened to milestone 61's `from shared.llm import ...` in VoiceHR, whose image is built
+  from `context: ../services/voicehr` and contains no `/shared`. Two further milestone-61
+  verifications were true and equally irrelevant: pytest locally, and a script on the
+  host. When a change touches a service's runtime config or imports, verify it **in the
+  container**, not only in the suite.
 - **A clean Gemini-path throughput number is not measurable on the free tier (milestone
   63).** 8 CVs at concurrency 4 with the fallback disabled produced 15 × 429 and 6 × 503,
   failing 7 of 8 jobs. The quota, not `max_jobs`, is the ceiling on that path, so the
@@ -4394,6 +4402,109 @@ Both parts ran clean. Note that part B is not read-only: 12 submissions created 
 rows and 75 `match_result` rows** (`recruitment.jobs.title LIKE 'Backend Engineer k%'`
 identifies them), which is why it is a script run deliberately rather than anything
 automated.
+
+### Milestone 65 — the fallback actually works now, and four reasons it never did
+
+Every failure in this milestone was **silent**. The stack reported healthy throughout,
+and the only externally visible symptom was a transient Gemini error becoming a hard job
+failure instead of a fallback. That is the through-line: a fallback you cannot verify is
+not a fallback.
+
+**Four independent defects, all real, none of which the test suite could see:**
+
+1. **Ollama was a hand-started host process.** It was simply not running, and nothing
+   noticed. When it *was* running, its default 127.0.0.1 binding is invisible from inside
+   a container -- `host.docker.internal:11434` resolved and was refused in ~10 ms.
+2. **VoiceHR had no `LOCAL_LLM_*` keys in its `.env` at all.** Milestone 61 added the
+   settings with `local_llm_enabled: bool = False` and never wrote the entries, so the
+   evaluator fallback built in that milestone was switched **off** in practice. A missing
+   key silently becomes a default.
+3. **Milestone 61's code was never in the running VoiceHR container.** VoiceHR builds its
+   source into the image, and `docker compose up --force-recreate` does not rebuild -- so
+   `Settings` had no `local_llm_*` fields even with the env vars correctly set. M61's
+   verification passed because it ran pytest locally and a script on the *host*; neither
+   touched the deployed container.
+4. **`evaluator.py` imported `shared.llm`, which cannot exist in that image.** VoiceHR
+   builds from `context: ../services/voicehr`, so the repo's `/shared` is not in it and
+   the import raised `ModuleNotFoundError` at runtime. The test suite runs from the repo
+   root, where the import resolves -- so 23 tests passed against code that could not run
+   in production.
+
+Defects 3 and 4 share a root cause worth stating plainly: **this project's tests run on
+the host, against the repo, and therefore cannot catch container-only breakage.** Three
+separate milestone-61 verifications were all true and all irrelevant to whether the
+feature worked where it runs.
+
+**The fix: Ollama is a Compose service.** GPU passthrough verified (`docker run --gpus
+all nvidia/cuda` reports the RTX 3060). That removes defects 1 outright -- it starts with
+the stack, is addressed as `ollama:11434` with no binding to get wrong, and has a
+healthcheck, so "the fallback is down" became a visible state.
+
+Three deliberate choices in that service:
+
+- **The host's existing ~20 GB model store is bind-mounted**, not re-downloaded into a
+  named volume. Pulls from Ollama's blob host failed three times this session (milestone
+  61: two i/o timeouts and a DNS failure on one 7 GB model), so re-fetching 6.4 GB of
+  already-present weights is a measured risk, not a theoretical one.
+- **Port 11434 is published and the host `ollama serve` is stopped**, so there is exactly
+  one Ollama on the machine. The host-side benchmark scripts still reach it at
+  `localhost:11434`, and one 6 GB GPU is not split between two servers disagreeing about
+  which served a request.
+- **No `depends_on` from the app services.** A fallback provider that can take the whole
+  stack down when it fails to start is worse than the problem it solves; the apps start
+  regardless and use Gemini.
+
+**A fifth defect, found by the new check and caused by this milestone.** The image was
+first pinned to `ollama/ollama:0.12.3`, which **cannot load `gemma4:e2b-it-qat` at all** --
+`unable to load model`, with the GPU completely idle (582 MiB, nothing resident) and the
+blob byte-identical on host and container. The gemma4 architecture postdates that
+release. Now pinned to **0.35.0**, verified. A reachable Ollama serving a model it cannot
+load passes every check except an actual completion, which is why the check has
+`--generate`.
+
+**`scripts/check_llm_fallback.py`** is the durable part. From *inside each container* it
+reads that service's own settings object (not the `.env` file -- see defect 2), probes the
+configured base URL, confirms the specific models that service uses are present, and with
+`--generate` sends a real completion. Non-zero exit, so it can gate a demo or CI. It
+would have caught all five defects; nothing else did.
+
+It also found a defect in itself: its first real run reported `completion failed: None`,
+because it discarded the HTTP status. A diagnostic that cannot say *why* sends you reading
+its own source instead of fixing the fallback. It now reports
+`HTTP 500: unable to load model: ...`, which located defect 5 in one step.
+
+**`shared.llm.ollama_compatible_schema` is not used by VoiceHR, and should not be.** Both
+because it cannot be imported there (defect 4) and because it would be a no-op:
+`EVALUATION_SCHEMA` is hand-written, with no `$ref`, no `$defs`, no `maxLength`, and an
+explicit `required` list covering every field a verdict depends on. That adapter exists
+for Pydantic-generated schemas that emit no `required` at all. The schema is now passed
+as-is, and VoiceHR stays standalone per CLAUDE.md.
+
+**Verified, end to end, with Gemini's quota genuinely exhausted** (which makes this a real
+test rather than a simulated one):
+
+- `check_llm_fallback.py --generate`: all four fallbacks OK, exit 0.
+- **Ingestion: 4/4 CVs succeeded, 100% served by the local fallback.** Earlier the same
+  day, with the fallback broken, the same run produced 0/4 and a 7/8 failure.
+- **Evaluation, inside the container:** `evaluation_status: fallback_advisory`,
+  `evaluation_provider: local:gemma4:e2b-it-qat`, and `cefr_level`/`overall_score` both
+  `None` -- the advisory invariant holding in the deployed service for the first time. Its
+  dimensions weighted to **86 -> C1** for a modest transcript, which is precisely the
+  over-generosity that invariant exists to keep off RWS's language gate.
+- Suites re-run: **VoiceHR 261 passed, RWS 224 passed.**
+
+Files: `infra/docker-compose.yml` (ollama service), `infra/.env` + `.env.example`
+(`OLLAMA_MODELS_DIR`), `services/{resume-intelligence,recruitment-workflow}/.env`
+(base URL -> `ollama:11434`), `services/voicehr/.env` (the three missing keys),
+`services/voicehr/backend/services/evaluator.py` (drop the `shared` import),
+`scripts/check_llm_fallback.py` (new).
+
+**Observation, not yet explained:** the containerised Ollama served the ingestion run at
+445.5 CV/h with a 23.1 s per-job median, against 670.4 CV/h and 13.9 s earlier on the
+host process. Roughly 1.7x slower per job. The plausible cause is reading weights through
+a Windows bind mount rather than the native filesystem. It does not affect correctness and
+a fallback is allowed to be slow, but do not compare this run's throughput against
+pre-milestone-65 numbers without accounting for it.
 
 ## [NEXT]
 

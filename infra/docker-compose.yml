@@ -164,6 +164,72 @@ services:
       retries: 5
       start_period: 30s
 
+  # The local LLM fallback provider. It is a Compose service rather than a
+  # hand-started host process because every way it failed was a way a host process
+  # fails (milestone 65):
+  #
+  #   * it simply was not running, and nothing in the stack noticed;
+  #   * when it was running, Ollama's default 127.0.0.1 binding is invisible from
+  #     inside a container, so `host.docker.internal:11434` resolved and was then
+  #     refused in ~10 ms;
+  #   * the only symptom of either was a transient Gemini error turning into a hard
+  #     job failure instead of a fallback.
+  #
+  # As a service it starts with the stack, is addressed as `ollama:11434` (no
+  # host.docker.internal, no binding to get wrong), and has a healthcheck, so "the
+  # fallback is down" is now a visible state rather than a silent one.
+  #
+  # Deliberately NOT a `depends_on` for the app services: a fallback provider that can
+  # take the whole stack down when it fails to start is worse than the problem it
+  # solves. The apps start regardless and use Gemini; reachability is reported at
+  # runtime by each service's /health.
+  ollama:
+    # Pinned, and pinned to a version VERIFIED against the models this project actually
+    # uses. 0.12.3 was chosen first and could NOT load gemma4:e2b-it-qat at all --
+    # "unable to load model", with the GPU completely idle (582 MiB) and the blob
+    # byte-identical on host and container, because the gemma4 architecture postdates
+    # that release. Do not bump this without re-running
+    # `python scripts/check_llm_fallback.py --generate`, which is what caught it: a
+    # reachable Ollama serving a model it cannot load passes every other check there is.
+    image: ollama/ollama:0.35.0
+    container_name: csb-ollama
+    restart: unless-stopped
+    # The host's existing model store (~20 GB) is mounted rather than re-downloaded
+    # into a named volume: pulls from Ollama's R2 blob host repeatedly failed on this
+    # connection (milestone 61 -- two i/o timeouts and a DNS failure on one 7 GB
+    # model), so re-fetching 6.4 GB of already-present weights is a real risk, not a
+    # theoretical one. Read-write so `docker exec csb-ollama ollama pull` still works
+    # and both the host CLI and the container share one store.
+    volumes:
+      - ${OLLAMA_MODELS_DIR}:/root/.ollama
+    # Published so there is exactly ONE Ollama on this machine. The services reach it as
+    # `ollama:11434`; the host-side benchmark scripts (benchmarks/local_llm/*) talk to
+    # `localhost:11434` and now hit this same instance instead of a separately started
+    # host process. Two instances would share one 6 GB GPU and one model store while
+    # disagreeing about which was actually serving a request -- which is how the provider
+    # attribution in milestone 63 got confusing in the first place.
+    # NOTE: a host `ollama serve` must not be running, or this port bind fails.
+    ports:
+      - "${OLLAMA_PORT:-11434}:11434"
+    # Verified working on this machine: `docker run --rm --gpus all nvidia/cuda ...`
+    # reports the RTX 3060. Without the GPU the models fall back to CPU, which still
+    # answers but slowly -- acceptable for a fallback, and it does not fail closed.
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+    healthcheck:
+      # `ollama list` exercises the same HTTP API the services use, so a pass here
+      # means a pass for them. No curl in this image.
+      test: ["CMD-SHELL", "ollama list >/dev/null 2>&1 || exit 1"]
+      interval: 15s
+      timeout: 10s
+      retries: 5
+      start_period: 30s
+
 volumes:
   postgres_data:
   voicehr_data:
