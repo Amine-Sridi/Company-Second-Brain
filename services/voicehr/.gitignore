@@ -17,6 +17,17 @@ htmlcov/
 *.db
 *.sqlite
 *.sqlite3
+# Everything under storage/ is candidate data: recordings, transcripts, the SQLite
+# DB, and anything a script writes beside them. The rule is "ignore all of storage/"
+# rather than a list of known subdirectories, because the previous per-subdirectory
+# form covered recordings/ and transcripts/ but not files written *directly* into
+# storage/ -- benchmarks/rubric/evaluate_real_transcripts.py writes its per-candidate
+# scores there and states in its own docstring that the path is outside git, which
+# was not true until this rule changed.
+# `!storage/*/` re-includes the subdirectories themselves so git still descends into
+# them to find the .gitkeep files; without it an excluded directory is never opened.
+storage/*
+!storage/*/
 storage/recordings/*
 storage/transcripts/*
 !storage/recordings/.gitkeep

@@ -148,7 +148,18 @@ class InterviewAssessment(BaseModel):
     # is kept for backward compatibility with the schema's own prior accepted
     # values (never actually produced by VoiceHR itself, but a replayed/stored
     # older payload could still carry it).
-    evaluation_status: Literal["completed", "failed", "inconclusive", "insufficient_evidence"]
+    # "fallback_advisory": Gemini was unavailable and VoiceHR evaluated the interview
+    # with its local fallback model instead (benchmarks/local_llm, milestone 61).
+    # Like "insufficient_evidence", cefr_level/overall_score are null by construction
+    # on VoiceHR's side, so compute_language_gate already maps it to "needs_review"
+    # with no change to language_gate.py. It is a separate value rather than reusing
+    # "insufficient_evidence" because the cause is different and only one of the two
+    # is a statement about the candidate: "insufficient_evidence" means the transcript
+    # could not be graded, while this means the grader was degraded. Recording the
+    # wrong one would put a false claim about a candidate's interview on the record.
+    evaluation_status: Literal[
+        "completed", "failed", "inconclusive", "insufficient_evidence", "fallback_advisory",
+    ]
 
 
 class WebhookPayload(BaseModel):

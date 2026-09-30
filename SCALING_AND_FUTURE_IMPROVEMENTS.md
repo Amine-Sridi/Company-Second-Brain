@@ -120,8 +120,17 @@ for entry in retrieved:                       # top_k, default 20
 
 Three compounding problems, all in one request:
 
-1. **N+1 over HTTP.** 20 retrieved candidates = 20 sequential cross-service calls. At
-   ~50 ms each that is a second of pure round-trip; at `top_k=100` it is five.
+1. **N+1 over HTTP.** 20 retrieved candidates = 20 sequential cross-service calls.
+   > **MEASURED, and this estimate was wrong (milestone 64).** The round-trip is
+   > **~3.0 ms, not ~50 ms** -- both services are on the same Docker network, so there is
+   > no WAN hop to pay for. The N+1 cost about **60 ms at `top_k=20`**, not a second, and
+   > ~300 ms at `top_k=100`, not five seconds. Batching it was still worth doing (12.2x on
+   > the fetch at n=40, and it shortened the DB transaction, which was always the stronger
+   > argument) but calling it "the single highest-value change in this document" rested on
+   > a figure ~17x too pessimistic that nobody had measured. `submit_job` is now **flat in
+   > `top_k`**: -0.3 ms per extra candidate from `top_k=5` to 40. The dominant cost is the
+   > single JD-structuring LLM call (~1.3 s, fixed), so item 3 below (async submission) or
+   > caching that call are the only levers that matter; item 4 would optimise 7 ms.
 2. **One DB transaction is held open across all of it** — including every remote call.
    Connections are the scarcest resource in a Postgres-backed system, and this design
    holds one for the worst possible duration.
@@ -543,7 +552,9 @@ Two consequences worth carrying forward:
 - The same run with Gemini quota available, to separate the two regimes. Until then
   `max_jobs` is tuned only for fallback mode and is left at 4.
 - Horizontal worker replicas, once the in-memory state in §9 is dealt with.
-- `submit_job` end-to-end now that the N+1 is gone, to confirm §4's claim.
+- ~~`submit_job` end-to-end now that the N+1 is gone, to confirm §4's claim.~~
+  **Done (milestone 64)** -- and it refuted §4's estimate rather than confirming it;
+  see the measured note in §4 itself. `benchmarks/load/matching_latency_test.py`.
 
 ---
 

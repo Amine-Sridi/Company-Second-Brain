@@ -936,8 +936,49 @@ python services/recruitment-workflow/scripts/seed_demo_data.py --yes --job-title
   larger is runnable on a 6 GB card, so the benchmark says nothing about whether a 13 B+
   model would clear the interview-evaluation floor. Fold in a new model any time with
   `python benchmarks/local_llm/sweep.py --models <name>`; nothing else needs to change.
-- **No fallback exists for interview evaluation, interview conduct, or embeddings, and
-  this is deliberate (milestone 46).** Each is argued in
+- **The local fallback is silently dead from the containers unless Ollama is bound to
+  `0.0.0.0` (milestone 63).** `LOCAL_LLM_BASE_URL=http://host.docker.internal:11434`
+  resolves fine and is then *refused*, because Ollama's default binding is 127.0.0.1,
+  which no container can reach. Nothing surfaces this: the only symptom is a transient
+  Gemini error turning into a hard job failure instead of a fallback. Start it with
+  `OLLAMA_HOST=0.0.0.0 ollama serve`, and confirm with
+  `docker exec csb-resume-intelligence-worker python -c "import httpx;
+  print(httpx.get('http://host.docker.internal:11434/api/tags').status_code)"`.
+- **A clean Gemini-path throughput number is not measurable on the free tier (milestone
+  63).** 8 CVs at concurrency 4 with the fallback disabled produced 15 × 429 and 6 × 503,
+  failing 7 of 8 jobs. The quota, not `max_jobs`, is the ceiling on that path, so the
+  Gemini-path concurrency tuning M54 left open cannot be answered without paid quota.
+- **The orphan reconciliation cannot recognise imported data (milestone 62).** It
+  decides what is abandoned from the absence of a `recordings` row, so any file placed
+  into `storage/` by hand -- such as the archive imported from the previous standalone
+  VoiceHR for rubric calibration -- looks exactly like an aborted interview. It has
+  never been run with `--apply` for this reason. Registering imported files with
+  interview rows, or keeping them outside `storage/`, is the prerequisite.
+- **A stuck `active` interview pins its recording forever (milestone 62).** Rule 2 of
+  the reconciliation refuses to collect a file whose interview is `active`, at any age,
+  because that is the live-interview case. Interviews 6 and 7 have been `active` since
+  2026-09-13/14 -- crashed mid-session and never finalized -- so their recordings are
+  permanently protected until something corrects the status. The conservative direction
+  is the right default here, but it is not self-healing.
+- **The evaluation fallback is advisory and can never issue a CEFR level (milestone
+  61).** `gemma4:e2b-it-qat` is the best of the seven measured models on this task
+  (0.90 within one band, zero badly-wrong verdicts) but it compresses the scale: it
+  never issues A1 or C2 and rates the weak A1/A2 golden sample as B1. Because
+  `language_gate` passes an application as soon as `assessed_cefr >= required_cefr`,
+  fallback results deliberately carry a null CEFR and route to `needs_review`. Do not
+  "complete" this by letting the band through — that is the bug, not the gap. Off by
+  default (`LOCAL_LLM_ENABLED=false`).
+- **Nothing above 7 B has been measured on interview evaluation (milestones 46, 61).**
+  `gemma4:12b-it-qat` was pulled for exactly this comparison; the download failed twice
+  three times — twice with `i/o timeout` against Ollama's R2 blob host after reaching
+  ~1.9 of 7.0 GB, then with a DNS `no such host` failure — the same class of flakiness
+  recorded against M45/M46. `ollama pull` resumes from the partial. The M46 note below says nothing
+  larger than 7 B is runnable on a 6 GB card; that ceiling was set for *interactive*
+  use and does not apply here, since evaluation runs after the WebSocket closes and can
+  tolerate minutes. A 12 B is therefore worth finishing.
+- **No fallback exists for interview conduct or embeddings, and
+  this is deliberate (milestone 46; interview evaluation now has the advisory
+  fallback above).** Each is argued in
   `LOCAL_LLM_BENCHMARK_AND_FALLBACK.md` §6.4, §9 and §8 respectively. The one most
   likely to be "helpfully" fixed later is embeddings: `nomic-embed-text` emits 768
   dimensions, *exactly* matching the pgvector column, so wiring it in would insert
@@ -3164,6 +3205,14 @@ any generic leaderboard. 161 rows: `sweep_clean.json` + `sweep_granite.json` + `
 | Match explanation | `llama3.2:3b` | 1.000 | four models scored 1.000; chosen on latency |
 | Interview evaluation | **none** | 0.600 best | below the 0.70 usability floor — **no fallback**. The best score belongs to `mistral:7b`, the *largest* model tested, so this is not an artifact of picking small models. |
 
+> **Superseded for interview evaluation by milestone 61.** The "no fallback" conclusion
+> was right that no model clears the 0.70 floor, but the *ranking* that produced it was
+> an artifact of the grading. That grade honoured the model's own sufficiency veto and
+> demanded an exact CEFR band, so `mistral:7b` scored best by vetoing least — while
+> actually issuing 8 verdicts, 4 of them two or more bands wrong. Re-graded on what a
+> fallback is really for, `gemma4:e2b-it-qat` wins and `mistral:7b` is near the bottom.
+> Milestone 61 has the corrected table.
+
 Per-model cost (VRAM measured idle-to-loaded on a settled GPU, `measure_vram.py`;
 two independent runs agreed within ~2%): `qwen2.5:3b` 2245 MB / 93.5 tok/s,
 `granite4.1:3b` 2506 MB / 85.7 tok/s, `llama3.2:3b` 2566 MB / 95.0 tok/s,
@@ -3999,6 +4048,353 @@ thing.
 
 ---
 
+### Milestone 61 — a local fallback for the *evaluator*, and the grading error that had hidden it
+
+Milestone 46 concluded "no local fallback for interview evaluation." That conclusion
+was correct in its verdict and wrong in its reasoning, and the reasoning mattered
+because it also named the wrong model as best.
+
+**What was wrong.** M46 graded each model by honouring its own `sufficient_evidence`
+veto and then requiring an exact CEFR band. Two problems. First, a veto is not an
+error: a vetoed case becomes `insufficient_evidence` -> null CEFR -> `needs_review` ->
+a human looks at it. That is the *safe* outcome, but M46's grade punished it exactly as
+hard as a wrong verdict. Second, exact-band matching across six bands with 15-point
+buckets is a yardstick trained human raters do not meet either.
+
+So M46's ranking rewarded models that guessed confidently and punished models that
+declined. Re-graded on what actually reaches a recruiter, the order inverts.
+
+**Corrected results** (all 7 installed models, the same 13 committed golden cases,
+`benchmarks/local_llm/evaluation_deep_dive.py`, results JSON in
+`benchmarks/local_llm/results/`):
+
+| model | exact | within-1 | verdicts issued | of those, 2+ bands wrong |
+|---|---|---|---|---|
+| **`gemma4:e2b-it-qat`** | **0.40** | **0.90** | 4 | **0** |
+| `phi4-mini:3.8b` | 0.40 | 0.70 | 7 | 2 |
+| `granite4.1:3b` | 0.20 | 0.60 | 4 | 0 |
+| `mistral:7b` | 0.30 | 0.50 | 8 | 4 |
+| `qwen3.5:4b` | 0.22 | 0.44 | 1 | 1 |
+| `qwen2.5:3b` | 0.20 | 0.20 | 2 | 2 |
+| `llama3.2:3b` | 0.20 | 0.20 | 0 | 0 |
+
+`mistral:7b` — M46's winner — rates a B1 speaker C1 and a weak A1/A2 speaker B2.
+`llama3.2:3b` and `qwen2.5:3b` collapse nearly everything to A1 (mean signed band error
+-2.2 and -2.1); they are not assessing at all. `gemma4:e2b-it-qat` is the only model
+that never issues a badly wrong verdict, and it is also the cheapest serious
+contender: 4.3 GB, **5.9 s median**.
+
+**Stability, which M46 never measured** (`evaluation_stability.py`, 5 repeats x the 5
+CEFR-ladder cases). A fallback that answers differently on re-run is unusable whatever
+its mean. `gemma4:e2b-it-qat` holds up: 3/5 cases changed band across 5 runs, but always
+by exactly one band and always with a clear 4-vs-1 majority; median within-case spread
+6 points; one sufficiency flip in 25 runs.
+
+**But it is not good enough to gate on, and that is the whole design.** The same runs
+exposed *scale compression*: it never issues A1 or C2, returned exactly 82 five times
+for the C2 sample, and rates the weak A1/A2 golden sample as **B1**. A live end-to-end
+call on a modest real-shaped transcript produced dimensions weighting to **81 -> C1**.
+`language_gate.compute_language_gate` returns `passed` as soon as
+`assessed_cefr >= required_cefr`, and `passed` unblocks accept — so letting this model's
+band through would let a recruiter accept an A2 candidate against a B1 requirement
+during a Gemini outage, with nothing on the record saying the grader was degraded.
+
+**So the fallback is advisory and never authoritative.** New
+`evaluation_status: "fallback_advisory"`: dimension scores, strengths, concerns and
+evidence are kept for the recruiter to read, `overall_score`/`cefr_level` are null by
+construction, and the existing null-CEFR path routes it to `needs_review`.
+`language_gate.py` needed no change at all.
+
+It is a distinct status rather than a reuse of `insufficient_evidence` because only one
+of the two is a claim about the candidate: `insufficient_evidence` says the transcript
+could not be graded, `fallback_advisory` says the grader was degraded. Recording the
+first when the second is true would put a false statement about someone's interview on
+the permanent record.
+
+**Reached only on availability failures** — 429/quota/5xx/timeout/network, or the
+shared retry budget exhausted by them (which only consecutive retryable provider errors
+can do). A response that parsed but failed validation, a missing API key, or any other
+application fault still goes to `evaluation_status: "failed"`, visibly. A broken Ollama
+does not mask why Gemini failed: the original error is reported instead.
+
+**Off by default** (`LOCAL_LLM_ENABLED=false`), so the default deployment keeps Gemini
+as the sole evaluation provider exactly as before. The settings reuse RWS's and Resume
+Intelligence's existing names (`local_llm_enabled`, `local_llm_base_url`) so one
+`LOCAL_LLM_BASE_URL` configures every service — including its `host.docker.internal`
+default, since Ollama runs on the host and inside a container `localhost` is the
+container. The evaluation *model* is its own setting
+(`local_llm_evaluation_model`) rather than a reuse of `local_llm_structured_model`,
+because the model that won JD structuring (`granite4.1:3b`) is near the bottom on
+evaluation — sharing one name would silently swap in a worse evaluator.
+
+Files: `backend/services/evaluator.py` (`_evaluate_with_local_model`,
+`_fallback_advisory_result`, `_is_provider_unavailable`, `_evaluate_via_fallback`),
+`backend/core/config.py` (4 settings), `backend/services/processing.py` (both
+`process_interview` and `retry_report` treat the new status as inconclusive),
+`shared/schemas/__init__.py` (additive `Literal` value — RWS stores the assessment as
+JSON, so no migration), `benchmarks/local_llm/evaluation_deep_dive.py` (band metrics),
+`benchmarks/local_llm/evaluation_stability.py` (new).
+
+**Verified:** 8 new tests in `services/voicehr/tests/test_local_fallback.py`, covering
+the advisory invariant, the real `compute_language_gate` returning `needs_review`,
+both non-availability paths *not* reaching the fallback, default-off, broken-fallback
+error preservation, and the shared-schema acceptance. Full suites re-run: **VoiceHR 248
+passed, RWS 224 passed.** The real HTTP path (schema compilation through
+`ollama_compatible_schema`, response parsing) was additionally exercised live against a
+running Ollama, not just mocked.
+
+**An unrelated exposure found while reviewing the diff.** `services/voicehr/.gitignore`
+covered `storage/recordings/*` and `storage/transcripts/*` but nothing written
+*directly* into `storage/`, and the repo-root `.gitignore`'s `storage/**` is anchored to
+the root so it never applied here. `benchmarks/rubric/evaluate_real_transcripts.py`
+writes its per-candidate scores to `storage/rubric_evaluation_results.json` and states
+in its own docstring that the path is outside git — which was false. The current file is
+harmless (that Gemini run failed on all 10, so it holds only nulls), but a successful run
+would have put real per-candidate assessment data in an untracked-but-committable path.
+Now `storage/*` with `!storage/*/` so git still descends to the `.gitkeep` files.
+Verified: recordings, transcripts, the SQLite DB and the results file all report
+`ignored`, and the `.gitkeep` files are still visible.
+
+**A defect this found in my own code:** the new settings were read with direct
+attribute access while the rest of the module uses `getattr(settings, ..., default)` —
+several tests monkeypatch `settings` with partial stand-ins, so this turned a missing
+optional setting into an `AttributeError` that swallowed the real evaluation error. Two
+existing evaluator tests caught it.
+
+**Not done: the 12 B comparison.** `gemma4:12b-it-qat` was pulled to test whether a
+larger model of the same family clears the bar — the 6 GB VRAM ceiling from M46 was set
+for *interactive* use, but evaluation runs after the socket closes, so a 12 B running
+partly on CPU is viable. The download **failed three times**. The first two died with
+`max retries exceeded: ... dial tcp 172.64.66.1:443: i/o timeout` against Ollama's
+Cloudflare R2 blob host after reaching ~1.9 of 7.0 GB, at rates between 130 KB/s and
+1.4 MB/s; the third failed earlier and differently — `dial tcp: lookup
+dd20bb891979d25aebc8bec07b2b3bbc.r2.cloudflarestorage.com: no such host`, i.e. DNS
+resolution itself, which no amount of retrying fixes. This is the same class of
+flakiness already recorded against M46 (three models stalled mid-download) and M45
+(image builds). `ollama pull` resumes from the partial, so a later attempt on a working
+connection costs only the remaining ~5 GB. **The recommendation above is therefore the best of
+the seven models actually measured, not of all plausible candidates.** If the 12 B later
+lands, re-run `evaluation_deep_dive.py --models gemma4:12b-it-qat` and compare on
+`within-1` and `2+ bands wrong`; a clear win there would justify revisiting the
+advisory-only restriction, since scale compression is the specific thing a larger model
+would be expected to fix.
+
+### Milestone 62 — orphaned recordings: the files retention structurally cannot see
+
+`retention.py` walks *rows* and deletes the files they reference. Any file whose
+`recordings` row was never inserted is therefore invisible to it, permanently. These are
+candidate voice recordings, and they accumulate for entirely ordinary reasons:
+`session.py` opens `storage/recordings/{id}.webm` and writes to it **during** the
+interview, while `process_interview` only INSERTs the row at the very end — so a
+disconnect, a crash or an abandoned invite leaves the audio behind with nothing pointing
+at it. (`retention.sweep` also NULLs the path columns even when `os.unlink` raised, so a
+file it failed to delete becomes unreferenced by design.)
+
+**Why this is not `find -delete`.** Because the file exists before the row does,
+"unreferenced" is the *normal* state of an interview being conducted right now. The live
+dry run made this concrete: of 70 files, **two belong to interviews currently marked
+`active`** and ten more to `pending` interviews that the reconnect-recovery path can
+still resume. A naive sweep deletes a candidate's voice mid-interview. So a file is
+collected only when all of:
+
+1. no `recordings` row references its name;
+2. its interview is not `active`;
+3. its interview is older than the cutoff — or, with no interview row at all, the
+   file's own mtime is.
+
+Rule 3 is what makes rule 2 safe to relax for `pending`: the invite link expires after
+7 days (`api/routes/invite.py`), so a `pending` interview past any week-plus cutoff
+cannot be resumed by anyone. The CLI refuses `--older-than-days < 7` for that reason.
+The mtime branch also covers files with no row to date from, and stops a file still
+being written from being collected mid-run.
+
+Paths are matched by **basename**, not resolved path: the stored values are relative to
+the container's working directory, so resolving them against a host-side or test-side
+root is exactly where a path-handling slip would silently reclassify a referenced file
+as an orphan. A broader referenced set can only ever protect an extra file, never expose
+one.
+
+It modifies **no database rows at all** — clearing columns is retention's job, and a
+referenced file is never collected, so this cannot create the dangling pointers it
+exists to clean up after.
+
+Files: `services/voicehr/backend/core/reconcile.py`, `scripts/reconcile_orphans.py`
+(dry-run by default, `--list` to name every file), 13 tests in
+`services/voicehr/tests/test_reconcile.py`.
+
+**Verified:** 13 new tests against a real temporary SQLite DB and real temporary
+directories (not mocks) — the majority assert what is *not* collected: active
+interviews, resumable pending ones, referenced files however ancient, `.gitkeep`,
+too-new files, and that no row is ever modified. Full VoiceHR suite re-run: **261
+passed** (was 248). Exercised live against the running container and the real
+`voicehr_data` volume: at the 90-day default, 70 scanned / 0 collected; at a 20-day
+cutoff, 47 files / 17 MB identified, with the 8 referenced, 2 active, 10 resumable and
+2 placeholder files all correctly held back.
+
+**Nothing was applied, deliberately — read this before running it with `--apply`.** At
+the 90-day default it currently collects nothing, because the oldest interview in the
+system is from 2026-09-07 and nothing is 90 days old yet. That is the correct answer,
+but it is also the only thing standing between `--apply` and the **imported archive of
+recordings/transcripts from the previous standalone VoiceHR** that was added for rubric
+calibration. Those files have no interview rows in this database, so they are
+*indistinguishable from abandoned files* by any rule this module could apply — at a
+20-day cutoff they make up most of the 47. Before this is ever run with `--apply`,
+either register them with interview rows or move them out of `storage/`. This is a real
+limitation of the approach, not an oversight in it: "no row" cannot mean both "never
+finished" and "deliberately imported".
+
+### Milestone 63 — the clean-quota run, and why the Gemini-path number cannot be measured here
+
+`handoff.md` had owed two things since milestone 54: a clean-quota ingestion run that
+separates the Gemini path from the local-fallback path, and a `submit_job` end-to-end
+number. This closes the first with a negative result that is more useful than the number
+would have been, and fixes the harness defect that made M54 ambiguous in the first place.
+
+**The harness now attributes every run to a provider.** M54's measurement was
+uninterpretable because the stack was quota-exhausted and 23 of 24 extractions were
+served by the local model on a single serialising GPU -- a fact reconstructed by hand
+from the worker log afterwards. `ingest_load_test.provider_mix` now reads the worker's
+structured log lines (`llm_primary_unavailable_using_fallback`, `llm_fallback_succeeded`,
+`llm_fallback_also_failed`) for the run's own time window and reports the split in both
+the console summary and the results JSON, with the caveat that these are *call* counts
+rather than job counts. No migration: no column records the provider, and adding one for
+a benchmark's benefit is not worth it.
+
+**Measured, across three regimes** (`benchmarks/load/results/`):
+
+| run | n / conc | outcome | CV/h | provider mix |
+|---|---|---|---|---|
+| mixed | 4 / 2 | 4 succeeded | 897.4 | 3 Gemini / 1 local |
+| fallback disabled | 8 / 4 | **1 succeeded, 7 failed** | 329.5 | 1 Gemini / 0 local |
+| fallback only | 4 / 2 | 4 succeeded | **670.4** | 0 Gemini / 4 local |
+
+**The clean Gemini-path number is not obtainable on this account.** With
+`LOCAL_LLM_ENABLED=false` so that any success is Gemini by definition, 8 CVs at
+concurrency 4 produced **15 × HTTP 429 and 6 × 503**, and 7 of 8 jobs failed outright.
+The free tier cannot sustain even 8 concurrent extractions. That answers M54's open
+question, just not in the expected direction: **on this quota the Gemini path's ceiling
+is the quota, not `max_jobs`**, so tuning worker concurrency for it is meaningless until
+there is paid quota. `max_jobs=4` stands, and M54's reasoning for it (one GPU serialises)
+remains the only regime in which the setting currently matters.
+
+The third run is a clean pure-fallback figure: **670.4 CV/h at 100% local**, consistent
+with M54's 908.8 at higher concurrency.
+
+**Two defects found in the code written for this milestone**, both of which had already
+produced a false conclusion before being caught:
+
+1. `subprocess.run(..., text=True)` decodes with the host's preferred encoding, cp1252
+   here, and container logs carry bytes that are not valid cp1252. The
+   `UnicodeDecodeError` was raised inside subprocess's reader *thread*, where it does not
+   propagate -- the run completed and reported **zero fallback calls**, which is
+   indistinguishable from a genuinely clean run. It was reported as "a clean Gemini-path
+   measurement" until the fix (`encoding="utf-8", errors="replace"`) revealed 4 fallback
+   calls and 4 fallback failures in that same run.
+2. The summary decided "clean" from `fallback_succeeded` rather than `fallback_calls`, so
+   a run where the primary faltered and the fallback *also* failed was labelled clean --
+   while the retry cost those failures caused sat in the reported latency.
+
+A third gap was closed pre-emptively: throughput divides successes by wall clock, so the
+7/8-failure run produced a small, tidy, precise-looking "329.5 CVs/hour". The summary now
+warns when more than 10% of jobs fail.
+
+**An operational finding worth more than the benchmark.** The worker could not reach
+Ollama at all (`ConnectError` in 8-11 ms). Ollama was not running, and once started it
+still has to be bound with **`OLLAMA_HOST=0.0.0.0`** -- the default 127.0.0.1 binding is
+invisible from inside a container, so `LOCAL_LLM_BASE_URL=http://host.docker.internal:11434`
+resolves and is refused. The fallback is therefore **silently non-functional from the
+containers unless Ollama is started bound to all interfaces**, and nothing in the stack
+surfaces that: the symptom is a Gemini blip turning into a hard job failure. During the
+first run this is exactly what happened -- one job exhausted 3 attempts and failed while
+the others recovered by retrying Gemini.
+
+Files: `benchmarks/load/ingest_load_test.py` (`provider_mix`, run-window timestamp,
+provider/failure warnings in the summary and `provider_mix` in the JSON).
+
+**Verified:** the harness was exercised in all three regimes above against the live
+stack; the provider attribution was cross-checked against the raw worker log
+(20,516 characters read, 4 fallback events counted by hand and by the function).
+`services/resume-intelligence/.env` was flipped to `LOCAL_LLM_ENABLED=false` for the
+fallback-disabled runs and restored byte-for-byte afterwards (`diff` against a backup is
+clean and the worker was re-checked reporting `True`).
+
+The >10% failure warning was then confirmed to actually fire rather than assumed: with
+the fallback disabled again, 4/4 jobs failed and the summary printed the warning over a
+"0.0 succeeded CVs/hour" figure. That run also re-confirms the quota finding from the
+other direction -- with no fallback, Gemini served **nothing at all**.
+
+### Milestone 64 — `submit_job` measured, and section 4's headline estimate was wrong by ~17x
+
+This closes the last measurement `handoff.md` owed. It also corrects the number that made
+matching "the sharpest bottleneck" in `SCALING_AND_FUTURE_IMPROVEMENTS.md`.
+
+New harness: `benchmarks/load/matching_latency_test.py`, two deliberately separate parts.
+
+**Part A -- the controlled comparison, no LLM involved.** Both fetch endpoints still
+exist (`GET /v1/knowledge/candidates/{id}` and `POST /v1/knowledge/candidates/batch`), so
+the pre- and post-milestone-53 strategies can be timed against the *same* candidate ids
+on the *same* live stack with nothing reverted and nothing mocked. Median of 3, after a
+warm-up:
+
+| n | sequential (ms) | batch (ms) | speedup | per-candidate |
+|---|---|---|---|---|
+| 1 | 3.8 | 3.1 | 1.2x | 3.8 |
+| 5 | 18.2 | 4.4 | 4.1x | 3.6 |
+| 10 | 28.8 | 5.0 | 5.8x | 2.9 |
+| 20 | 59.9 | 6.7 | 8.9x | 3.0 |
+| 40 | 121.7 | 10.0 | **12.2x** | 3.0 |
+
+Sequential is linear in n, batch is near-flat: the N+1 removal does what milestone 53
+claimed, and now there is a number for it.
+
+**But section 4's estimate of that round-trip was ~50 ms, and it is ~3.0 ms.** Both
+services sit on the same Docker network; there is no WAN hop to pay for. So the N+1 at
+the default `top_k=20` cost about **60 ms, not "a second"**, and at `top_k=100` about
+**300 ms, not five seconds** -- roughly 17x cheaper than the figure that ranked this as
+the sharpest bottleneck and made batching "the single highest-value change in this
+document". The change was still worth making (12x on the fetch, and it shortened the DB
+transaction, which was always the better argument), but the prioritisation rested on an
+estimate nobody had measured.
+
+**Part B -- `submit_job` end to end.** Median of 3 per `top_k`:
+
+| top_k | median ms | matches created |
+|---|---|---|
+| 5 | 1358.5 | 5 |
+| 10 | 1263.4 | 10 |
+| 20 | 1344.5 | 20 |
+| 40 | 1347.4 | 40 |
+
+**Flat: -0.3 ms per extra candidate** across an 8x range of `top_k`, versus the ~50 ms
+per candidate section 4 predicted while the N+1 stood. Adding 35 candidates to a
+submission costs nothing measurable. Retrieval, scoring and persistence for 40 candidates
+are all inside the noise of one LLM call.
+
+**So the real bottleneck is not the candidate fan-out, it is the single JD-structuring
+call.** ~1.3 s of the ~1.3 s total is that one request, and it is a *fixed* cost
+independent of pool size or `top_k`. If recruiter-visible submit latency ever needs to
+come down, that call -- caching it per unchanged JD text, or moving submission onto the
+queue as section 4 item 3 suggests -- is the only lever that matters. Concurrency over the
+fetches (section 4 item 4) would optimise something that costs 7 ms.
+
+**Provider attribution, per milestone 63.** All 12 JD structurings were served by the
+**local fallback** (`granite4.1:3b`), with 12 primary failures: the Gemini free-tier
+quota is exhausted, as milestone 63 established independently. The harness says so rather
+than presenting the figure as a Gemini reading. The 1.3 s fixed cost is therefore the
+*local* model's latency; Gemini's would differ, and the flatness result is unaffected
+either way since it concerns the per-candidate slope, not the intercept. The first sample
+at `top_k=5` was 5476 ms -- a cold Ollama model load -- which is why the median of 3 is
+the figure quoted and the raw samples are kept in the results JSON.
+
+Files: `benchmarks/load/matching_latency_test.py`,
+`benchmarks/load/results/matching_latency_*.json`.
+
+**Verified** against the live stack (74 `candidate_knowledge` rows, 40 used for part A).
+Both parts ran clean. Note that part B is not read-only: 12 submissions created **12 job
+rows and 75 `match_result` rows** (`recruitment.jobs.title LIKE 'Backend Engineer k%'`
+identifies them), which is why it is a script run deliberately rather than anything
+automated.
+
 ## [NEXT]
 
 **1. Confirm CI actually passes on GitHub, and commit the work that is not yet pushed.**
@@ -4016,37 +4412,88 @@ The `integration` job is also `continue-on-error: true` and has never run anywhe
 it to blocking once it is green, or delete it if its fixtures need more than the workflow
 bootstraps. Either is better than leaving it permanently amber.
 
-Then: **12 files from milestones 57-59 are uncommitted** (rate limiting, frontend
-component tests, retention sweep). CI has not seen any of it.
+Then: **16 source files from milestones 61-64 are uncommitted** (the evaluator's advisory
+local fallback, the orphan reconciliation, the ingestion harness's provider attribution,
+the matching-latency harness, and the two docs). Milestones 57-60 *are* committed -- the
+"12 files from 57-59" this item used to claim was stale. CI has seen none of 61-64,
+including 21 new tests.
 
 *To check: authenticate `gh auth login`, then `gh run list`. Or open the repo's Actions
 tab.*
 
-**2. Orphaned recording files.** Milestone 59's sweep only sees files referenced by a
-`recordings` row. There are currently **52 files on disk against 4 rows** -- aborted runs
-leave voice recordings behind that no retention policy will ever collect. This wants a
-reconciliation pass that walks `storage/recordings` and `storage/transcripts` and removes
-what no row points at. Small, bounded, and it is candidate voice data.
+**2. Separate the imported archive from real orphans, then run the reconciliation.**
+Milestone 62 built the sweep (`scripts/reconcile_orphans.py`, dry-run by default) and
+verified it live, but **it has deliberately never been run with `--apply`**. The
+recordings/transcripts imported from the previous standalone VoiceHR have no interview
+rows in this database, so no rule can tell them apart from abandoned files -- at a
+20-day cutoff they are most of the 47 it would collect. The 90-day default protects them
+only by accident (nothing in the system is 90 days old yet). Either register them with
+interview rows or move them out of `storage/`, *then* `--apply` is safe.
+
+Also worth a look while in there: interviews **6 and 7 have been `active` since
+2026-09-13/14**. Genuinely live interviews do not last two weeks, so these are stuck
+rows from a crash -- and rule 2 of the reconciliation protects an `active` interview's
+recording regardless of age, so these two files can never be collected until the status
+is corrected.
 
 **3. Still needing a human, not more code:**
 
-- **One real interview for rubric calibration.** Milestone 48 proved the pipeline
-  (Section E fires, `interaction_spontaneity` scores, webhook applies, gate computes) but
-  the candidate was a TTS voice reading a fixed script -- fluent by construction, and
-  correctly marked `insufficient_evidence` for non-responsiveness. Whether the CEFR
-  scoring is *accurate for a real person* is still unestablished. Invite via
-  `POST /v1/matches/{match_id}/select` then `POST /v1/applications/{id}/invite`; the
-  Resend sandbox only delivers to **aminesridi58@gmail.com**, so the candidate's stored
-  email must be that one.
+- **Real interviews for rubric calibration -- and it is quota that is NOT the blocker.**
+  Milestone 48 proved the pipeline (Section E fires, `interaction_spontaneity` scores,
+  webhook applies, gate computes) but the candidate was a TTS voice reading a fixed
+  script -- fluent by construction, and correctly marked `insufficient_evidence` for
+  non-responsiveness. Whether the CEFR scoring is *accurate for a real person* is still
+  unestablished.
+
+  **Surveyed (2026-09-30): 2 of 16 real transcripts carry enough candidate speech to
+  score** (`18.json` 2713 chars, `50.json` 1681; the rest are 0-413). So even with Gemini
+  quota restored, a `--run` of `benchmarks/rubric/evaluate_real_transcripts.py` yields
+  n=2 -- enough to validate the *withholding* path against real speech (14 of 16 should
+  refuse a verdict, currently covered only by hand-written cases) but **not** a CEFR
+  accuracy baseline, and not a reference against which to rank the local models. Roughly
+  5+ substantial interviews would be needed for that, and no amount of quota produces
+  them.
+
+  Two fixes landed while establishing this: the script now reads transcripts **from the
+  container** rather than the host copy (the host had 10 files and was missing `18.json`,
+  the single richest one -- VoiceHR's storage is a Docker volume and the host directory
+  had drifted behind it; `--host-transcripts` keeps the old behaviour), and it now
+  records `evaluation_error` per transcript. The earlier run returned
+  `evaluation_status: "failed"` for all 10 and captured **no reason at all**, which is
+  why "it was the quota" remained a guess rather than a finding.
+
+  To run one: invite via `POST /v1/matches/{match_id}/select` then
+  `POST /v1/applications/{id}/invite`; the Resend sandbox only delivers to
+  **aminesridi58@gmail.com**, so the candidate's stored email must be that one.
 - **One real interview-round notification** to a deliverable address, to confirm a real
   calendar client offers "Add to calendar" and that a reschedule updates rather than
   duplicates the entry. The ICS is proven by 16 unit tests and milestone 43 proved
   delivery; only the visual render remains.
 
-**4. Measurements still owed** (both recorded in `SCALING_AND_FUTURE_IMPROVEMENTS.md`):
-a clean-quota ingestion run to separate the Gemini path from the local-fallback path
-(`max_jobs` is currently tuned only for fallback mode), and a `submit_job` end-to-end
-number now that the N+1 is gone.
+**4. Measurements: both now done (milestones 63 and 64), nothing owed.** Separating the
+Gemini path from the fallback path is closed by 63 -- the ingestion harness reports the
+provider split on every run, and the Gemini-path figure turned out not to be measurable
+on the free tier at all (15 x 429 at concurrency 4); re-open only with paid quota, and
+note the fallback needs `OLLAMA_HOST=0.0.0.0` or it does not run. `submit_job` is closed
+by 64, which found it **flat in `top_k`** (-0.3 ms per extra candidate) and corrected
+`SCALING_AND_FUTURE_IMPROVEMENTS.md` section 4's ~50 ms round-trip estimate to ~3.0 ms.
+
+What that leaves worth doing on performance: **nothing, until submit latency is actually
+a complaint.** The one real cost is the fixed ~1.3 s JD-structuring call, and caching it
+per unchanged JD text is the cheapest lever if it ever matters.
+
+**5. Finish the 12 B evaluation comparison (milestone 61).** `gemma4:12b-it-qat` was
+pulled to test whether a larger model of the same family fixes the scale compression
+that forces the evaluation fallback to stay advisory-only. Three pull attempts died against Ollama's
+R2 blob host — twice on `i/o timeout` (~1.9 of 7.0 GB reached), once on DNS `no such
+host`. `ollama pull` resumes from the partial, so on a working connection just re-run
+it; do not re-derive the partial. When it lands:
+`python benchmarks/local_llm/evaluation_deep_dive.py --models gemma4:12b-it-qat`, then
+`evaluation_stability.py --models gemma4:12b-it-qat --repeats 5`. Compare on
+**within-1** and **2+ bands wrong**, not on the M46 `AS-IS` score — that metric is what
+produced the wrong ranking in the first place. A clear win, *and* correct handling of
+the `weak_language_sample` case specifically, would be grounds to revisit the
+advisory-only restriction. Anything less and advisory-only stands.
 
 Everything else in Known Limitations remains deliberately deferred per this project's own
 "no infra/refactor ahead of demonstrated need" rule. Partitioning `match_results` was

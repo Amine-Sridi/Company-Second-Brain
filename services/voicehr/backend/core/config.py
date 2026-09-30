@@ -47,4 +47,30 @@ class Settings(BaseSettings):
     rws_webhook_hmac_secret: str = "changeme-webhook-secret"
     rws_webhook_url: Optional[str] = None
 
+    # Local evaluation fallback (benchmarks/local_llm, milestone 61). Off unless
+    # explicitly enabled, so the default deployment keeps Gemini as the sole
+    # evaluation provider exactly as before.
+    #
+    # It is deliberately NOT a drop-in replacement for Gemini: the benchmark showed
+    # gemma4:e2b-it-qat compresses the CEFR scale (never issues A1 or C2, and rates
+    # the weak A1/A2 golden sample as B1), so its verdicts are recorded as advisory
+    # only and never become an authoritative CEFR -- see _fallback_advisory_result
+    # in services/evaluator.py. The model name is configurable, but changing it
+    # without re-running benchmarks/local_llm/evaluation_deep_dive.py means shipping
+    # an unmeasured model into candidate assessments.
+    # Names match RWS and Resume Intelligence (local_llm_enabled/local_llm_base_url)
+    # so one LOCAL_LLM_BASE_URL in the environment configures every service. The
+    # default is host.docker.internal, not localhost, for the same reason it is there:
+    # Ollama runs on the *host*, and inside a container localhost is the container.
+    local_llm_enabled: bool = False
+    local_llm_base_url: str = "http://host.docker.internal:11434"
+    # Deliberately its own setting rather than reusing local_llm_structured_model:
+    # the model that won JD structuring (granite4.1:3b) is near the bottom on
+    # evaluation, so sharing one name would silently swap in a worse evaluator.
+    local_llm_evaluation_model: str = "gemma4:e2b-it-qat"
+    # Generous because this runs after the WebSocket has already closed
+    # (processing.process_interview), so no user is waiting on it. Measured median
+    # was 5.9s on the benchmark machine; a cold model load is the slow case.
+    local_llm_evaluation_timeout_seconds: float = 300.0
+
 settings = Settings()

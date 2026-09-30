@@ -6,7 +6,7 @@ from datetime import datetime
 from backend.core.config import settings
 from backend.core.security import generate_report_token
 import backend.database as database
-from backend.services.evaluator import evaluate
+from backend.services.evaluator import FALLBACK_ADVISORY_STATUS, evaluate
 from backend.services.mailer import send_report_email
 from backend.services.rws_client import notify_and_record_interview_result
 
@@ -73,7 +73,14 @@ async def process_interview(token: str, transcript: list[dict], audio_path: str 
         # treat this interview as not having produced a confident, usable result --
         # drives VoiceHR's own interview/report status *and* what RWS is told, so the
         # two can never disagree about whether a CEFR verdict actually exists.
-        inconclusive = pre_check_inconclusive or scores.get("evaluation_status") == "insufficient_evidence"
+        # fallback_advisory joins these because a locally-evaluated interview also has
+        # no CEFR verdict (evaluator._fallback_advisory_result withholds it on
+        # purpose). Without it this would be filed as a completed interview carrying a
+        # null cefr_level, and the recruiter would see a finished assessment with a
+        # blank level and no indication that Gemini never ran.
+        inconclusive = pre_check_inconclusive or scores.get("evaluation_status") in (
+            "insufficient_evidence", FALLBACK_ADVISORY_STATUS,
+        )
         report_token = generate_report_token()
         now = datetime.utcnow().isoformat()
         status = "terminated" if terminated else ("inconclusive" if inconclusive else "completed")
@@ -179,7 +186,9 @@ async def retry_report(report_token: str) -> dict:
             duration_seconds=duration_seconds,
         )
         evaluation_status = scores.get("evaluation_status", "failed" if scores.get("overall_score") is None else "completed")
-        inconclusive = pre_check_inconclusive or evaluation_status == "insufficient_evidence"
+        inconclusive = pre_check_inconclusive or evaluation_status in (
+            "insufficient_evidence", FALLBACK_ADVISORY_STATUS,
+        )
         if evaluation_status == "failed":
             error = scores.get("error", "Evaluation failed")
             conn.execute(

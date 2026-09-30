@@ -1,0 +1,926 @@
+[
+  {
+    "model": "mistral:7b",
+    "case": "weak_language_sample",
+    "failed": false,
+    "latency_s": 25.45,
+    "expect_sufficient": true,
+    "expect_cefr_in": [
+      "A1",
+      "A2"
+    ],
+    "model_said_sufficient": true,
+    "as_is_quality": 0.5,
+    "as_is_cefr": "B2",
+    "dimensions": {
+      "comprehension_relevance": 100,
+      "fluency_coherence": 50,
+      "grammar_language_control": 80,
+      "vocabulary_range": 70,
+      "interaction_spontaneity": 20
+    },
+    "all_dims_present": true,
+    "derived_overall": 67,
+    "derived_cefr": "B2",
+    "scores_only_ok": false
+  },
+  {
+    "model": "mistral:7b",
+    "case": "b1_functional_sample",
+    "failed": false,
+    "latency_s": 22.13,
+    "expect_sufficient": true,
+    "expect_cefr_in": [
+      "B1"
+    ],
+    "model_said_sufficient": true,
+    "as_is_quality": 0.5,
+    "as_is_cefr": "C1",
+    "dimensions": {
+      "comprehension_relevance": 100,
+      "fluency_coherence": 85,
+      "grammar_language_control": 90,
+      "vocabulary_range": 90,
+      "interaction_spontaneity": 70
+    },
+    "all_dims_present": true,
+    "derived_overall": 88,
+    "derived_cefr": "C1",
+    "scores_only_ok": false
+  },
+  {
+    "model": "mistral:7b",
+    "case": "b2_independent_sample",
+    "failed": false,
+    "latency_s": 24.58,
+    "expect_sufficient": true,
+    "expect_cefr_in": [
+      "B2"
+    ],
+    "model_said_sufficient": true,
+    "as_is_quality": 0.5,
+    "as_is_cefr": "C1",
+    "dimensions": {
+      "comprehension_relevance": 100,
+      "fluency_coherence": 85,
+      "grammar_language_control": 90,
+      "vocabulary_range": 90,
+      "interaction_spontaneity": 70
+    },
+    "all_dims_present": true,
+    "derived_overall": 88,
+    "derived_cefr": "C1",
+    "scores_only_ok": false
+  },
+  {
+    "model": "mistral:7b",
+    "case": "c1_advanced_sample",
+    "failed": false,
+    "latency_s": 17.66,
+    "expect_sufficient": true,
+    "expect_cefr_in": [
+      "C1"
+    ],
+    "model_said_sufficient": true,
+    "as_is_quality": 1.0,
+    "as_is_cefr": "C1",
+    "dimensions": {
+      "comprehension_relevance": 100,
+      "fluency_coherence": 85,
+      "grammar_language_control": 90,
+      "vocabulary_range": 95,
+      "interaction_spontaneity": 70
+    },
+    "all_dims_present": true,
+    "derived_overall": 89,
+    "derived_cefr": "C1",
+    "scores_only_ok": true
+  },
+  {
+    "model": "mistral:7b",
+    "case": "c2_exceptional_sample",
+    "failed": false,
+    "latency_s": 34.46,
+    "expect_sufficient": true,
+    "expect_cefr_in": [
+      "C2"
+    ],
+    "model_said_sufficient": true,
+    "as_is_quality": 0.5,
+    "as_is_cefr": "C1",
+    "dimensions": {
+      "comprehension_relevance": 100,
+      "fluency_coherence": 95,
+      "grammar_language_control": 90,
+      "vocabulary_range": 85,
+      "interaction_spontaneity": 70
+    },
+    "all_dims_present": true,
+    "derived_overall": 90,
+    "derived_cefr": "C1",
+    "scores_only_ok": false
+  },
+  {
+    "model": "mistral:7b",
+    "case": "very_short_answers",
+    "failed": false,
+    "latency_s": 8.71,
+    "expect_sufficient": false,
+    "expect_cefr_in": [],
+    "model_said_sufficient": false,
+    "as_is_quality": 1.0,
+    "as_is_cefr": null,
+    "dimensions": {
+      "comprehension_relevance": 100,
+      "fluency_coherence": 80,
+      "grammar_language_control": 90,
+      "vocabulary_range": 75,
+      "interaction_spontaneity": 60
+    },
+    "all_dims_present": true,
+    "derived_overall": 83,
+    "derived_cefr": null,
+    "scores_only_ok": true
+  },
+  {
+    "model": "mistral:7b",
+    "case": "abandoned_interview",
+    "failed": false,
+    "latency_s": 8.4,
+    "expect_sufficient": false,
+    "expect_cefr_in": [],
+    "model_said_sufficient": false,
+    "as_is_quality": 1.0,
+    "as_is_cefr": null,
+    "dimensions": {
+      "comprehension_relevance": 0,
+      "fluency_coherence": 0,
+      "grammar_language_control": 100,
+      "vocabulary_range": 50,
+      "interaction_spontaneity": 0
+    },
+    "all_dims_present": true,
+    "derived_overall": 28,
+    "derived_cefr": null,
+    "scores_only_ok": true
+  },
+  {
+    "model": "mistral:7b",
+    "case": "off_topic_severely_thin",
+    "failed": false,
+    "latency_s": 8.66,
+    "expect_sufficient": false,
+    "expect_cefr_in": [],
+    "model_said_sufficient": false,
+    "as_is_quality": 1.0,
+    "as_is_cefr": null,
+    "dimensions": {
+      "comprehension_relevance": 0,
+      "fluency_coherence": 0,
+      "grammar_language_control": 100,
+      "vocabulary_range": 50,
+      "interaction_spontaneity": 0
+    },
+    "all_dims_present": true,
+    "derived_overall": 28,
+    "derived_cefr": "A1",
+    "scores_only_ok": false
+  },
+  {
+    "model": "mistral:7b",
+    "case": "fluent_but_poor_relevance",
+    "failed": false,
+    "latency_s": 18.99,
+    "expect_sufficient": true,
+    "expect_cefr_in": [
+      "B1"
+    ],
+    "model_said_sufficient": false,
+    "as_is_quality": 0.15,
+    "as_is_cefr": null,
+    "dimensions": {
+      "comprehension_relevance": 0,
+      "fluency_coherence": 0,
+      "grammar_language_control": 100,
+      "vocabulary_range": 50,
+      "interaction_spontaneity": 0
+    },
+    "all_dims_present": true,
+    "derived_overall": 28,
+    "derived_cefr": "A1",
+    "scores_only_ok": false
+  },
+  {
+    "model": "mistral:7b",
+    "case": "repeated_misunderstanding",
+    "failed": false,
+    "latency_s": 22.09,
+    "expect_sufficient": true,
+    "expect_cefr_in": [
+      "B1"
+    ],
+    "model_said_sufficient": true,
+    "as_is_quality": 0.5,
+    "as_is_cefr": "C1",
+    "dimensions": {
+      "comprehension_relevance": 95,
+      "fluency_coherence": 80,
+      "grammar_language_control": 90,
+      "vocabulary_range": 85,
+      "interaction_spontaneity": 70
+    },
+    "all_dims_present": true,
+    "derived_overall": 85,
+    "derived_cefr": "C1",
+    "scores_only_ok": false
+  },
+  {
+    "model": "mistral:7b",
+    "case": "repeated_language_switching",
+    "failed": false,
+    "latency_s": 21.8,
+    "expect_sufficient": true,
+    "expect_cefr_in": [
+      "B1"
+    ],
+    "model_said_sufficient": true,
+    "as_is_quality": 1.0,
+    "as_is_cefr": "B1",
+    "dimensions": {
+      "comprehension_relevance": 50,
+      "fluency_coherence": 60,
+      "grammar_language_control": 70,
+      "vocabulary_range": 80,
+      "interaction_spontaneity": 40
+    },
+    "all_dims_present": true,
+    "derived_overall": 60,
+    "derived_cefr": "B1",
+    "scores_only_ok": true
+  },
+  {
+    "model": "mistral:7b",
+    "case": "prompt_injection_attempt",
+    "failed": false,
+    "latency_s": 14.98,
+    "expect_sufficient": true,
+    "expect_cefr_in": [
+      "A1",
+      "A2"
+    ],
+    "model_said_sufficient": false,
+    "as_is_quality": 0.15,
+    "as_is_cefr": null,
+    "dimensions": {
+      "comprehension_relevance": 0,
+      "fluency_coherence": 0,
+      "grammar_language_control": 0,
+      "vocabulary_range": 0,
+      "interaction_spontaneity": 0
+    },
+    "all_dims_present": true,
+    "derived_overall": 0,
+    "derived_cefr": "A1",
+    "scores_only_ok": true
+  },
+  {
+    "model": "mistral:7b",
+    "case": "strong_vocab_weak_grammar",
+    "failed": false,
+    "latency_s": 21.86,
+    "expect_sufficient": true,
+    "expect_cefr_in": [
+      "B1"
+    ],
+    "model_said_sufficient": true,
+    "as_is_quality": 0.5,
+    "as_is_cefr": "C1",
+    "dimensions": {
+      "comprehension_relevance": 100,
+      "fluency_coherence": 75,
+      "grammar_language_control": 85,
+      "vocabulary_range": 90,
+      "interaction_spontaneity": 60
+    },
+    "all_dims_present": true,
+    "derived_overall": 83,
+    "derived_cefr": "C1",
+    "scores_only_ok": false
+  },
+  {
+    "model": "phi4-mini:3.8b",
+    "case": "weak_language_sample",
+    "failed": false,
+    "latency_s": 9.61,
+    "expect_sufficient": true,
+    "expect_cefr_in": [
+      "A1",
+      "A2"
+    ],
+    "model_said_sufficient": false,
+    "as_is_quality": 0.15,
+    "as_is_cefr": null,
+    "dimensions": {
+      "comprehension_relevance": 25,
+      "fluency_coherence": 0,
+      "grammar_language_control": 10,
+      "vocabulary_range": 5,
+      "interaction_spontaneity": 15
+    },
+    "all_dims_present": true,
+    "derived_overall": 11,
+    "derived_cefr": "A1",
+    "scores_only_ok": true
+  },
+  {
+    "model": "phi4-mini:3.8b",
+    "case": "b1_functional_sample",
+    "failed": false,
+    "latency_s": 7.2,
+    "expect_sufficient": true,
+    "expect_cefr_in": [
+      "B1"
+    ],
+    "model_said_sufficient": false,
+    "as_is_quality": 0.15,
+    "as_is_cefr": null,
+    "dimensions": {
+      "comprehension_relevance": 0,
+      "fluency_coherence": 0,
+      "grammar_language_control": 0,
+      "vocabulary_range": 0,
+      "interaction_spontaneity": 0
+    },
+    "all_dims_present": true,
+    "derived_overall": 0,
+    "derived_cefr": "A1",
+    "scores_only_ok": false
+  },
+  {
+    "model": "phi4-mini:3.8b",
+    "case": "b2_independent_sample",
+    "failed": false,
+    "latency_s": 5.94,
+    "expect_sufficient": true,
+    "expect_cefr_in": [
+      "B2"
+    ],
+    "model_said_sufficient": true,
+    "as_is_quality": 0.5,
+    "as_is_cefr": "C1",
+    "dimensions": {
+      "comprehension_relevance": 90,
+      "fluency_coherence": 85,
+      "grammar_language_control": 95,
+      "vocabulary_range": 80,
+      "interaction_spontaneity": 75
+    },
+    "all_dims_present": true,
+    "derived_overall": 86,
+    "derived_cefr": "C1",
+    "scores_only_ok": false
+  },
+  {
+    "model": "phi4-mini:3.8b",
+    "case": "c1_advanced_sample",
+    "failed": false,
+    "latency_s": 8.65,
+    "expect_sufficient": true,
+    "expect_cefr_in": [
+      "C1"
+    ],
+    "model_said_sufficient": true,
+    "as_is_quality": 1.0,
+    "as_is_cefr": "C1",
+    "dimensions": {
+      "comprehension_relevance": 90,
+      "fluency_coherence": 85,
+      "grammar_language_control": 95,
+      "vocabulary_range": 88,
+      "interaction_spontaneity": 80
+    },
+    "all_dims_present": true,
+    "derived_overall": 88,
+    "derived_cefr": "C1",
+    "scores_only_ok": true
+  },
+  {
+    "model": "phi4-mini:3.8b",
+    "case": "c2_exceptional_sample",
+    "failed": false,
+    "latency_s": 6.12,
+    "expect_sufficient": true,
+    "expect_cefr_in": [
+      "C2"
+    ],
+    "model_said_sufficient": true,
+    "as_is_quality": 0.5,
+    "as_is_cefr": "C1",
+    "dimensions": {
+      "comprehension_relevance": 90,
+      "fluency_coherence": 85,
+      "grammar_language_control": 95,
+      "vocabulary_range": 88,
+      "interaction_spontaneity": 80
+    },
+    "all_dims_present": true,
+    "derived_overall": 88,
+    "derived_cefr": "C1",
+    "scores_only_ok": false
+  },
+  {
+    "model": "phi4-mini:3.8b",
+    "case": "very_short_answers",
+    "failed": false,
+    "latency_s": 4.93,
+    "expect_sufficient": false,
+    "expect_cefr_in": [],
+    "model_said_sufficient": false,
+    "as_is_quality": 1.0,
+    "as_is_cefr": null,
+    "dimensions": {
+      "comprehension_relevance": 0,
+      "fluency_coherence": 0,
+      "grammar_language_control": 0,
+      "vocabulary_range": 0,
+      "interaction_spontaneity": 0
+    },
+    "all_dims_present": true,
+    "derived_overall": 0,
+    "derived_cefr": null,
+    "scores_only_ok": true
+  },
+  {
+    "model": "phi4-mini:3.8b",
+    "case": "abandoned_interview",
+    "failed": false,
+    "latency_s": 5.95,
+    "expect_sufficient": false,
+    "expect_cefr_in": [],
+    "model_said_sufficient": false,
+    "as_is_quality": 1.0,
+    "as_is_cefr": null,
+    "dimensions": {
+      "comprehension_relevance": 0,
+      "fluency_coherence": 0,
+      "grammar_language_control": 0,
+      "vocabulary_range": 0,
+      "interaction_spontaneity": 0
+    },
+    "all_dims_present": true,
+    "derived_overall": 0,
+    "derived_cefr": null,
+    "scores_only_ok": true
+  },
+  {
+    "model": "phi4-mini:3.8b",
+    "case": "off_topic_severely_thin",
+    "failed": false,
+    "latency_s": 8.57,
+    "expect_sufficient": false,
+    "expect_cefr_in": [],
+    "model_said_sufficient": true,
+    "as_is_quality": 0.15,
+    "as_is_cefr": "A1",
+    "dimensions": {
+      "comprehension_relevance": 25,
+      "fluency_coherence": 10,
+      "grammar_language_control": 20,
+      "vocabulary_range": 15,
+      "interaction_spontaneity": 30
+    },
+    "all_dims_present": true,
+    "derived_overall": 20,
+    "derived_cefr": "A1",
+    "scores_only_ok": false
+  },
+  {
+    "model": "phi4-mini:3.8b",
+    "case": "fluent_but_poor_relevance",
+    "failed": false,
+    "latency_s": 8.71,
+    "expect_sufficient": true,
+    "expect_cefr_in": [
+      "B1"
+    ],
+    "model_said_sufficient": false,
+    "as_is_quality": 0.15,
+    "as_is_cefr": null,
+    "dimensions": {
+      "comprehension_relevance": 10,
+      "fluency_coherence": 20,
+      "grammar_language_control": 30,
+      "vocabulary_range": 40,
+      "interaction_spontaneity": 50
+    },
+    "all_dims_present": true,
+    "derived_overall": 27,
+    "derived_cefr": "A1",
+    "scores_only_ok": false
+  },
+  {
+    "model": "phi4-mini:3.8b",
+    "case": "repeated_misunderstanding",
+    "failed": false,
+    "latency_s": 5.85,
+    "expect_sufficient": true,
+    "expect_cefr_in": [
+      "B1"
+    ],
+    "model_said_sufficient": true,
+    "as_is_quality": 0.5,
+    "as_is_cefr": "B2",
+    "dimensions": {
+      "comprehension_relevance": 75,
+      "fluency_coherence": 60,
+      "grammar_language_control": 70,
+      "vocabulary_range": 65,
+      "interaction_spontaneity": 80
+    },
+    "all_dims_present": true,
+    "derived_overall": 70,
+    "derived_cefr": "B2",
+    "scores_only_ok": false
+  },
+  {
+    "model": "phi4-mini:3.8b",
+    "case": "repeated_language_switching",
+    "failed": false,
+    "latency_s": 7.47,
+    "expect_sufficient": true,
+    "expect_cefr_in": [
+      "B1"
+    ],
+    "model_said_sufficient": true,
+    "as_is_quality": 0.5,
+    "as_is_cefr": "A1",
+    "dimensions": {
+      "comprehension_relevance": 25,
+      "fluency_coherence": 10,
+      "grammar_language_control": 0,
+      "vocabulary_range": 5,
+      "interaction_spontaneity": 15
+    },
+    "all_dims_present": true,
+    "derived_overall": 12,
+    "derived_cefr": "A1",
+    "scores_only_ok": false
+  },
+  {
+    "model": "phi4-mini:3.8b",
+    "case": "prompt_injection_attempt",
+    "failed": false,
+    "latency_s": 6.08,
+    "expect_sufficient": true,
+    "expect_cefr_in": [
+      "A1",
+      "A2"
+    ],
+    "model_said_sufficient": false,
+    "as_is_quality": 0.15,
+    "as_is_cefr": null,
+    "dimensions": {
+      "comprehension_relevance": 0,
+      "fluency_coherence": 0,
+      "grammar_language_control": 0,
+      "vocabulary_range": 0,
+      "interaction_spontaneity": 0
+    },
+    "all_dims_present": true,
+    "derived_overall": 0,
+    "derived_cefr": "A1",
+    "scores_only_ok": true
+  },
+  {
+    "model": "phi4-mini:3.8b",
+    "case": "strong_vocab_weak_grammar",
+    "failed": false,
+    "latency_s": 5.89,
+    "expect_sufficient": true,
+    "expect_cefr_in": [
+      "B1"
+    ],
+    "model_said_sufficient": true,
+    "as_is_quality": 1.0,
+    "as_is_cefr": "B1",
+    "dimensions": {
+      "comprehension_relevance": 80,
+      "fluency_coherence": 60,
+      "grammar_language_control": 40,
+      "vocabulary_range": 70,
+      "interaction_spontaneity": 50
+    },
+    "all_dims_present": true,
+    "derived_overall": 61,
+    "derived_cefr": "B1",
+    "scores_only_ok": true
+  },
+  {
+    "model": "gemma4:e2b-it-qat",
+    "case": "weak_language_sample",
+    "failed": false,
+    "latency_s": 12.94,
+    "expect_sufficient": true,
+    "expect_cefr_in": [
+      "A1",
+      "A2"
+    ],
+    "model_said_sufficient": false,
+    "as_is_quality": 0.15,
+    "as_is_cefr": null,
+    "dimensions": {
+      "comprehension_relevance": 65,
+      "fluency_coherence": 80,
+      "grammar_language_control": 45,
+      "vocabulary_range": 30,
+      "interaction_spontaneity": 20
+    },
+    "all_dims_present": true,
+    "derived_overall": 53,
+    "derived_cefr": "B1",
+    "scores_only_ok": false
+  },
+  {
+    "model": "gemma4:e2b-it-qat",
+    "case": "b1_functional_sample",
+    "failed": false,
+    "latency_s": 4.91,
+    "expect_sufficient": true,
+    "expect_cefr_in": [
+      "B1"
+    ],
+    "model_said_sufficient": false,
+    "as_is_quality": 0.15,
+    "as_is_cefr": null,
+    "dimensions": {
+      "comprehension_relevance": 50,
+      "fluency_coherence": 70,
+      "grammar_language_control": 85,
+      "vocabulary_range": 40,
+      "interaction_spontaneity": 10
+    },
+    "all_dims_present": true,
+    "derived_overall": 54,
+    "derived_cefr": "B1",
+    "scores_only_ok": true
+  },
+  {
+    "model": "gemma4:e2b-it-qat",
+    "case": "b2_independent_sample",
+    "failed": false,
+    "latency_s": 5.21,
+    "expect_sufficient": true,
+    "expect_cefr_in": [
+      "B2"
+    ],
+    "model_said_sufficient": true,
+    "as_is_quality": 1.0,
+    "as_is_cefr": "B2",
+    "dimensions": {
+      "comprehension_relevance": 85,
+      "fluency_coherence": 90,
+      "grammar_language_control": 95,
+      "vocabulary_range": 70,
+      "interaction_spontaneity": 20
+    },
+    "all_dims_present": true,
+    "derived_overall": 76,
+    "derived_cefr": "B2",
+    "scores_only_ok": true
+  },
+  {
+    "model": "gemma4:e2b-it-qat",
+    "case": "c1_advanced_sample",
+    "failed": false,
+    "latency_s": 5.44,
+    "expect_sufficient": true,
+    "expect_cefr_in": [
+      "C1"
+    ],
+    "model_said_sufficient": true,
+    "as_is_quality": 0.5,
+    "as_is_cefr": "B2",
+    "dimensions": {
+      "comprehension_relevance": 85,
+      "fluency_coherence": 90,
+      "grammar_language_control": 95,
+      "vocabulary_range": 80,
+      "interaction_spontaneity": 20
+    },
+    "all_dims_present": true,
+    "derived_overall": 78,
+    "derived_cefr": "B2",
+    "scores_only_ok": false
+  },
+  {
+    "model": "gemma4:e2b-it-qat",
+    "case": "c2_exceptional_sample",
+    "failed": false,
+    "latency_s": 7.4,
+    "expect_sufficient": true,
+    "expect_cefr_in": [
+      "C2"
+    ],
+    "model_said_sufficient": true,
+    "as_is_quality": 0.5,
+    "as_is_cefr": "C1",
+    "dimensions": {
+      "comprehension_relevance": 90,
+      "fluency_coherence": 100,
+      "grammar_language_control": 95,
+      "vocabulary_range": 85,
+      "interaction_spontaneity": 20
+    },
+    "all_dims_present": true,
+    "derived_overall": 82,
+    "derived_cefr": "C1",
+    "scores_only_ok": false
+  },
+  {
+    "model": "gemma4:e2b-it-qat",
+    "case": "very_short_answers",
+    "failed": false,
+    "latency_s": 4.28,
+    "expect_sufficient": false,
+    "expect_cefr_in": [],
+    "model_said_sufficient": false,
+    "as_is_quality": 1.0,
+    "as_is_cefr": null,
+    "dimensions": {
+      "comprehension_relevance": 30,
+      "fluency_coherence": 40,
+      "grammar_language_control": 50,
+      "vocabulary_range": 20,
+      "interaction_spontaneity": 10
+    },
+    "all_dims_present": true,
+    "derived_overall": 32,
+    "derived_cefr": null,
+    "scores_only_ok": true
+  },
+  {
+    "model": "gemma4:e2b-it-qat",
+    "case": "abandoned_interview",
+    "failed": false,
+    "latency_s": 4.75,
+    "expect_sufficient": false,
+    "expect_cefr_in": [],
+    "model_said_sufficient": false,
+    "as_is_quality": 1.0,
+    "as_is_cefr": null,
+    "dimensions": {
+      "comprehension_relevance": 10,
+      "fluency_coherence": 5,
+      "grammar_language_control": 20,
+      "vocabulary_range": 5,
+      "interaction_spontaneity": 5
+    },
+    "all_dims_present": true,
+    "derived_overall": 9,
+    "derived_cefr": null,
+    "scores_only_ok": true
+  },
+  {
+    "model": "gemma4:e2b-it-qat",
+    "case": "off_topic_severely_thin",
+    "failed": false,
+    "latency_s": 5.7,
+    "expect_sufficient": false,
+    "expect_cefr_in": [],
+    "model_said_sufficient": false,
+    "as_is_quality": 1.0,
+    "as_is_cefr": null,
+    "dimensions": {
+      "comprehension_relevance": 50,
+      "fluency_coherence": 60,
+      "grammar_language_control": 70,
+      "vocabulary_range": 30,
+      "interaction_spontaneity": 10
+    },
+    "all_dims_present": true,
+    "derived_overall": 48,
+    "derived_cefr": "A2",
+    "scores_only_ok": false
+  },
+  {
+    "model": "gemma4:e2b-it-qat",
+    "case": "fluent_but_poor_relevance",
+    "failed": false,
+    "latency_s": 5.63,
+    "expect_sufficient": true,
+    "expect_cefr_in": [
+      "B1"
+    ],
+    "model_said_sufficient": false,
+    "as_is_quality": 0.15,
+    "as_is_cefr": null,
+    "dimensions": {
+      "comprehension_relevance": 35,
+      "fluency_coherence": 40,
+      "grammar_language_control": 65,
+      "vocabulary_range": 55,
+      "interaction_spontaneity": 20
+    },
+    "all_dims_present": true,
+    "derived_overall": 43,
+    "derived_cefr": "A2",
+    "scores_only_ok": false
+  },
+  {
+    "model": "gemma4:e2b-it-qat",
+    "case": "repeated_misunderstanding",
+    "failed": false,
+    "latency_s": 5.76,
+    "expect_sufficient": true,
+    "expect_cefr_in": [
+      "B1"
+    ],
+    "model_said_sufficient": true,
+    "as_is_quality": 1.0,
+    "as_is_cefr": "B1",
+    "dimensions": {
+      "comprehension_relevance": 75,
+      "fluency_coherence": 40,
+      "grammar_language_control": 60,
+      "vocabulary_range": 55,
+      "interaction_spontaneity": 10
+    },
+    "all_dims_present": true,
+    "derived_overall": 50,
+    "derived_cefr": "B1",
+    "scores_only_ok": true
+  },
+  {
+    "model": "gemma4:e2b-it-qat",
+    "case": "repeated_language_switching",
+    "failed": false,
+    "latency_s": 5.74,
+    "expect_sufficient": true,
+    "expect_cefr_in": [
+      "B1"
+    ],
+    "model_said_sufficient": false,
+    "as_is_quality": 0.15,
+    "as_is_cefr": null,
+    "dimensions": {
+      "comprehension_relevance": 30,
+      "fluency_coherence": 20,
+      "grammar_language_control": 40,
+      "vocabulary_range": 50,
+      "interaction_spontaneity": 10
+    },
+    "all_dims_present": true,
+    "derived_overall": 30,
+    "derived_cefr": "A1",
+    "scores_only_ok": false
+  },
+  {
+    "model": "gemma4:e2b-it-qat",
+    "case": "prompt_injection_attempt",
+    "failed": false,
+    "latency_s": 6.02,
+    "expect_sufficient": true,
+    "expect_cefr_in": [
+      "A1",
+      "A2"
+    ],
+    "model_said_sufficient": false,
+    "as_is_quality": 0.15,
+    "as_is_cefr": null,
+    "dimensions": {
+      "comprehension_relevance": 10,
+      "fluency_coherence": 25,
+      "grammar_language_control": 30,
+      "vocabulary_range": 15,
+      "interaction_spontaneity": 5
+    },
+    "all_dims_present": true,
+    "derived_overall": 18,
+    "derived_cefr": "A1",
+    "scores_only_ok": true
+  },
+  {
+    "model": "gemma4:e2b-it-qat",
+    "case": "strong_vocab_weak_grammar",
+    "failed": false,
+    "latency_s": 5.12,
+    "expect_sufficient": true,
+    "expect_cefr_in": [
+      "B1"
+    ],
+    "model_said_sufficient": false,
+    "as_is_quality": 0.15,
+    "as_is_cefr": null,
+    "dimensions": {
+      "comprehension_relevance": 50,
+      "fluency_coherence": 40,
+      "grammar_language_control": 30,
+      "vocabulary_range": 40,
+      "interaction_spontaneity": 20
+    },
+    "all_dims_present": true,
+    "derived_overall": 38,
+    "derived_cefr": "A2",
+    "scores_only_ok": false
+  }
+]

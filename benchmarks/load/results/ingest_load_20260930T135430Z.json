@@ -1,0 +1,27 @@
+{
+  "measured_at": "2026-09-30T13:54:30.871460+00:00",
+  "requested": 4,
+  "accepted": 4,
+  "upload_concurrency": 4,
+  "counts": {
+    "failed": 4
+  },
+  "enqueue_seconds": 0.33,
+  "drain_seconds": 10.5,
+  "wall_seconds": 10.83,
+  "succeeded_per_hour": 0.0,
+  "projected_per_day_24h": 0,
+  "provider_mix": {
+    "fallback_calls": 0,
+    "fallback_succeeded": 0,
+    "fallback_also_failed": 0,
+    "source": "csb-resume-intelligence-worker structured log lines",
+    "gemini_served_estimate": 0
+  },
+  "per_job_seconds": {
+    "n": 4,
+    "min": 1.67,
+    "median": 1.68,
+    "max": 5.55
+  }
+}

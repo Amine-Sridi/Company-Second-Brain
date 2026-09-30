@@ -219,6 +219,66 @@ async def _evaluate_with_gemini(prompt: str, budget: "_CallBudget") -> dict:
     )
 
 
+def _fallback_model() -> str:
+    return getattr(settings, "local_llm_evaluation_model", "gemma4:e2b-it-qat")
+
+
+def _fallback_enabled() -> bool:
+    """getattr rather than attribute access throughout, matching how this module
+    already reads gemini_evaluation_model: settings is monkeypatched with partial
+    stand-ins in several tests, and a hard attribute access turns a missing optional
+    setting into an AttributeError that swallows the real evaluation error."""
+    return bool(getattr(settings, "local_llm_enabled", False))
+
+
+def _is_provider_unavailable(exc: Exception) -> bool:
+    """Whether Gemini was *unreachable*, as opposed to reachable and wrong.
+
+    Only this class of failure may divert an evaluation to the local model. A bug in
+    this module, a malformed prompt, a missing API key or a response that parsed but
+    failed validation are all application faults: silently answering them with a
+    weaker model would hide the fault and quietly downgrade the assessment. They keep
+    going to empty_result() -> evaluation_status "failed", which is visible.
+
+    The budget-exhausted RuntimeError counts, because the only way to exhaust it is
+    _MAX_GEMINI_CALLS_PER_EVALUATION consecutive retryable provider errors.
+    """
+    if "call budget exhausted" in str(exc).lower():
+        return True
+    return _is_retryable_provider_error(exc)
+
+
+async def _evaluate_with_local_model(prompt: str) -> dict:
+    """One constrained-decoding call to a local Ollama model. No retry: this is
+    already the degraded path, and the caller treats any failure here as a failed
+    evaluation rather than trying harder with a model that is not the primary."""
+    import httpx
+
+    from shared.llm import ollama_compatible_schema
+
+    base_url = getattr(settings, "local_llm_base_url", "http://host.docker.internal:11434")
+    url = f"{base_url.rstrip('/')}/api/generate"
+    payload = {
+        "model": _fallback_model(),
+        "prompt": prompt,
+        "stream": False,
+        # Thinking models return their content in a separate `thinking` field and
+        # leave `response` empty, which reads as a total failure downstream.
+        "think": False,
+        "format": ollama_compatible_schema(EVALUATION_SCHEMA),
+        "options": {"temperature": 0.2},
+    }
+    timeout = getattr(settings, "local_llm_evaluation_timeout_seconds", 300.0)
+    async with httpx.AsyncClient(timeout=timeout) as client:
+        response = await client.post(url, json=payload)
+        response.raise_for_status()
+        body = response.json()
+    text = (body.get("response") or "").strip() or (body.get("thinking") or "").strip()
+    if not text:
+        raise ValueError("Local fallback model returned an empty response")
+    return json.loads(text)
+
+
 def _score(value) -> int | None:
     try:
         if value is None or value == "":
@@ -405,6 +465,49 @@ def _insufficient_evidence_result(
     return result
 
 
+# The status a locally-evaluated interview carries. Deliberately distinct from
+# "insufficient_evidence": that one means "this transcript cannot be graded", which is
+# a fact about the candidate, and it would be wrong to record that about someone whose
+# interview was fine and whose evaluation merely ran during a Gemini outage. Both
+# statuses withhold the CEFR, but only this one says why.
+FALLBACK_ADVISORY_STATUS = "fallback_advisory"
+
+
+def _fallback_advisory_result(
+    raw: dict,
+    transcript: list[dict],
+    duration_seconds: float | None,
+    inconclusive: bool,
+    model: str,
+) -> dict:
+    """The local model's output, recorded as advisory and never as a verdict.
+
+    benchmarks/local_llm measured the chosen fallback (gemma4:e2b-it-qat) at 0.90
+    within-one-CEFR-band with zero verdicts two or more bands wrong -- the best of the
+    seven local models tested, and good enough to be genuinely informative. It is
+    still not good enough to gate on: it compresses the scale, and in particular rated
+    the weak A1/A2 golden sample as B1. RWS's language_gate passes an application as
+    soon as assessed_cefr >= required_cefr, so letting this model's B1 through would
+    let a recruiter accept an A2 candidate against a B1 requirement during an outage,
+    with nothing on the record marking the evaluation as degraded.
+
+    So overall_score/cefr_level are None here by construction (insufficient=True),
+    which is the same shape language_gate.py already maps to "needs_review" -- a human
+    looks at it. The per-dimension scores, strengths, concerns and evidence are kept,
+    because those are what make the advisory result useful to that human.
+    """
+    result = normalize_result(raw, transcript, duration_seconds, inconclusive, insufficient=True)
+    result["evaluation_status"] = FALLBACK_ADVISORY_STATUS
+    # Recorded so a report is never mistaken for a Gemini evaluation after the fact.
+    result["evaluation_provider"] = f"local:{model}"
+    result["error"] = (
+        "Gemini was unavailable; this interview was evaluated by the local fallback "
+        f"model ({model}). Dimension scores are advisory and no CEFR level was issued "
+        "-- this assessment needs human review."
+    )
+    return result
+
+
 # One generation + one retry on a *validation* failure, and never more -- bounded so
 # a persistently low-quality/incomplete model response can't turn into a loop. This is
 # the outer of the two retry budgets; _MAX_GEMINI_CALLS_PER_EVALUATION above is the
@@ -455,4 +558,32 @@ async def evaluate(
             return empty_result(str(exc))
         except Exception as exc:
             logger.exception("Gemini evaluation failed")
+            # Availability failures only (quota/429/5xx/timeout/network, or the retry
+            # budget exhausted by them). Everything else -- including the ValueError
+            # branch above, which is a validation fault -- stays a visible failure
+            # rather than being quietly answered by a weaker model.
+            if _fallback_enabled() and _is_provider_unavailable(exc):
+                fallback = await _evaluate_via_fallback(
+                    prompt, transcript, duration_seconds, inconclusive
+                )
+                if fallback is not None:
+                    return fallback
             return empty_result(str(exc))
+
+
+async def _evaluate_via_fallback(
+    prompt: str,
+    transcript: list[dict],
+    duration_seconds: float | None,
+    inconclusive: bool,
+) -> dict | None:
+    """Returns the advisory result, or None to let the caller report the original
+    Gemini failure -- a broken fallback must never mask why the primary failed."""
+    model = _fallback_model()
+    logger.warning("Gemini unavailable; evaluating with local fallback model %s", model)
+    try:
+        raw = await _evaluate_with_local_model(prompt)
+    except Exception:
+        logger.exception("Local fallback evaluation failed (%s)", model)
+        return None
+    return _fallback_advisory_result(raw, transcript, duration_seconds, inconclusive, model)

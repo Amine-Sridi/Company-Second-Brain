@@ -171,6 +171,47 @@ def drain(job_ids: list[str], poll_seconds: float, timeout_seconds: float) -> di
         time.sleep(poll_seconds)
 
 
+def provider_mix(since_iso: str) -> dict:
+    """Counts how many extractions the local fallback served during the run.
+
+    This exists because milestone 54's measurement was ambiguous in exactly the way that
+    matters: the stack was quota-exhausted, so 23 of 24 extractions were served by the
+    local model on a single GPU, which serialises -- and that had to be reconstructed by
+    hand afterwards from the worker log. A throughput number is uninterpretable without
+    knowing which provider produced it, so the harness now reports it.
+
+    Read from the worker's structured log lines (shared/llm.py emits
+    `llm_primary_unavailable_using_fallback` and `llm_fallback_succeeded`) rather than
+    from the database, because no column records the provider -- adding one would mean a
+    migration for a benchmark's benefit.
+
+    Caveat kept deliberately visible in the output: these are *call* counts, not job
+    counts. One job makes one extraction call today, so they coincide, but a future
+    pipeline with two LLM calls per CV would make `fallback_calls` exceed the number of
+    jobs. `gemini_served_estimate` is therefore an estimate and is labelled as one.
+    """
+    # encoding/errors are explicit, not decorative: `text=True` alone decodes with the
+    # host's preferred encoding, which on this Windows machine is cp1252, and container
+    # logs carry bytes that are not valid cp1252. That raised UnicodeDecodeError inside
+    # subprocess's reader *thread*, where it does not propagate -- the run completed and
+    # silently reported zero fallback calls, which is indistinguishable from a genuinely
+    # clean Gemini-path run. Counting on a partially decoded log would have been worse
+    # than not counting at all.
+    out = subprocess.run(
+        ["docker", "logs", "--since", since_iso, "csb-resume-intelligence-worker"],
+        capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=180,
+    )
+    # Docker writes container logs to stderr as well as stdout depending on the stream
+    # the process used, so both are searched.
+    text = (out.stdout or "") + (out.stderr or "")
+    return {
+        "fallback_calls": text.count("llm_primary_unavailable_using_fallback"),
+        "fallback_succeeded": text.count("llm_fallback_succeeded"),
+        "fallback_also_failed": text.count("llm_fallback_also_failed"),
+        "source": "csb-resume-intelligence-worker structured log lines",
+    }
+
+
 def per_job_durations(job_ids: list[str]) -> list[float]:
     id_list = ",".join(f"'{j}'" for j in job_ids)
     rows = _psql(
@@ -214,6 +255,10 @@ def main() -> int:
     print(f"\nBuilding {args.count} synthetic CVs ...", flush=True)
     cvs = [build_cv(i, tmp) for i in range(args.count)]
 
+    # Docker's --since wants a timestamp it can parse; take it just before the first
+    # upload so the window covers exactly this run and no earlier one.
+    run_since = datetime.now(timezone.utc).replace(microsecond=0).isoformat()
+
     print(f"Enqueueing {args.count} (concurrency {args.concurrency}) ...", flush=True)
     job_ids, enqueue_s = enqueue_all(cvs, api_key, args.concurrency)
     print(f"  accepted {len(job_ids)} in {enqueue_s:.1f}s "
@@ -228,7 +273,10 @@ def main() -> int:
     drain_s = time.perf_counter() - drain_started
 
     durations = per_job_durations(job_ids)
+    mix = provider_mix(run_since)
     succeeded = counts.get("succeeded", 0)
+    # Labelled an estimate on purpose: see provider_mix's docstring on call-vs-job counts.
+    mix["gemini_served_estimate"] = max(0, succeeded - mix["fallback_succeeded"])
     total_s = enqueue_s + drain_s
     per_hour = (succeeded / total_s * 3600) if total_s else 0
 
@@ -243,6 +291,7 @@ def main() -> int:
         "wall_seconds": round(total_s, 2),
         "succeeded_per_hour": round(per_hour, 1),
         "projected_per_day_24h": round(per_hour * 24),
+        "provider_mix": mix,
         "per_job_seconds": {
             "n": len(durations),
             "min": round(min(durations), 2) if durations else None,
@@ -258,12 +307,42 @@ def main() -> int:
     print(f"  throughput      : {report['succeeded_per_hour']} succeeded CVs/hour")
     print(f"  projected /day  : {report['projected_per_day_24h']:,} (24h at this rate)")
     print(f"  per-job seconds : {report['per_job_seconds']}")
+    print(f"  provider mix    : {mix['gemini_served_estimate']} Gemini (est.) / "
+          f"{mix['fallback_succeeded']} local fallback"
+          + (f"  [{mix['fallback_also_failed']} fallback failures]"
+             if mix["fallback_also_failed"] else ""))
     print("=" * 62)
     print("  NOTE: one worker container on a developer laptop that also hosts Ollama.")
-    print("  Check the worker log's provider mix before reading anything into this: if")
-    print("  Gemini was quota-exhausted the extractions were served by the local model on")
-    print("  a single GPU, which serialises -- that measures the fallback's ceiling, not")
-    print("  the system's. See handoff.md milestone 54.")
+    # "Clean" is judged on fallback_CALLS, not fallback_succeeded. A run where the
+    # primary faltered and the fallback failed too has zero successful fallback work in
+    # it, so keying off fallback_succeeded would call that clean -- while the retries
+    # those failures caused are sitting in the latency being reported.
+    if mix["fallback_succeeded"] and succeeded:
+        share = mix["fallback_succeeded"] / succeeded
+        print(f"  {share:.0%} of successful extractions were served by the LOCAL model.")
+        if share > 0.2:
+            print("  This measures the FALLBACK's ceiling, not the system's: Ollama runs on")
+            print("  one GPU and serialises. Do not quote this as the Gemini-path number.")
+            print("  (This is exactly what made milestone 54's run uninterpretable.)")
+    elif mix["fallback_calls"]:
+        print(f"  NOT a clean run: the primary was unavailable {mix['fallback_calls']}x and")
+        print(f"  the fallback then failed {mix['fallback_also_failed']}x (is Ollama up?).")
+        print("  Jobs that recovered did so by RETRYING the primary, so the latency and")
+        print("  throughput here include that retry cost. Re-run once both providers are")
+        print("  healthy before quoting either number.")
+    elif succeeded:
+        print("  Clean Gemini-path measurement: the fallback was never invoked.")
+
+    # A throughput figure divides successes by wall clock, so a run that mostly failed
+    # produces a small, tidy, meaningless number -- and the provider-mix line above will
+    # happily call it clean, because no fallback was involved in the failing either. The
+    # 8-CV run in milestone 63 failed 7/8 on Gemini 429s and still reported "329.5 CVs/
+    # hour"; without this warning that figure is quotable-looking nonsense.
+    failed = counts.get("failed", 0)
+    if failed and (failed / max(1, len(job_ids))) > 0.1:
+        print(f"  !! {failed}/{len(job_ids)} jobs FAILED. Throughput counts only successes,")
+        print("     so the figure above understates capacity while looking precise. Check")
+        print("     the worker log for 429/503 before quoting anything from this run.")
 
     out = RESULTS / f"ingest_load_{datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%SZ')}.json"
     out.write_text(json.dumps(report, indent=2), encoding="utf-8")

@@ -1,0 +1,332 @@
+[
+  {
+    "model": "gemma4:e2b-it-qat",
+    "case": "weak_language_sample",
+    "run": 0,
+    "failed": false,
+    "latency_s": 12.2,
+    "said_sufficient": true,
+    "overall": 58,
+    "cefr": "B1",
+    "expect_cefr_in": [
+      "A1",
+      "A2"
+    ]
+  },
+  {
+    "model": "gemma4:e2b-it-qat",
+    "case": "weak_language_sample",
+    "run": 1,
+    "failed": false,
+    "latency_s": 4.99,
+    "said_sufficient": true,
+    "overall": 54,
+    "cefr": "B1",
+    "expect_cefr_in": [
+      "A1",
+      "A2"
+    ]
+  },
+  {
+    "model": "gemma4:e2b-it-qat",
+    "case": "weak_language_sample",
+    "run": 2,
+    "failed": false,
+    "latency_s": 5.18,
+    "said_sufficient": false,
+    "overall": 46,
+    "cefr": "A2",
+    "expect_cefr_in": [
+      "A1",
+      "A2"
+    ]
+  },
+  {
+    "model": "gemma4:e2b-it-qat",
+    "case": "weak_language_sample",
+    "run": 3,
+    "failed": false,
+    "latency_s": 4.94,
+    "said_sufficient": true,
+    "overall": 62,
+    "cefr": "B1",
+    "expect_cefr_in": [
+      "A1",
+      "A2"
+    ]
+  },
+  {
+    "model": "gemma4:e2b-it-qat",
+    "case": "weak_language_sample",
+    "run": 4,
+    "failed": false,
+    "latency_s": 5.86,
+    "said_sufficient": true,
+    "overall": 53,
+    "cefr": "B1",
+    "expect_cefr_in": [
+      "A1",
+      "A2"
+    ]
+  },
+  {
+    "model": "gemma4:e2b-it-qat",
+    "case": "b1_functional_sample",
+    "run": 0,
+    "failed": false,
+    "latency_s": 5.23,
+    "said_sufficient": false,
+    "overall": 55,
+    "cefr": "B1",
+    "expect_cefr_in": [
+      "B1"
+    ]
+  },
+  {
+    "model": "gemma4:e2b-it-qat",
+    "case": "b1_functional_sample",
+    "run": 1,
+    "failed": false,
+    "latency_s": 4.97,
+    "said_sufficient": false,
+    "overall": 49,
+    "cefr": "A2",
+    "expect_cefr_in": [
+      "B1"
+    ]
+  },
+  {
+    "model": "gemma4:e2b-it-qat",
+    "case": "b1_functional_sample",
+    "run": 2,
+    "failed": false,
+    "latency_s": 5.49,
+    "said_sufficient": false,
+    "overall": 54,
+    "cefr": "B1",
+    "expect_cefr_in": [
+      "B1"
+    ]
+  },
+  {
+    "model": "gemma4:e2b-it-qat",
+    "case": "b1_functional_sample",
+    "run": 3,
+    "failed": false,
+    "latency_s": 5.1,
+    "said_sufficient": false,
+    "overall": 50,
+    "cefr": "B1",
+    "expect_cefr_in": [
+      "B1"
+    ]
+  },
+  {
+    "model": "gemma4:e2b-it-qat",
+    "case": "b1_functional_sample",
+    "run": 4,
+    "failed": false,
+    "latency_s": 6.76,
+    "said_sufficient": false,
+    "overall": 50,
+    "cefr": "B1",
+    "expect_cefr_in": [
+      "B1"
+    ]
+  },
+  {
+    "model": "gemma4:e2b-it-qat",
+    "case": "b2_independent_sample",
+    "run": 0,
+    "failed": false,
+    "latency_s": 5.28,
+    "said_sufficient": true,
+    "overall": 74,
+    "cefr": "B2",
+    "expect_cefr_in": [
+      "B2"
+    ]
+  },
+  {
+    "model": "gemma4:e2b-it-qat",
+    "case": "b2_independent_sample",
+    "run": 1,
+    "failed": false,
+    "latency_s": 6.33,
+    "said_sufficient": true,
+    "overall": 72,
+    "cefr": "B2",
+    "expect_cefr_in": [
+      "B2"
+    ]
+  },
+  {
+    "model": "gemma4:e2b-it-qat",
+    "case": "b2_independent_sample",
+    "run": 2,
+    "failed": false,
+    "latency_s": 6.02,
+    "said_sufficient": true,
+    "overall": 72,
+    "cefr": "B2",
+    "expect_cefr_in": [
+      "B2"
+    ]
+  },
+  {
+    "model": "gemma4:e2b-it-qat",
+    "case": "b2_independent_sample",
+    "run": 3,
+    "failed": false,
+    "latency_s": 5.07,
+    "said_sufficient": true,
+    "overall": 70,
+    "cefr": "B2",
+    "expect_cefr_in": [
+      "B2"
+    ]
+  },
+  {
+    "model": "gemma4:e2b-it-qat",
+    "case": "b2_independent_sample",
+    "run": 4,
+    "failed": false,
+    "latency_s": 5.16,
+    "said_sufficient": true,
+    "overall": 74,
+    "cefr": "B2",
+    "expect_cefr_in": [
+      "B2"
+    ]
+  },
+  {
+    "model": "gemma4:e2b-it-qat",
+    "case": "c1_advanced_sample",
+    "run": 0,
+    "failed": false,
+    "latency_s": 5.96,
+    "said_sufficient": true,
+    "overall": 79,
+    "cefr": "B2",
+    "expect_cefr_in": [
+      "C1"
+    ]
+  },
+  {
+    "model": "gemma4:e2b-it-qat",
+    "case": "c1_advanced_sample",
+    "run": 1,
+    "failed": false,
+    "latency_s": 7.69,
+    "said_sufficient": true,
+    "overall": 79,
+    "cefr": "B2",
+    "expect_cefr_in": [
+      "C1"
+    ]
+  },
+  {
+    "model": "gemma4:e2b-it-qat",
+    "case": "c1_advanced_sample",
+    "run": 2,
+    "failed": false,
+    "latency_s": 7.77,
+    "said_sufficient": true,
+    "overall": 87,
+    "cefr": "C1",
+    "expect_cefr_in": [
+      "C1"
+    ]
+  },
+  {
+    "model": "gemma4:e2b-it-qat",
+    "case": "c1_advanced_sample",
+    "run": 3,
+    "failed": false,
+    "latency_s": 5.34,
+    "said_sufficient": true,
+    "overall": 76,
+    "cefr": "B2",
+    "expect_cefr_in": [
+      "C1"
+    ]
+  },
+  {
+    "model": "gemma4:e2b-it-qat",
+    "case": "c1_advanced_sample",
+    "run": 4,
+    "failed": false,
+    "latency_s": 9.23,
+    "said_sufficient": true,
+    "overall": 79,
+    "cefr": "B2",
+    "expect_cefr_in": [
+      "C1"
+    ]
+  },
+  {
+    "model": "gemma4:e2b-it-qat",
+    "case": "c2_exceptional_sample",
+    "run": 0,
+    "failed": false,
+    "latency_s": 7.45,
+    "said_sufficient": true,
+    "overall": 82,
+    "cefr": "C1",
+    "expect_cefr_in": [
+      "C2"
+    ]
+  },
+  {
+    "model": "gemma4:e2b-it-qat",
+    "case": "c2_exceptional_sample",
+    "run": 1,
+    "failed": false,
+    "latency_s": 8.33,
+    "said_sufficient": true,
+    "overall": 82,
+    "cefr": "C1",
+    "expect_cefr_in": [
+      "C2"
+    ]
+  },
+  {
+    "model": "gemma4:e2b-it-qat",
+    "case": "c2_exceptional_sample",
+    "run": 2,
+    "failed": false,
+    "latency_s": 6.48,
+    "said_sufficient": true,
+    "overall": 82,
+    "cefr": "C1",
+    "expect_cefr_in": [
+      "C2"
+    ]
+  },
+  {
+    "model": "gemma4:e2b-it-qat",
+    "case": "c2_exceptional_sample",
+    "run": 3,
+    "failed": false,
+    "latency_s": 7.68,
+    "said_sufficient": true,
+    "overall": 82,
+    "cefr": "C1",
+    "expect_cefr_in": [
+      "C2"
+    ]
+  },
+  {
+    "model": "gemma4:e2b-it-qat",
+    "case": "c2_exceptional_sample",
+    "run": 4,
+    "failed": false,
+    "latency_s": 5.41,
+    "said_sufficient": true,
+    "overall": 82,
+    "cefr": "C1",
+    "expect_cefr_in": [
+      "C2"
+    ]
+  }
+]

@@ -1,0 +1,47 @@
+{
+  "measured_at": "2026-09-30T14:36:04.872652+00:00",
+  "repeats": 3,
+  "part_b": [
+    {
+      "top_k": 5,
+      "ms": [
+        5476.3,
+        1283.5,
+        1358.5
+      ],
+      "matches": 5
+    },
+    {
+      "top_k": 10,
+      "ms": [
+        1283.1,
+        1263.4,
+        1257.5
+      ],
+      "matches": 10
+    },
+    {
+      "top_k": 20,
+      "ms": [
+        1256.5,
+        1552.6,
+        1344.5
+      ],
+      "matches": 20
+    },
+    {
+      "top_k": 40,
+      "ms": [
+        1189.4,
+        1837.3,
+        1347.4
+      ],
+      "matches": 40
+    }
+  ],
+  "part_b_provider_mix": {
+    "fallback_calls": 12,
+    "fallback_succeeded": 12,
+    "fallback_also_failed": 0
+  }
+}

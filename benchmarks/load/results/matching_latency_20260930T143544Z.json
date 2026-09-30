@@ -1,0 +1,81 @@
+{
+  "measured_at": "2026-09-30T14:35:43.244091+00:00",
+  "repeats": 3,
+  "part_a": [
+    {
+      "n": 1,
+      "sequential_ms": [
+        15.1,
+        3.8,
+        2.9
+      ],
+      "batch_ms": [
+        3.5,
+        3.0,
+        3.1
+      ],
+      "sequential_got": 1,
+      "batch_got": 1
+    },
+    {
+      "n": 5,
+      "sequential_ms": [
+        19.9,
+        14.9,
+        18.2
+      ],
+      "batch_ms": [
+        4.8,
+        3.8,
+        4.4
+      ],
+      "sequential_got": 5,
+      "batch_got": 5
+    },
+    {
+      "n": 10,
+      "sequential_ms": [
+        30.2,
+        27.4,
+        28.8
+      ],
+      "batch_ms": [
+        5.1,
+        5.0,
+        4.5
+      ],
+      "sequential_got": 10,
+      "batch_got": 10
+    },
+    {
+      "n": 20,
+      "sequential_ms": [
+        59.5,
+        59.9,
+        67.6
+      ],
+      "batch_ms": [
+        8.1,
+        6.7,
+        6.6
+      ],
+      "sequential_got": 20,
+      "batch_got": 20
+    },
+    {
+      "n": 40,
+      "sequential_ms": [
+        177.9,
+        121.7,
+        112.2
+      ],
+      "batch_ms": [
+        11.1,
+        10.0,
+        9.4
+      ],
+      "sequential_got": 40,
+      "batch_got": 40
+    }
+  ]
+}
