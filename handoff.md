@@ -6,6 +6,12 @@ detail (routes, pages, components, visual design) lives in `FRONTEND_HANDOFF.md`
 instead — this file never duplicates it, only references it (per the two files'
 own long-standing division of labor).
 
+**How to run the tests: `TESTING.md`.** Every suite, its exact command, and the expected
+counts (783 Python tests + 49 frontend). It also records the two things that are not
+obvious: `tests/integration` defaults `DATABASE_URL` to a *live* database and has
+destroyed demo data once, and the Python suites run on the host so they structurally
+cannot catch container-only breakage (which has bitten this project three times).
+
 **Project status: feature-complete; VoiceHR's Gemini access is restored
 after a long-standing external denial, and JD submission now deterministically
 flags suspicious Gemini extractions without a mandatory review step
