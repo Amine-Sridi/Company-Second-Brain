@@ -96,17 +96,45 @@ def compute_final_score(
 
 
 def check_required_skills_gate(
-    candidate_skills: list[str], required_skills: list[str]
+    candidate_skills: list[str],
+    required_skills: list[str],
+    min_coverage: float = 1.0,
 ) -> tuple[bool, list[str], list[str]]:
     """
-    Hard gate: every required_skill must be present in the candidate's skills
-    (case-insensitive). Returns (passed, matched_requirements, missing_requirements)
-    using the original (non-lowercased) required_skills strings for readability.
+    Hard gate on required skills, graded rather than all-or-nothing.
+
+    Passes when the fraction of required_skills the candidate holds is at least
+    `min_coverage`. At the default 1.0 this is the original behaviour -- every required
+    skill must be present -- so existing callers and stored MatchResults are unaffected
+    unless a scoring config asks for something looser.
+
+    Why it is no longer strictly all-of. The gate exists so a high semantic score cannot
+    paper over a missing required skill, and that reasoning still holds. But "all of
+    them, matched as exact strings" fails in a specific and measured way: a consultant
+    with fifteen years of Power BI, SQL Server, SSAS, SSIS and Azure Synapse was
+    disqualified for not literally listing "SQL". One token out of several should not
+    outrank a decade of demonstrably adjacent work, while missing most of the list still
+    should disqualify -- and a coverage floor expresses exactly that distinction, which a
+    boolean cannot.
+
+    What this does NOT fix, deliberately: the vocabulary problem itself. "SQL Server"
+    still does not match "SQL" here, it merely stops being fatal. Resolving that needs
+    normalization plus a synonym/subsumption table (audit M13), which is separate work
+    and belongs in the matching function rather than the gate.
+
+    Returns (passed, matched_requirements, missing_requirements) using the original
+    (non-lowercased) strings, so the recruiter still sees exactly which skills are
+    missing even when the gate passes.
     """
     have = _normalize(candidate_skills)
     matched = [s for s in required_skills if s.strip().lower() in have]
     missing = [s for s in required_skills if s.strip().lower() not in have]
-    return (len(missing) == 0, matched, missing)
+    if not required_skills:
+        return (True, matched, missing)
+    coverage = len(matched) / len(required_skills)
+    # >= on floats is deliberate: a config of 0.8 against 4 of 5 skills must pass, and
+    # 4/5 == 0.8 exactly in binary. Any epsilon fudge here would be the bug.
+    return (coverage >= min_coverage, matched, missing)
 
 
 @dataclass
@@ -116,6 +144,14 @@ class ScoringWeights:
     skill_weight: float
     experience_weight: float
     title_weight: float
+    # Fraction of required_skills a candidate must hold to clear the hard gate.
+    # Lives on the versioned scoring config, not as a module constant, because every
+    # MatchResult snapshots scoring_config_version -- a decision has to stay reproducible
+    # from what was stored, and a gate threshold that drifted silently between runs would
+    # break that guarantee as surely as changing a weight would.
+    # Defaults to 1.0 (the original all-of behaviour) so any caller that has not been
+    # updated keeps the stricter gate rather than silently loosening it.
+    min_required_coverage: float = 1.0
 
 
 @dataclass
@@ -161,7 +197,9 @@ def score_candidate(
 
     qualified = hard_gate_passed AND final_score >= threshold. The hard gate is
     evaluated independently of final_score so a high semantic score can never paper
-    over a missing required skill.
+    over a missing required skill -- it is now a coverage floor rather than an all-of
+    check (see check_required_skills_gate), which keeps that property while no longer
+    letting one unmatched token disqualify an otherwise strong candidate.
     """
     skill_score = compute_skill_score(
         candidate.skills, job.required_skills, job.preferred_skills
@@ -185,7 +223,7 @@ def score_candidate(
         weights.weight_deterministic,
     )
     hard_gate_passed, matched_requirements, missing_requirements = check_required_skills_gate(
-        candidate.skills, job.required_skills
+        candidate.skills, job.required_skills, weights.min_required_coverage
     )
     qualified = hard_gate_passed and final_score >= threshold
 

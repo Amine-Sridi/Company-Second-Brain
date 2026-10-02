@@ -39,6 +39,19 @@ from typing import Optional
 _PHRASE_LIKE_MAX_WORDS = 4
 _PHRASE_LIKE_MAX_CHARS = 40
 
+# How many skills may sit behind the hard gate.
+#
+# required_skills feeds check_required_skills_gate, which a candidate must satisfy to
+# qualify at all. Unbounded, the extraction returns every technology a posting mentions:
+# one real job description produced 18, the strongest candidate in the pool matched 4 of
+# them, and the gate therefore rejected all 20 retrieved candidates on all four jobs. A
+# gate nobody can pass is not a gate, it is an unconditional reject.
+#
+# Six is a judgment call, not a measurement: it is the upper end of what a real recruiter
+# brief treats as non-negotiable, and it leaves the graded gate (MIN_REQUIRED_COVERAGE in
+# scoring.py) room to tolerate one miss without tolerating four.
+MAX_REQUIRED_SKILLS = 6
+
 # Above this many years, a stated minimum is unusual enough to be worth a second
 # look (a legitimate senior/leadership role can genuinely ask for 20+ years, so
 # this is a warning, never a rejection).
@@ -65,6 +78,11 @@ class ExtractionWarning:
 class NormalizedExtraction:
     required_skills: list[str] = field(default_factory=list)
     preferred_skills: list[str] = field(default_factory=list)
+    # Required skills normalize_extraction moved to preferred because the extraction
+    # exceeded MAX_REQUIRED_SKILLS. Carried on the result, not inferred later, because
+    # detect_warnings runs on already-normalized data and by then the evidence is gone.
+    # Default empty so every existing constructor and test keeps working unchanged.
+    demoted_required: list[str] = field(default_factory=list)
     min_years_experience: Optional[float] = None
     titles: list[str] = field(default_factory=list)
 
@@ -105,24 +123,42 @@ def normalize_extraction(
     Trim/dedupe every list field, then remove any required_skills entry from
     preferred_skills (case-insensitive) -- required already implies preferred, so
     listing the same skill in both is redundant, never a real distinction Gemini
-    intended. Never removes anything from required_skills itself: that list is
-    the hard gate, and only the recruiter (via a new job) or the future repair
-    pass gets to change what's actually required, not this normalization step.
+    intended.
 
-    Does not touch scoring: compute_skill_score's target is the *union* of
-    required and preferred, so removing a required-duplicate from preferred
-    changes nothing about what candidates qualify -- only what's stored and
-    displayed.
+    **Required skills beyond MAX_REQUIRED_SKILLS are demoted to preferred.** This is the
+    one case where this step does change required_skills, and it is a deliberate
+    narrowing of the rule that used to forbid that outright. The original reasoning was
+    that only the recruiter should decide what is non-negotiable -- which is right, and
+    is exactly why this applies only to an over-long list, which is never a recruiter's
+    intent but an extraction defect: Gemini listing every technology a posting mentions.
+    An 18-skill required list makes the hard gate an unconditional reject (measured: the
+    best candidate matched 4 of 18, so all 20 retrieved candidates failed).
+
+    Demotion is information-preserving, for the same reason the dedupe above is:
+    compute_skill_score's target is the *union* of required and preferred, so a demoted
+    skill still contributes identically to the score. Only what *gates* changes. The
+    first MAX_REQUIRED_SKILLS are kept, in the extraction's own order, since that order
+    is the only signal available about which it considered most important -- and
+    detect_warnings flags the demotion so the repair pass gets a chance to choose better
+    than "the first six".
     """
     normalized_required = _dedupe_trim(required_skills)
     normalized_preferred = _dedupe_trim(preferred_skills)
+
+    demoted = normalized_required[MAX_REQUIRED_SKILLS:]
+    normalized_required = normalized_required[:MAX_REQUIRED_SKILLS]
+    normalized_preferred = demoted + normalized_preferred
+
     required_lower = {s.lower() for s in normalized_required}
-    normalized_preferred = [s for s in normalized_preferred if s.lower() not in required_lower]
+    normalized_preferred = _dedupe_trim(
+        [s for s in normalized_preferred if s.lower() not in required_lower]
+    )
     normalized_titles = _dedupe_trim(titles)
 
     return NormalizedExtraction(
         required_skills=normalized_required,
         preferred_skills=normalized_preferred,
+        demoted_required=demoted,
         min_years_experience=min_years_experience,
         titles=normalized_titles,
     )
@@ -139,6 +175,22 @@ def detect_warnings(normalized: NormalizedExtraction) -> list[ExtractionWarning]
     block job creation" rule. Order matches the task's own list.
     """
     warnings: list[ExtractionWarning] = []
+
+    if normalized.demoted_required:
+        warnings.append(
+            ExtractionWarning(
+                field="required_skills",
+                message=(
+                    f"The extraction listed more than {MAX_REQUIRED_SKILLS} required "
+                    f"skills, so these were moved to preferred and no longer gate "
+                    f"qualification: {', '.join(normalized.demoted_required)}. They still "
+                    f"count toward the match score. Keep only the skills whose absence "
+                    f"would genuinely disqualify an applicant -- the ones kept were "
+                    f"simply the first {MAX_REQUIRED_SKILLS} extracted, which is a "
+                    f"positional guess, not a judgment about importance."
+                ),
+            )
+        )
 
     phrase_like = [s for s in normalized.required_skills if _is_phrase_like(s)]
     if phrase_like:

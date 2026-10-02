@@ -98,7 +98,7 @@ from schemas import (
     ScoringConfigResponse,
     StructuredJobDescription,
 )
-from jd_validation import ExtractionWarning, validate_and_normalize
+from jd_validation import MAX_REQUIRED_SKILLS, ExtractionWarning, validate_and_normalize
 from language_gate import BLOCKING_STATUSES, compute_language_gate
 from scoring import CandidateScoringInput, JobRequirements, ScoringWeights, score_candidate
 from shared.llm import LLMProvider, LLMProviderError
@@ -254,8 +254,21 @@ async def structure_job_description(
 ) -> StructuredJobDescription:
     prompt = (
         "Extract structured hiring requirements from this job description. "
-        "required_skills: must-have technical/soft skills, short strings. "
-        "preferred_skills: nice-to-have skills, short strings. "
+        # The cap is the point of this instruction, not a stylistic preference.
+        # required_skills feeds a hard gate in scoring.py: a candidate must cover them
+        # to qualify at all. Left unbounded, this extraction returned every technology a
+        # job description happened to mention -- 18 of them on one real posting -- which
+        # no candidate can satisfy, so every candidate was disqualified and the hard gate
+        # became an unconditional reject. A genuine recruiter brief names a handful of
+        # true must-haves; everything else is a preference. Over-listing here is the
+        # single most damaging extraction error this prompt can make.
+        f"required_skills: at most {MAX_REQUIRED_SKILLS} genuine must-haves -- the skills "
+        "without which an application would be rejected outright. Short strings. If the "
+        "description does not clearly distinguish, prefer FEWER required skills and put "
+        "the rest in preferred_skills. Never list more than "
+        f"{MAX_REQUIRED_SKILLS}. "
+        "preferred_skills: everything else the description asks for or values, including "
+        "any skill you considered for required_skills but left out. Short strings. "
         "min_years_experience: minimum years of relevant experience required, "
         "or null if not specified. "
         "titles: job title variants this role matches (e.g. ['Backend Engineer', "
@@ -588,6 +601,9 @@ async def submit_job(
         skill_weight=scoring_config.skill_weight,
         experience_weight=scoring_config.experience_weight,
         title_weight=scoring_config.title_weight,
+        # getattr so a config row predating migration 0011 still scores, with the strict
+        # all-of gate it was written under rather than an accidental loosening.
+        min_required_coverage=getattr(scoring_config, "min_required_coverage", 1.0),
     )
     # Scoring uses the same normalized requirements just persisted onto
     # JobDescription -- what was actually stored is exactly what's actually scored,

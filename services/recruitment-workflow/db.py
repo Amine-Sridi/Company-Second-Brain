@@ -143,6 +143,12 @@ class ScoringConfig(Base):
     skill_weight: float = Column(Float, nullable=False)
     experience_weight: float = Column(Float, nullable=False)
     title_weight: float = Column(Float, nullable=False)
+    # Fraction of a job's required_skills a candidate must hold to clear the hard gate.
+    # Versioned here rather than as a constant so a MatchResult's scoring_config_version
+    # keeps fully describing how it was scored (migration 0011).
+    min_required_coverage: float = Column(
+        Float, nullable=False, server_default=text("1.0")
+    )
     created_at: datetime = Column(
         DateTime(timezone=True), server_default=text("now()"), nullable=False
     )
