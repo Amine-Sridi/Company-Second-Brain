@@ -25,7 +25,8 @@
 storage/**
 !storage/**/
 !storage/**/.gitkeep
-
+report/
+benchmarks/
 # Raw resume uploads, wherever they land.
 *.pdf
 *.docx
