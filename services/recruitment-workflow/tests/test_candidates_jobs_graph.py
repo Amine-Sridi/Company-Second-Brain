@@ -52,12 +52,19 @@ def _auth_header(recruiter_id: uuid.UUID) -> dict:
 
 
 def _fake_match(*, job_id, candidate_id, final_score, qualified, hard_gate_passed,
-                 matched_requirements=None, missing_requirements=None):
+                 matched_requirements=None, missing_requirements=None,
+                 semantic_score=0.7, deterministic_score=0.6, skill_score=0.8,
+                 experience_score=0.5, title_score=0.4):
     return SimpleNamespace(
         id=uuid.uuid4(),
         job_id=job_id,
         candidate_id=candidate_id,
         final_score=final_score,
+        semantic_score=semantic_score,
+        deterministic_score=deterministic_score,
+        skill_score=skill_score,
+        experience_score=experience_score,
+        title_score=title_score,
         qualified=qualified,
         hard_gate_passed=hard_gate_passed,
         matched_requirements=matched_requirements or [],
@@ -172,6 +179,8 @@ def test_persisted_score_and_requirement_fields_pass_through_unchanged(client, m
     match = _fake_match(
         job_id=job_id, candidate_id=candidate_id, final_score=0.8347, qualified=True, hard_gate_passed=True,
         matched_requirements=["Python", "Docker"], missing_requirements=["Kubernetes"],
+        semantic_score=0.9123, deterministic_score=0.7571, skill_score=0.6667,
+        experience_score=1.0, title_score=0.8,
     )
     monkeypatch.setattr(main, "list_all_match_results", lambda db: [(match, "Backend Engineer")])
 
@@ -185,6 +194,12 @@ def test_persisted_score_and_requirement_fields_pass_through_unchanged(client, m
     assert edge["job_id"] == str(job_id)
     # Not rounded, not recomputed -- the exact persisted value.
     assert edge["final_score"] == 0.8347
+    # The score components pass through the same way: copied, never recomputed.
+    assert edge["semantic_score"] == 0.9123
+    assert edge["deterministic_score"] == 0.7571
+    assert edge["skill_score"] == 0.6667
+    assert edge["experience_score"] == 1.0
+    assert edge["title_score"] == 0.8
     assert edge["matched_requirements"] == ["Python", "Docker"]
     assert edge["missing_requirements"] == ["Kubernetes"]
 
@@ -203,6 +218,7 @@ def test_response_has_no_candidates_array_and_no_extra_fields(client, monkeypatc
     assert set(body["jobs"][0].keys()) == {"job_id", "title"}
     assert set(body["edges"][0].keys()) == {
         "match_id", "candidate_id", "job_id", "final_score",
+        "semantic_score", "deterministic_score", "skill_score", "experience_score", "title_score",
         "qualified", "hard_gate_passed", "matched_requirements", "missing_requirements",
     }
 

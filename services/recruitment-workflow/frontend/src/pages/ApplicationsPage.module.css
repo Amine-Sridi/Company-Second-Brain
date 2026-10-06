@@ -1,413 +1,371 @@
-/* V2 design system, Phase 2 (see FRONTEND_HANDOFF.md). Same "why this page can
-   safely paint its own dark panel" reasoning as DashboardPage.module.css's own
-   comment -- Layout.module.css's `.content` is still untouched, so this page
-   paints an opaque dark surface over the light area it would otherwise inherit,
-   exactly the way Dashboard already does. The aurora/grid/noise backdrop below is
-   a duplicate of Dashboard's own (CSS Modules are file-scoped, and this project's
-   convention keeps each page self-contained -- see that file's comment); this is
-   now the fourth page using this exact block (Interviews/Reports/Report Detail
-   too), which is the point a shared global utility class would normally get
-   extracted -- flagged here, not done reflexively, per FRONTEND_HANDOFF.md's own
-   "promote once real duplication is observed" rule; a follow-up pass migrating
-   the remaining pages is the natural place to do that extraction once the count
-   goes higher still. */
-
 .page {
-  position: relative;
-  max-width: 960px;
-  padding: var(--spacing-4);
-  border-radius: var(--v2-radius-lg);
-  border: 1px solid var(--v2-border);
-  background: var(--v2-bg);
-  box-shadow: var(--v2-shadow-elevated);
+  max-width: 1240px;
   color: var(--v2-text);
-  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
 }
 
-.page::before {
-  content: "";
-  position: absolute;
-  inset: 0;
-  pointer-events: none;
-  background-image:
-    radial-gradient(560px 360px at 10% 0%, var(--v2-cyan-bg), transparent 60%),
-    linear-gradient(rgba(255, 255, 255, 0.025) 1px, transparent 1px),
-    linear-gradient(90deg, rgba(255, 255, 255, 0.025) 1px, transparent 1px);
-  background-size:
-    auto,
-    36px 36px,
-    36px 36px;
+.page > div:nth-child(2) {
+  margin-bottom: 0;
 }
 
-.page::after {
-  content: "";
-  position: absolute;
-  inset: 0;
-  pointer-events: none;
-  opacity: 0.05;
-  mix-blend-mode: overlay;
-  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='200' height='200'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='2' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
+.backLink {
+  align-self: flex-start;
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--v2-cyan);
+  text-decoration: none;
 }
 
-.page > * {
-  position: relative;
+.backLink:hover {
+  text-decoration: underline;
 }
 
 .status {
   color: var(--v2-text-muted);
-  font-size: var(--font-size-base);
 }
 
 .error {
   background: var(--v2-danger-bg);
   color: var(--v2-danger);
-  padding: var(--spacing-2) var(--spacing-3);
-  border-radius: var(--v2-radius);
-  font-size: var(--font-size-base);
-  border: 1px solid rgba(251, 113, 133, 0.3);
+  border: 1px solid rgba(180, 35, 24, 0.25);
+  border-radius: 10px;
+  padding: 10px 12px;
+  font-size: 14px;
 }
 
-.tableWrapper {
-  overflow-x: auto;
+.cards {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.card {
   background: var(--v2-surface);
   border: 1px solid var(--v2-border);
-  border-radius: var(--v2-radius);
-  backdrop-filter: blur(var(--v2-blur));
-  -webkit-backdrop-filter: blur(var(--v2-blur));
+  border-radius: 14px;
+  padding: 18px 20px;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
 }
 
-.table {
-  width: 100%;
-  min-width: 640px;
-  border-collapse: collapse;
-  font-size: var(--font-size-base);
+.cardHead {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
 }
 
-.table th {
-  text-align: left;
-  padding: var(--spacing-2) var(--spacing-3);
-  color: var(--v2-text-muted);
+.who {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.avatar {
+  flex: 0 0 40px;
+  width: 40px;
+  height: 40px;
+  border-radius: 50%;
+  background: var(--v2-cyan);
+  color: #ffffff;
+  display: flex;
+  align-items: center;
+  justify-content: center;
   font-weight: 600;
-  font-size: var(--font-size-xs);
-  text-transform: uppercase;
-  letter-spacing: 0.02em;
-  border-bottom: 1px solid var(--v2-border);
+  font-size: 14px;
 }
 
-.table td {
-  padding: var(--spacing-2) var(--spacing-3);
-  border-bottom: 1px solid var(--v2-border);
-  vertical-align: middle;
-  color: var(--v2-text);
-}
-
-.table tr:last-child td {
-  border-bottom: none;
-}
-
-.row {
-  cursor: pointer;
-  transition: background-color var(--v2-transition);
-}
-
-.row:hover {
-  background: var(--v2-surface-strong);
+.whoText {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
 }
 
 .candidateName {
-  font-weight: 500;
+  font-size: 16px;
+  font-weight: 600;
   color: var(--v2-text);
   text-decoration: none;
 }
 
 .candidateName:hover {
   color: var(--v2-cyan);
-  text-decoration: underline;
 }
 
-/* Same visual treatment as CandidateDetailPage's own .inlineLink (still on the
-   original light theme) -- once that page migrates too, both will read from the
-   same tokens; for now this is the V2-tuned equivalent of the identical rule. */
-.inlineLink {
-  color: var(--v2-cyan);
-  font-weight: 500;
-  text-decoration: none;
-  white-space: nowrap;
-}
-
-.inlineLink:hover {
-  text-decoration: underline;
-}
-
-.identityWarning {
-  color: var(--v2-text-faint);
-  font-size: var(--font-size-xs);
-}
-
-.interviewStatus {
-  font-size: var(--font-size-sm);
-}
-
-.interviewStatusEmpty {
-  color: var(--v2-text-faint);
-}
-
-.expandHint {
+.identityWarning,
+.whoMeta {
+  font-size: 13px;
   color: var(--v2-text-muted);
-  font-size: var(--font-size-xs);
 }
 
-.actions {
+.steps {
   display: flex;
-  align-items: center;
-  gap: var(--spacing-2);
   flex-wrap: wrap;
+  gap: 6px;
+  list-style: none;
+  margin: 0;
+  padding: 0;
 }
 
-.inviteGroup {
-  display: flex;
-  align-items: center;
-  gap: var(--spacing-2);
+.steps li {
+  padding: 5px 12px;
+  border-radius: 999px;
+  font-size: 12px;
+  font-weight: 600;
 }
 
-.inviteFailedText {
-  color: var(--v2-danger);
-  font-size: var(--font-size-xs);
-  white-space: nowrap;
+.step_done {
+  background: var(--v2-cyan-bg);
+  color: var(--v2-success);
 }
 
-.inviteSentText {
+.step_current,
+.step_accepted {
+  background: var(--v2-ink);
+  color: #ffffff;
+}
+
+.step_rejected {
+  background: var(--v2-text-body);
+  color: #ffffff;
+}
+
+.step_todo {
+  border: 1px dashed var(--v2-neutral-strong);
   color: var(--v2-text-muted);
-  font-size: var(--font-size-xs);
-  white-space: nowrap;
 }
 
-.inviteButton {
-  background: linear-gradient(120deg, var(--v2-cyan), var(--v2-violet));
-  color: var(--v2-bg-inset);
-  border: none;
-  border-radius: var(--v2-radius);
-  padding: var(--spacing-1) var(--spacing-3);
-  font-size: var(--font-size-sm);
-  font-weight: 700;
-  white-space: nowrap;
-  transition: transform var(--v2-transition);
+.panels {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+  gap: 12px;
 }
 
-.inviteButton:hover:not(:disabled) {
-  transform: translateY(-1px);
+.panel {
+  border: 1px solid var(--v2-divider);
+  border-radius: 10px;
+  padding: 12px 14px;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 8px;
+  min-width: 0;
 }
 
-.inviteButton:disabled {
-  opacity: 0.5;
-  cursor: not-allowed;
-  transform: none;
+.panelWarn {
+  border-color: #f0c9a0;
+  background: var(--v2-warning-bg);
 }
 
-.acceptButton {
-  background: var(--v2-success-bg);
-  color: var(--v2-success);
-  border: 1px solid rgba(74, 222, 128, 0.35);
-  border-radius: var(--v2-radius);
-  padding: var(--spacing-1) var(--spacing-3);
-  font-size: var(--font-size-sm);
+.panelTitle {
+  font-size: 12px;
   font-weight: 600;
-  white-space: nowrap;
-  transition: background-color var(--v2-transition);
+  color: var(--v2-text-muted);
 }
 
-.acceptButton:hover:not(:disabled) {
-  background: rgba(74, 222, 128, 0.22);
+.voiceLine {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
 }
 
-.acceptButton:disabled {
-  opacity: 0.5;
-  cursor: not-allowed;
+.cefr {
+  font-family: var(--font-mono);
+  font-size: 24px;
+  font-weight: 500;
 }
 
-.rejectButton {
-  background: var(--v2-surface);
-  color: var(--v2-danger);
-  border: 1px solid rgba(251, 113, 133, 0.35);
-  border-radius: var(--v2-radius);
-  padding: var(--spacing-1) var(--spacing-3);
-  font-size: var(--font-size-sm);
-  font-weight: 600;
-  white-space: nowrap;
-  transition: background-color var(--v2-transition);
+.voiceMeta {
+  font-size: 13px;
+  color: var(--v2-text-body);
 }
 
-.rejectButton:hover:not(:disabled) {
-  background: var(--v2-danger-bg);
+.panelLinks {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 14px;
+  font-size: 13px;
+  font-weight: 500;
 }
 
-.rejectButton:disabled {
-  opacity: 0.5;
-  cursor: not-allowed;
+.panelLinks a {
+  color: var(--v2-cyan);
+  text-decoration: none;
 }
 
-.decidedLabelAccepted {
-  color: var(--v2-success);
-  font-size: var(--font-size-sm);
-  font-weight: 600;
-  white-space: nowrap;
+.panelLinks a:hover {
+  text-decoration: underline;
 }
 
-.decidedLabelRejected {
-  color: var(--v2-danger);
-  font-size: var(--font-size-sm);
-  font-weight: 600;
-  white-space: nowrap;
+.textButton {
+  border: 0;
+  background: none;
+  padding: 0;
+  color: var(--v2-cyan);
+  font-size: 13px;
+  font-weight: 500;
 }
 
-.roundsCell {
-  min-width: 200px;
+.textButton:hover {
+  text-decoration: underline;
+}
+
+.panelEmpty {
+  font-size: 13px;
+  color: var(--v2-text-muted);
+}
+
+.panelNote {
+  font-size: 13px;
+  color: var(--v2-text-body);
 }
 
 .roundsList {
   display: flex;
   flex-direction: column;
-  align-items: flex-start;
-  gap: var(--spacing-2);
-  margin-bottom: var(--spacing-2);
-}
-
-.roundsList:empty {
-  margin-bottom: 0;
+  gap: 8px;
+  width: 100%;
 }
 
 .roundItem {
   display: flex;
-  flex-direction: column;
-  align-items: flex-start;
-  gap: var(--spacing-1);
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
 }
 
 .roundActions {
   display: flex;
   flex-wrap: wrap;
-  gap: var(--spacing-1);
+  gap: 6px;
+  width: 100%;
 }
 
-.roundActionButton {
+.roundActionButton,
+.roundCancelButton,
+.scheduleRoundButton,
+.scheduleRoundCancelButton,
+.secondaryButton,
+.rejectButton {
+  min-height: 36px;
+  padding: 0 12px;
+  border-radius: 8px;
   border: 1px solid var(--v2-border-strong);
-  background: var(--v2-surface);
-  color: var(--v2-text-muted);
-  border-radius: var(--v2-radius);
-  padding: 2px var(--spacing-2);
-  font-size: var(--font-size-xs);
+  background: #ffffff;
+  color: var(--v2-text);
+  font-size: 13px;
   font-weight: 500;
-  white-space: nowrap;
 }
 
-.roundActionButton:hover:not(:disabled) {
-  border-color: var(--v2-cyan);
-  color: var(--v2-cyan);
-}
-
-.roundActionButton:disabled {
-  opacity: 0.5;
-  cursor: not-allowed;
+.roundActionButton:hover:not(:disabled),
+.scheduleRoundButton:hover:not(:disabled),
+.scheduleRoundCancelButton:hover:not(:disabled),
+.secondaryButton:hover:not(:disabled),
+.rejectButton:hover:not(:disabled) {
+  border-color: var(--v2-text-faint);
 }
 
 .roundCancelButton {
-  border: 1px solid rgba(251, 113, 133, 0.35);
-  background: var(--v2-surface);
   color: var(--v2-danger);
-  border-radius: var(--v2-radius);
-  padding: 2px var(--spacing-2);
-  font-size: var(--font-size-xs);
-  font-weight: 500;
-  white-space: nowrap;
 }
 
-.roundCancelButton:hover:not(:disabled) {
-  background: var(--v2-danger-bg);
-}
-
-.roundCancelButton:disabled {
+.scheduleRoundButton:disabled,
+.roundActionButton:disabled,
+.secondaryButton:disabled,
+.rejectButton:disabled {
   opacity: 0.5;
-  cursor: not-allowed;
-}
-
-.scheduleRoundButton {
-  border: 1px solid var(--v2-border-strong);
-  background: var(--v2-surface);
-  color: var(--v2-cyan);
-  border-radius: var(--v2-radius);
-  padding: var(--spacing-1) var(--spacing-2);
-  font-size: var(--font-size-sm);
-  font-weight: 500;
-  white-space: nowrap;
-}
-
-.scheduleRoundButton:hover:not(:disabled) {
-  border-color: var(--v2-cyan);
-}
-
-.scheduleRoundButton:disabled {
-  opacity: 0.5;
-  cursor: not-allowed;
-}
-
-.scheduleRoundCancelButton {
-  border: 1px solid var(--v2-border-strong);
-  background: var(--v2-surface);
-  color: var(--v2-text-muted);
-  border-radius: var(--v2-radius);
-  padding: var(--spacing-1) var(--spacing-2);
-  font-size: var(--font-size-sm);
-  font-weight: 500;
-}
-
-.scheduleRoundCancelButton:hover:not(:disabled) {
-  border-color: var(--v2-border-strong);
-  color: var(--v2-text);
-}
-
-.scheduleRoundCancelButton:disabled {
-  opacity: 0.5;
-  cursor: not-allowed;
 }
 
 .scheduleForm {
   display: flex;
   flex-direction: column;
-  gap: var(--spacing-1);
-  min-width: 200px;
-  max-width: 260px;
+  gap: 8px;
+  width: 100%;
 }
 
 .scheduleFormSelect,
-.scheduleFormInput {
-  padding: var(--spacing-1) var(--spacing-2);
-  border: 1px solid var(--v2-border-strong);
-  border-radius: var(--v2-radius);
-  background: var(--v2-bg-inset);
-  font-size: var(--font-size-sm);
-  font-family: inherit;
-  color: var(--v2-text);
+.scheduleFormInput,
+.scheduleFormTextarea {
   width: 100%;
+  min-height: 38px;
+  padding: 0 10px;
+  border: 1px solid var(--v2-border-strong);
+  border-radius: 8px;
+  background: #ffffff;
+  color: var(--v2-text);
+  font-size: 13px;
 }
 
 .scheduleFormTextarea {
-  padding: var(--spacing-1) var(--spacing-2);
-  border: 1px solid var(--v2-border-strong);
-  border-radius: var(--v2-radius);
-  background: var(--v2-bg-inset);
-  font-size: var(--font-size-sm);
-  font-family: inherit;
-  color: var(--v2-text);
-  width: 100%;
+  padding: 8px 10px;
   resize: vertical;
 }
 
 .scheduleFormActions {
   display: flex;
-  gap: var(--spacing-2);
+  flex-wrap: wrap;
+  gap: 8px;
 }
 
-/* No :focus-visible override needed here anymore -- global.css's shared rule now
-   defaults to --v2-cyan itself (app-wide dark-theme focus-ring audit), the same
-   fix this file's own previous override worked around one page at a time. Removed
-   as redundant rather than left duplicating the new shared default. */
+.cardFoot {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+  border-top: 1px solid var(--v2-divider);
+  padding-top: 14px;
+}
+
+.primaryButton,
+.acceptButton {
+  min-height: 44px;
+  padding: 0 20px;
+  border-radius: 9px;
+  border: 0;
+  background: var(--v2-cyan);
+  color: #ffffff;
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.primaryButton:hover:not(:disabled),
+.acceptButton:hover:not(:disabled) {
+  background: var(--v2-cyan-hover);
+}
+
+.acceptButton:disabled,
+.primaryButton:disabled {
+  background: var(--v2-neutral-bg);
+  color: #6b7180;
+}
+
+.rejectButton,
+.secondaryButton {
+  min-height: 44px;
+  padding: 0 18px;
+  font-size: 14px;
+}
+
+.inviteFailedText {
+  font-size: 13px;
+  color: var(--v2-danger);
+}
+
+.inviteSentText {
+  font-size: 13px;
+  color: var(--v2-text-muted);
+}
+
+.blockedNote {
+  font-size: 13px;
+  color: var(--v2-warning);
+}
+
+.decidedNote {
+  font-size: 13px;
+  color: var(--v2-text-muted);
+}

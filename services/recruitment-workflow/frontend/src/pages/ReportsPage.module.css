@@ -4,43 +4,12 @@
 
 .page {
   position: relative;
-  max-width: 900px;
-  padding: var(--spacing-4);
-  border-radius: var(--v2-radius-lg);
-  border: 1px solid var(--v2-border);
-  background: var(--v2-bg);
-  box-shadow: var(--v2-shadow-elevated);
+  max-width: 1240px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  box-shadow: none;
   color: var(--v2-text);
-  overflow: hidden;
-}
-
-.page::before {
-  content: "";
-  position: absolute;
-  inset: 0;
-  pointer-events: none;
-  background-image:
-    radial-gradient(560px 360px at 10% 0%, var(--v2-cyan-bg), transparent 60%),
-    linear-gradient(rgba(255, 255, 255, 0.025) 1px, transparent 1px),
-    linear-gradient(90deg, rgba(255, 255, 255, 0.025) 1px, transparent 1px);
-  background-size:
-    auto,
-    36px 36px,
-    36px 36px;
-}
-
-.page::after {
-  content: "";
-  position: absolute;
-  inset: 0;
-  pointer-events: none;
-  opacity: 0.05;
-  mix-blend-mode: overlay;
-  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='200' height='200'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='2' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
-}
-
-.page > * {
-  position: relative;
 }
 
 .status {
@@ -54,7 +23,7 @@
   padding: var(--spacing-2) var(--spacing-3);
   border-radius: var(--v2-radius);
   font-size: var(--font-size-base);
-  border: 1px solid rgba(251, 113, 133, 0.3);
+  border: 1px solid rgba(180, 35, 24, 0.25);
 }
 
 .tableWrapper {
@@ -62,8 +31,6 @@
   background: var(--v2-surface);
   border: 1px solid var(--v2-border);
   border-radius: var(--v2-radius);
-  backdrop-filter: blur(var(--v2-blur));
-  -webkit-backdrop-filter: blur(var(--v2-blur));
 }
 
 .table {

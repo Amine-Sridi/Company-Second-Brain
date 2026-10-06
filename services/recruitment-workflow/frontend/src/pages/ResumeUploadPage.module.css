@@ -1,234 +1,244 @@
-/* V2 design system, Phase 2 slice 3 (see FRONTEND_HANDOFF.md). Same dark-panel
-   treatment as ApplicationsPage.module.css et al.; see that file's own comment
-   for why this is safe and why the panel block is currently duplicated per page.
-   Unlike the other pages in this slice, this one wasn't picked for a drill-down
-   seam (it doesn't link into an already-dark page) -- it was simply small,
-   standalone, and low-risk enough to fold into the same pass. */
-
 .page {
-  position: relative;
-  max-width: 560px;
-  padding: var(--spacing-4);
-  border-radius: var(--v2-radius-lg);
-  border: 1px solid var(--v2-border);
-  background: var(--v2-bg);
-  box-shadow: var(--v2-shadow-elevated);
+  max-width: 1240px;
   color: var(--v2-text);
-  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
 }
 
-.page::before {
-  content: "";
-  position: absolute;
-  inset: 0;
-  pointer-events: none;
-  background-image:
-    radial-gradient(560px 360px at 10% 0%, var(--v2-cyan-bg), transparent 60%),
-    linear-gradient(rgba(255, 255, 255, 0.025) 1px, transparent 1px),
-    linear-gradient(90deg, rgba(255, 255, 255, 0.025) 1px, transparent 1px);
-  background-size:
-    auto,
-    36px 36px,
-    36px 36px;
-}
-
-.page::after {
-  content: "";
-  position: absolute;
-  inset: 0;
-  pointer-events: none;
-  opacity: 0.05;
-  mix-blend-mode: overlay;
-  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='200' height='200'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='2' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
-}
-
-.page > * {
-  position: relative;
+.page > div:first-child {
+  margin-bottom: 2px;
 }
 
 .dropZone {
-  border: 2px dashed var(--v2-border-strong);
-  border-radius: var(--v2-radius);
+  position: relative;
+  min-height: 200px;
+  border: 2px dashed #b9c3e6;
+  border-radius: 16px;
   background: var(--v2-surface);
-  padding: var(--spacing-5) var(--spacing-4);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  padding: 24px;
   text-align: center;
-  backdrop-filter: blur(var(--v2-blur));
-  -webkit-backdrop-filter: blur(var(--v2-blur));
-  transition: border-color var(--v2-transition), background-color var(--v2-transition);
+  cursor: pointer;
+  transition: border-color var(--v2-transition), background var(--v2-transition);
 }
 
 .dropZone:hover,
 .dropZoneActive {
   border-color: var(--v2-cyan);
-  background: var(--v2-cyan-bg);
-}
-
-.dropZoneDisabled {
-  cursor: not-allowed;
-  opacity: 0.6;
+  background: #f7f9ff;
 }
 
 .dropZoneIcon {
-  width: 28px;
-  height: 28px;
-  margin-bottom: var(--spacing-2);
-  color: var(--v2-text-faint);
-  transition: color var(--v2-transition);
-}
-
-.dropZone:hover .dropZoneIcon,
-.dropZoneActive .dropZoneIcon {
+  width: 34px;
+  height: 34px;
   color: var(--v2-cyan);
 }
 
+.dropTitle {
+  font-size: 16px;
+  font-weight: 600;
+}
+
 .dropZoneHint {
-  margin: var(--spacing-1) 0 0;
+  font-size: 13px;
   color: var(--v2-text-muted);
-  font-size: var(--font-size-sm);
 }
 
 .fileInput {
   display: none;
 }
 
-.selectedFile {
-  margin-top: var(--spacing-3);
-  padding: var(--spacing-2) var(--spacing-3);
-  border: 1px solid var(--v2-border);
-  border-radius: var(--v2-radius);
+.queue {
   background: var(--v2-surface);
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: var(--spacing-2);
-  font-size: var(--font-size-base);
+  border: 1px solid var(--v2-border);
+  border-radius: 14px;
+  overflow: hidden;
 }
 
-.selectedFileName {
+.queueHead {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 12px;
+  padding: 14px 18px;
+  border-bottom: 1px solid var(--v2-divider);
+}
+
+.queueTitle {
+  margin: 0;
+  font-size: 16px;
+  font-weight: 600;
+}
+
+.queueSummary {
+  flex: 1 1 auto;
+  font-size: 13px;
+  color: var(--v2-text-muted);
+}
+
+.uploadButton {
+  min-height: 42px;
+  padding: 0 18px;
+  border-radius: 9px;
+  border: 0;
+  background: var(--v2-cyan);
+  color: #ffffff;
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.uploadButton:hover:not(:disabled) {
+  background: var(--v2-cyan-hover);
+}
+
+.uploadButton:disabled {
+  background: var(--v2-neutral-bg);
+  color: #6b7180;
+}
+
+.queueList {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.queueRow {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 190px 150px;
+  gap: 12px;
+  align-items: center;
+  padding: 12px 18px;
+  border-bottom: 1px solid var(--v2-divider);
+  font-size: 14px;
+}
+
+.fileCell {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  min-width: 0;
+}
+
+.fileName {
+  font-weight: 500;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
-.clearButton {
-  border: none;
-  background: none;
-  color: var(--v2-text-muted);
-  font-size: var(--font-size-sm);
-  padding: 0;
-  transition: color var(--v2-transition);
+.progressTrack {
+  height: 4px;
+  border-radius: 2px;
+  background: var(--v2-divider);
+  overflow: hidden;
 }
 
-.clearButton:hover {
-  color: var(--v2-danger);
+.progressFill {
+  display: block;
+  height: 100%;
+  width: 0;
+  transition: width 400ms ease;
 }
 
-.actions {
-  margin-top: var(--spacing-3);
-  display: flex;
-  align-items: center;
-  gap: var(--spacing-2);
+.progress_waiting {
+  width: 6%;
+  background: var(--v2-neutral-strong);
 }
 
-.uploadButton {
-  background: linear-gradient(120deg, var(--v2-cyan), var(--v2-violet));
-  color: var(--v2-bg-inset);
-  border: none;
-  border-radius: var(--v2-radius);
-  padding: var(--spacing-2) var(--spacing-4);
-  font-size: var(--font-size-md);
-  font-weight: 700;
-  text-decoration: none;
-  display: inline-block;
-  transition: transform var(--v2-transition);
+.progress_uploading {
+  width: 55%;
+  background: var(--v2-violet);
 }
 
-.uploadButton:hover:not(:disabled) {
-  transform: translateY(-1px);
+.progress_created,
+.progress_existing {
+  width: 100%;
+  background: var(--v2-cyan);
 }
 
-.uploadButton:disabled {
-  opacity: 0.5;
-  cursor: not-allowed;
-  transform: none;
+.progress_failed {
+  width: 100%;
+  background: var(--v2-warning-strong);
 }
 
-.error {
-  margin-top: var(--spacing-3);
-  background: var(--v2-danger-bg);
-  color: var(--v2-danger);
-  padding: var(--spacing-2) var(--spacing-3);
-  border-radius: var(--v2-radius);
-  font-size: var(--font-size-base);
-  border: 1px solid rgba(251, 113, 133, 0.3);
+.rowError {
+  font-size: 12px;
+  color: var(--v2-warning);
 }
 
-.success {
-  margin-top: var(--spacing-3);
-  border: 1px solid rgba(74, 222, 128, 0.3);
-  border-radius: var(--v2-radius);
-  padding: var(--spacing-3);
-  background: var(--v2-success-bg);
-}
-
-.successTitle {
-  margin: 0 0 var(--spacing-2);
+.badge {
+  justify-self: start;
+  padding: 4px 10px;
+  border-radius: 999px;
+  font-size: 12px;
   font-weight: 600;
+}
+
+.badge_waiting {
+  border: 1px dashed var(--v2-neutral-strong);
+  color: var(--v2-text-muted);
+}
+
+.badge_uploading {
+  background: var(--v2-neutral-bg);
+  color: var(--v2-text);
+}
+
+.badge_created,
+.badge_existing {
+  background: var(--v2-cyan-bg);
   color: var(--v2-success);
 }
 
-.successField {
-  display: flex;
-  gap: var(--spacing-1);
-  font-size: var(--font-size-base);
-  padding: 2px 0;
-  color: var(--v2-text);
+.badge_failed {
+  background: var(--v2-warning-bg);
+  color: var(--v2-warning);
 }
 
-.successLabel {
-  color: var(--v2-text-muted);
-  min-width: 130px;
+.rowAction {
+  text-align: right;
+  font-size: 13px;
+  font-weight: 500;
 }
 
-.successValue {
-  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
-  word-break: break-all;
+.rowAction a {
+  color: var(--v2-cyan);
+  text-decoration: none;
 }
 
-/* No longer carries its own margin-top -- it's a flex child of .actions, which
-   already provides the spacing above the whole row; a per-item margin here would
-   misalign it against .uploadButton sitting beside it (a leftover from before
-   both buttons shared this row -- fixed as part of rewriting this file, not a
-   separate change). */
-.resetButton {
+.rowAction a:hover {
+  text-decoration: underline;
+}
+
+.rowButton {
+  min-height: 34px;
+  padding: 0 12px;
+  border-radius: 8px;
   border: 1px solid var(--v2-border-strong);
-  background: var(--v2-surface);
-  color: var(--v2-text);
-  border-radius: var(--v2-radius);
-  padding: var(--spacing-2) var(--spacing-3);
-  font-size: var(--font-size-base);
-  backdrop-filter: blur(var(--v2-blur));
-  -webkit-backdrop-filter: blur(var(--v2-blur));
-  transition: border-color var(--v2-transition);
+  background: #ffffff;
+  font-size: 13px;
+  font-weight: 500;
 }
 
-.resetButton:hover {
-  border-color: var(--v2-cyan);
+.queueNote {
+  margin: 0;
+  padding: 12px 18px;
+  font-size: 12px;
+  color: var(--v2-text-muted);
 }
 
-@media (max-width: 480px) {
-  .selectedFile {
-    flex-direction: column;
-    align-items: flex-start;
+@media (max-width: 640px) {
+  .queueRow {
+    grid-template-columns: minmax(0, 1fr) auto;
   }
 
-  .actions {
-    flex-direction: column;
-  }
-
-  .uploadButton,
-  .resetButton {
-    width: 100%;
-    text-align: center;
+  .rowAction {
+    grid-column: 1 / -1;
+    text-align: left;
   }
 }

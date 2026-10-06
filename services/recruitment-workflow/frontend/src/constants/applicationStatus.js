@@ -12,12 +12,13 @@ export const STATUS_LABELS = {
   rejected: "Rejected",
 };
 
+// Rejected is a normal recruiter decision, not an error, so it is grey, not red.
 export const STATUS_TONE = {
   selected: "neutral",
   invited: "primary",
   interviewed: "accent",
-  accepted: "success",
-  rejected: "danger",
+  accepted: "ink",
+  rejected: "neutral",
 };
 
 export const STATUS_ORDER = ["selected", "invited", "interviewed", "accepted", "rejected"];

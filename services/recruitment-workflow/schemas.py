@@ -454,6 +454,13 @@ class GraphEdge(BaseModel):
     candidate_id: UUID4
     job_id: UUID4
     final_score: float
+    # The persisted components behind final_score, so the graph can explain a match
+    # without calling GET /v1/jobs/{id}/matches (which may generate an explanation).
+    semantic_score: float
+    deterministic_score: float
+    skill_score: float
+    experience_score: float
+    title_score: float
     qualified: bool
     hard_gate_passed: bool
     matched_requirements: list[str]

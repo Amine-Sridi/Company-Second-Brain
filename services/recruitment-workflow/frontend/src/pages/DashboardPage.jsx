@@ -1,45 +1,27 @@
 import { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
-import { motion, useReducedMotion } from "motion/react";
-import { useAuth } from "../context/AuthContext.jsx";
 import { getCandidates } from "../api/candidates.js";
 import { getJobs } from "../api/jobs.js";
 import { getAllApplications } from "../api/applications.js";
 import { ApiError } from "../api/client.js";
 import StatTile from "../components/StatTile.jsx";
-import StatusBadge from "../components/StatusBadge.jsx";
 import EmptyState from "../components/EmptyState.jsx";
-import { STATUS_LABELS, STATUS_TONE, STATUS_ORDER } from "../constants/applicationStatus.js";
+import { STATUS_LABELS, STATUS_ORDER } from "../constants/applicationStatus.js";
 import styles from "./DashboardPage.module.css";
 
-// Applications not yet in a terminal state -- the same "not decided" concept
-// ApplicationsPage's DECIDABLE_STATUSES gates buttons on, read here purely as a
-// display count, not a workflow rule (§22: no frontend business logic).
+// Applications not yet in a terminal state -- a display count, not a workflow rule.
 const TERMINAL_STATUSES = new Set(["accepted", "rejected"]);
-
-// How many recent-activity rows to show -- an operational glance, not a full log.
-const RECENT_ACTIVITY_LIMIT = 5;
-
-// Bento-grid accent alternation for the four KPI tiles -- purely decorative,
-// ties each tile to one of the two restrained brand colors (see StatTile.jsx).
-const STAT_ACCENTS = ["cyan", "violet", "cyan", "violet"];
+const RECENT_ACTIVITY_LIMIT = 6;
+// VoiceHR outcomes where no language level was issued and a human has to look.
+const NO_LEVEL_STATUSES = new Set(["insufficient_evidence", "inconclusive", "failed"]);
 
 /**
- * Operational home for the admin shell: real counts from the three read endpoints
- * the browser is allowed to call (all on RWS -- see FRONTEND_HANDOFF.md §22),
- * computed here in render, not duplicated backend logic. No charts, no analytics --
- * every number is a plain count already implied by data RWS already returns.
- *
- * V2 design system, Phase 1 (see FRONTEND_HANDOFF.md): this page is the first,
- * and so far only, full V2 redesign -- a bespoke hero (not the shared PageHeader,
- * which every other still-light page still needs unchanged) and an asymmetric
- * bento layout, all built from data this page already fetched before this pass;
- * nothing here adds a new API call or invents a number that isn't a real count.
+ * Operational home: real counts from the three reads the browser is allowed to make
+ * (all on RWS -- see FRONTEND_HANDOFF.md §22), computed here in render. Every number
+ * on this page is a plain count of data RWS already returned; nothing is invented,
+ * and the "needs your attention" panel only lists items whose count is above zero.
  */
 export default function DashboardPage() {
-  const { recruiter } = useAuth();
-  const shouldReduceMotion = useReducedMotion();
-
   const [candidates, setCandidates] = useState([]);
   const [jobs, setJobs] = useState([]);
   const [applications, setApplications] = useState([]);
@@ -54,9 +36,6 @@ export default function DashboardPage() {
     setLoading(true);
     setError(null);
     try {
-      // Three independent RWS reads, fetched fresh on every mount (never cached
-      // across visits) so a hard refresh always reflects real backend state, same
-      // rule every other page in this app follows.
       const [candidatesResponse, jobsResponse, applicationsResponse] = await Promise.all([
         getCandidates(),
         getJobs(),
@@ -78,44 +57,81 @@ export default function DashboardPage() {
     status,
     count: applications.filter((a) => a.status === status).length,
   }));
+  const maxStatusCount = Math.max(1, ...statusCounts.map((s) => s.count));
+  const awaitingDecision = statusCounts.find((s) => s.status === "interviewed")?.count ?? 0;
 
-  // Recent activity is deliberately built only from events that already carry a
-  // human-readable label (a candidate's name, a job's title) -- an application-
-  // derived event (selected/invited/decided) only has an opaque candidate_id
-  // attached, which would need an extra per-row identity lookup to be readable and
-  // fails the "cleanly derived from existing timestamps" bar this section is
-  // scoped to (see FRONTEND_HANDOFF.md).
+  const flaggedJobs = jobs.filter((job) => job.extraction_status === "flagged").length;
+  const noLevel = applications.filter((a) => NO_LEVEL_STATUSES.has(a.interview_assessment?.evaluation_status)).length;
+  const attention = [
+    flaggedJobs > 0 && {
+      key: "flagged",
+      tone: "warn",
+      to: "/jobs",
+      title: `${flaggedJobs} job${flaggedJobs === 1 ? "" : "s"} flagged for a second look`,
+      text: "The extraction or the match outcome looked suspicious. Matching still ran.",
+    },
+    awaitingDecision > 0 && {
+      key: "decide",
+      tone: "info",
+      to: "/interviews",
+      title: `${awaitingDecision} interview${awaitingDecision === 1 ? "" : "s"} waiting for a decision`,
+      text: "The language level and the evidence are ready to review.",
+    },
+    noLevel > 0 && {
+      key: "nolevel",
+      tone: "neutral",
+      to: "/reports",
+      title: `${noLevel} interview${noLevel === 1 ? "" : "s"} without a language level`,
+      text: "Not enough evidence for a level. A human review is needed.",
+    },
+  ].filter(Boolean);
+
+  const titles = new Map(jobs.map((job) => [job.job_id, job.title]));
   const recentActivity = [
     ...candidates.map((c) => ({
       id: `candidate-${c.candidate_id}`,
-      label: `${c.name} added to the candidate pool`,
+      kind: "Candidate added",
+      label: c.name,
+      to: `/candidates/${c.candidate_id}`,
       at: c.created_at,
     })),
-    ...jobs.map((j) => ({
-      id: `job-${j.job_id}`,
-      label: `Job posted: ${j.title}`,
-      at: j.created_at,
-    })),
+    ...jobs.map((j) => ({ id: `job-${j.job_id}`, kind: "Job posted", label: j.title, to: `/jobs/${j.job_id}`, at: j.created_at })),
+    ...applications
+      .filter((a) => a.decided_at && TERMINAL_STATUSES.has(a.status))
+      .map((a) => ({
+        id: `decision-${a.application_id}`,
+        kind: a.status === "accepted" ? "Candidate accepted" : "Candidate rejected",
+        label: titles.get(a.job_id) ?? "a job",
+        to: `/jobs/${a.job_id}/applications`,
+        at: a.decided_at,
+      })),
   ]
     .sort((a, b) => new Date(b.at) - new Date(a.at))
     .slice(0, RECENT_ACTIVITY_LIMIT);
 
   const kpis = [
-    { label: "Total Candidates", value: candidates.length },
-    { label: "Total Jobs", value: jobs.length },
-    { label: "In Pipeline", value: inPipelineCount },
-    { label: "Interviews Completed", value: completedInterviewsCount },
+    { label: "Candidates in the pool", value: candidates.length },
+    { label: "Jobs posted", value: jobs.length },
+    { label: "Applications in progress", value: inPipelineCount },
+    { label: "VoiceHR interviews completed", value: completedInterviewsCount },
   ];
 
   return (
     <div className={styles.page}>
-      <Hero
-        recruiter={recruiter}
-        candidateCount={candidates.length}
-        jobCount={jobs.length}
-        loading={loading}
-        shouldReduceMotion={shouldReduceMotion}
-      />
+      <header className={styles.header}>
+        <div className={styles.headerText}>
+          <span className={styles.eyebrow}>Dashboard</span>
+          <h1 className={styles.title}>Recruitment at a glance</h1>
+        </div>
+        <div className={styles.actions}>
+          <Link to="/jobs" className={styles.actionPrimary}>
+            Submit a job
+          </Link>
+          <Link to="/upload" className={styles.actionSecondary}>
+            Upload resumes
+          </Link>
+        </div>
+      </header>
 
       {loading && <p className={styles.status}>Loading dashboard…</p>}
 
@@ -126,201 +142,105 @@ export default function DashboardPage() {
       )}
 
       {!loading && !error && (
-        <div className={styles.bento}>
-          {kpis.map((kpi, index) => (
-            <StatTile
-              key={kpi.label}
-              label={kpi.label}
-              value={kpi.value}
-              accent={STAT_ACCENTS[index]}
-              delay={index * 0.06}
-            />
-          ))}
+        <>
+          <section className={styles.kpis} aria-label="Key figures">
+            {kpis.map((kpi, index) => (
+              <StatTile key={kpi.label} label={kpi.label} value={kpi.value} delay={index * 0.05} />
+            ))}
+          </section>
 
-          <FadeInSection
-            className={styles.pipelinePanel}
-            delay={0.24}
-            shouldReduceMotion={shouldReduceMotion}
-          >
-            <h2 className={styles.panelTitle}>Pipeline by status</h2>
-            {applications.length === 0 ? (
-              <EmptyState
-                variant="glass"
-                title="No applications yet"
-                description="Select a candidate from a job's ranked list to start the pipeline."
-              />
-            ) : (
-              <>
-                <StatusDistributionBar statusCounts={statusCounts} total={applications.length} />
-                <div className={styles.statusLegend}>
-                  {statusCounts.map(({ status, count }) => (
-                    <div key={status} className={styles.statusLegendRow}>
-                      <StatusBadge tone={STATUS_TONE[status]} variant="glass">
-                        {STATUS_LABELS[status]}
-                      </StatusBadge>
-                      <span className={styles.statusCount}>{count}</span>
-                    </div>
+          <div className={styles.row}>
+            <section className={`${styles.panel} ${styles.wide}`} aria-label="Application pipeline">
+              <div className={styles.panelHead}>
+                <h2 className={styles.panelTitle}>Application pipeline</h2>
+              </div>
+              {applications.length === 0 ? (
+                <EmptyState title="No applications yet" description="Select a qualified candidate on a job to start the pipeline." />
+              ) : (
+                <>
+                  <div className={styles.bars}>
+                    {statusCounts.map(({ status, count }) => (
+                      <div key={status} className={styles.barRow}>
+                        <span>{STATUS_LABELS[status]}</span>
+                        <span className={styles.barTrack}>
+                          <span
+                            className={`${styles.barFill} ${styles[`fill_${status}`]}`}
+                            style={{ width: `${(count / maxStatusCount) * 100}%` }}
+                          />
+                        </span>
+                        <span className={styles.barCount}>{count}</span>
+                      </div>
+                    ))}
+                  </div>
+                  {awaitingDecision > 0 && (
+                    <p className={styles.note}>
+                      {awaitingDecision} candidate{awaitingDecision === 1 ? " is" : "s are"} waiting for a recruiter decision after
+                      their VoiceHR interview.
+                    </p>
+                  )}
+                </>
+              )}
+            </section>
+
+            <section className={styles.panel} aria-label="Needs your attention">
+              <h2 className={styles.panelTitle}>Needs your attention</h2>
+              {attention.length === 0 ? (
+                <p className={styles.note}>Nothing needs your attention right now.</p>
+              ) : (
+                <div className={styles.attention}>
+                  {attention.map((item) => (
+                    <Link key={item.key} to={item.to} className={`${styles.attentionItem} ${styles[`attention_${item.tone}`]}`}>
+                      <span className={styles.attentionDot} aria-hidden="true" />
+                      <span className={styles.attentionText}>
+                        <span className={styles.attentionTitle}>{item.title}</span>
+                        <span>{item.text}</span>
+                      </span>
+                    </Link>
                   ))}
                 </div>
-              </>
-            )}
-          </FadeInSection>
+              )}
+            </section>
+          </div>
 
-          <FadeInSection
-            className={styles.activityPanel}
-            delay={0.3}
-            shouldReduceMotion={shouldReduceMotion}
-          >
-            <h2 className={styles.panelTitle}>Recent activity</h2>
-            {recentActivity.length === 0 ? (
-              <EmptyState
-                variant="glass"
-                title="No activity yet"
-                description="Upload a resume or post a job to get started."
-              />
-            ) : (
-              <ul className={styles.activityList}>
-                {recentActivity.map((event) => (
-                  <li key={event.id} className={styles.activityRow}>
-                    <span className={styles.activityLabel}>{event.label}</span>
-                    <span className={styles.activityDate}>
-                      {new Date(event.at).toLocaleDateString(undefined, {
-                        year: "numeric",
-                        month: "short",
-                        day: "numeric",
-                      })}
-                    </span>
-                  </li>
-                ))}
-              </ul>
-            )}
-          </FadeInSection>
+          <div className={styles.row}>
+            <section className={`${styles.panel} ${styles.wide}`} aria-label="Recent activity">
+              <h2 className={styles.panelTitle}>Recent activity</h2>
+              {recentActivity.length === 0 ? (
+                <p className={styles.note}>Upload a resume or post a job to get started.</p>
+              ) : (
+                <ul className={styles.activity}>
+                  {recentActivity.map((event) => (
+                    <li key={event.id}>
+                      <span className={styles.activityLabel}>
+                        <span className={styles.activityKind}>{event.kind} · </span>
+                        <Link to={event.to}>{event.label}</Link>
+                      </span>
+                      <span className={styles.activityDate}>
+                        {new Date(event.at).toLocaleDateString(undefined, { year: "numeric", month: "short", day: "numeric" })}
+                      </span>
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </section>
 
-          <GraphTeaser delay={0.36} shouldReduceMotion={shouldReduceMotion} />
-        </div>
+            <Link to="/graph" className={styles.graphCard}>
+              <span className={styles.graphTitle}>Knowledge graph</span>
+              <span className={styles.graphText}>See who fits each job, and which required skills are missing.</span>
+              <span className={styles.graphLink}>Open the graph</span>
+              <svg className={styles.graphGlyph} viewBox="0 0 120 120" aria-hidden="true">
+                <circle cx="60" cy="60" r="56" fill="none" stroke="#3b4150" strokeDasharray="3 4" />
+                <circle cx="60" cy="60" r="30" fill="none" stroke="#3b4150" strokeDasharray="3 4" />
+                <rect x="47" y="52" width="26" height="16" rx="4" fill="#ffffff" />
+                <circle cx="60" cy="27" r="7" fill="#5b74cf" />
+                <circle cx="88" cy="74" r="6" fill="#5b74cf" />
+                <circle cx="12" cy="66" r="6" fill="none" stroke="#e08a3c" strokeWidth="3" />
+                <circle cx="100" cy="24" r="4" fill="#3b4150" />
+              </svg>
+            </Link>
+          </div>
+        </>
       )}
     </div>
-  );
-}
-
-function Hero({ recruiter, candidateCount, jobCount, loading, shouldReduceMotion }) {
-  // A real, derived one-line summary -- built only from counts this page already
-  // fetched, never a placeholder/fabricated figure (§22, and this phase's own "no
-  // fake metrics" requirement). Omitted entirely while loading rather than
-  // guessing at zero.
-  const summary =
-    !loading &&
-    `${candidateCount} candidate${candidateCount === 1 ? "" : "s"} in the pool · ${jobCount} job${
-      jobCount === 1 ? "" : "s"
-    } posted`;
-
-  return (
-    <motion.div
-      className={styles.hero}
-      initial={shouldReduceMotion ? false : { opacity: 0, y: 16 }}
-      animate={{ opacity: 1, y: 0 }}
-      transition={{ duration: 0.45, ease: "easeOut" }}
-    >
-      <div className={styles.heroText}>
-        <span className={styles.heroEyebrow}>Command Center</span>
-        <h1 className={styles.heroTitle}>
-          Welcome back{recruiter?.email ? "," : ""}
-          {recruiter?.email && <span className={styles.heroName}> {recruiter.email}</span>}
-        </h1>
-        {summary && <p className={styles.heroSubtitle}>{summary}</p>}
-      </div>
-
-      <div className={styles.quickActions}>
-        <Link to="/upload" className={styles.actionPrimary}>
-          Upload Resume
-        </Link>
-        <Link to="/jobs" className={styles.actionSecondary}>
-          New Job
-        </Link>
-        <Link to="/candidates" className={styles.actionSecondary}>
-          View Candidates
-        </Link>
-      </div>
-    </motion.div>
-  );
-}
-
-/** A horizontal segmented bar, one segment per application status, width
- * proportional to its real share of `total` -- the "pipeline visualization" this
- * phase's brief asks for, built entirely from `statusCounts` (the exact numbers
- * already rendered as text in the legend below it, never a separate/divergent
- * calculation). Segment widths animate in on mount; a zero-count status renders no
- * segment at all rather than a zero-width sliver. */
-function StatusDistributionBar({ statusCounts, total }) {
-  const shouldReduceMotion = useReducedMotion();
-
-  return (
-    <div className={styles.distributionBar} role="img" aria-label="Application status distribution">
-      {statusCounts.map(({ status, count }) => {
-        if (count === 0) return null;
-        const percent = (count / total) * 100;
-        return (
-          <motion.div
-            key={status}
-            className={`${styles.distributionSegment} ${styles[`segment-${status}`]}`}
-            initial={shouldReduceMotion ? false : { width: 0 }}
-            animate={{ width: `${percent}%` }}
-            transition={{ duration: 0.6, ease: "easeOut" }}
-            title={`${STATUS_LABELS[status]}: ${count}`}
-          />
-        );
-      })}
-    </div>
-  );
-}
-
-/** Plain fade/slide-in wrapper shared by the two bento panels -- a small, local,
- * two-consumer helper (not promoted to components/, per this project's own
- * "duplication over premature abstraction" rule) rather than repeating the same
- * five motion props twice. */
-function FadeInSection({ className, delay, shouldReduceMotion, children }) {
-  return (
-    <motion.section
-      className={className}
-      initial={shouldReduceMotion ? false : { opacity: 0, y: 12 }}
-      animate={{ opacity: 1, y: 0 }}
-      transition={{ duration: 0.4, delay, ease: "easeOut" }}
-    >
-      {children}
-    </motion.section>
-  );
-}
-
-/** Purely decorative + navigational -- "subtle visual connection to the graph
- * feature" per this phase's brief. Deliberately shows no number of its own: this
- * page does not fetch graph data (no new API call, per this phase's own
- * requirement), so there is nothing real to count here without one. The three-dot
- * glyph echoes MatchGraph's own candidate/job node styling (see
- * components/MatchGraph.jsx) at a glance, not a literal graph render. */
-function GraphTeaser({ delay, shouldReduceMotion }) {
-  return (
-    <motion.div
-      initial={shouldReduceMotion ? false : { opacity: 0, y: 12 }}
-      animate={{ opacity: 1, y: 0 }}
-      transition={{ duration: 0.4, delay, ease: "easeOut" }}
-      whileHover={shouldReduceMotion ? undefined : { y: -2 }}
-      className={styles.graphTeaser}
-    >
-      <svg className={styles.graphGlyph} viewBox="0 0 64 40" fill="none" aria-hidden="true">
-        <circle cx="12" cy="12" r="4" className={styles.glyphViolet} />
-        <circle cx="12" cy="28" r="4" className={styles.glyphViolet} />
-        <circle cx="46" cy="20" r="5.5" className={styles.glyphCyan} />
-        <path d="M16 14 42 19M16 26 42 21" stroke="currentColor" strokeWidth="1.2" className={styles.glyphLine} />
-      </svg>
-      <div>
-        <h2 className={styles.panelTitle}>Knowledge Graph</h2>
-        <p className={styles.graphTeaserText}>
-          Explore how every candidate connects to every role, scored and qualified.
-        </p>
-      </div>
-      <Link to="/graph" className={styles.graphTeaserLink}>
-        Open graph →
-      </Link>
-    </motion.div>
   );
 }

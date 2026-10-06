@@ -7,47 +7,33 @@ knowledge graph. It does **not** cover backend implementation, system-wide
 architecture, or cross-service demo readiness — those live in the repo-root
 `handoff.md`; this file must never contradict it.
 
-**Status: feature-complete, no outstanding frontend task** (see `[NEXT]` at
-the end — phase 2 of the interview-round notification feature milestone 25
-started (ICS + reschedule/cancel notifications, `handoff.md` milestone 42)
-is now done and needed zero frontend changes, confirming this section's own
-prior prediction; milestone 22 added a small, real-browser-
-verified badge/banner for JD-extraction validation, milestone 23 added a
-distinct "Auto-repaired" badge/note on top of that for the backend's
-automatic JD-repair pass, milestone 24 corrected that messaging's wording
-after a backend reliability audit found it overclaiming "extraction" as the
-cause for every flagged job, and milestone 25 added the interviewer-email/
-location scheduling fields and a notification-status badge + resend action
-for the backend's new interview-round email notifications). Every planned
-page, the full V2 dark visual redesign, an
-optional 3D graph mode, and the VoiceHR language eligibility gate/assessment
-UI are built and have each been confirmed rendering correctly in a real
-browser (not just build-verified) at least once.
+**Status: feature-complete, no outstanding frontend task** (see `[NEXT]` at the end).
+Milestone 26 replaced the V2 dark "command center" look with a light, calm
+operations theme (dark sidebar, white surfaces, IBM Plex Sans/Mono, one blue
+accent, orange for "high score but missing something") and rebuilt the
+knowledge graph as three views (focus on a job, candidate-by-job overview,
+3D landscape). Every page was redesigned against a reviewed canvas mockup and
+checked in a real browser against the running stack; see milestone 26 for what
+was and was not exercised.
 
 ---
 
 ## Current state
 
 All 12 routes below are implemented, wired to real RWS endpoints (no mocked
-data anywhere), and cross-linked (every candidate/job/report reference in one
-page's data links to that entity's own detail page). The entire authenticated
-app shell + all eleven post-login screens use the V2 dark "AI recruitment
-command center" design system; `LoginPage` alone stays on the original light
-theme (pre-auth, deliberately out of scope for the redesign).
+data anywhere), and cross-linked. Every screen, `LoginPage` included, now uses
+the one light theme from milestone 26; the sidebar is the only dark surface.
 
-Verified in a real browser (Playwright against a Chromium binary already
-cached on this machine — no browser had ever been available in earlier
-sessions, so every claim below is a genuine upgrade over "build succeeded"):
-full login → Dashboard → Candidates → Candidate Detail → Jobs → Job Detail →
-Applications → Report Detail → Reports → Interviews → Knowledge Graph 2D
-(search + filter) → 3D → back to 2D → logout → re-login walkthrough, desktop
-and mobile (390px), zero unexplained console errors, no broken cross-link.
+The theme lives in `styles/variables.css`. The `--v2-*` token names were kept
+(every stylesheet already reads them) and only their values changed; the
+sidebar has its own `--sb-*` tokens. Fonts are self-hosted through
+`@fontsource/ibm-plex-sans` and `@fontsource/ibm-plex-mono` (imported in
+`main.jsx`), so the demo renders identically offline.
 
-Production build: `npm run build` → `dist/`, served same-origin by RWS's own
-FastAPI app (no separate frontend server, no CORS). The 3D graph's dependency
-(`3d-force-graph` + `three`, ~337 kB gzipped) is lazy-loaded — confirmed via
-built-chunk inspection that it never enters the app's normal bundle; only
-`/graph` even has the option to load it, and only once a user picks "3D".
+Production build: `npm run build` -> `dist/`, served same-origin by RWS's own
+FastAPI app (no separate frontend server, no CORS). three.js is lazy-loaded
+with the 3D view only (`components/graph/Landscape3D.jsx`, its own chunk);
+Cytoscape, `react-cytoscapejs` and `3d-force-graph` were removed.
 
 ---
 
@@ -104,18 +90,18 @@ Verified directly against `src/router/AppRouter.jsx`.
 
 | Route | Access | Page |
 |---|---|---|
-| `/login` | Public | `LoginPage` (still V1 light theme) |
+| `/login` | Public | `LoginPage` (split layout: product statement + sign-in form) |
 | `/` | Protected | `DashboardPage` |
 | `/candidates` | Protected | `CandidatesPage` |
-| `/candidates/:candidateId` | Protected | `CandidateDetailPage` (knowledge, applications, ego graph) |
+| `/candidates/:candidateId` | Protected | `CandidateDetailPage` (job matches with the reason for each result, applications, knowledge, contact) |
 | `/jobs` | Protected | `JobsListPage` |
 | `/upload` | Protected | `ResumeUploadPage` |
-| `/jobs/:jobId` | Protected | `JobDetailPage` (ranked matches) |
+| `/jobs/:jobId` | Protected | `JobDetailPage` (ranked matches, coverage, result, expandable score detail) |
 | `/jobs/:jobId/applications` | Protected | `ApplicationsPage` |
 | `/interviews` | Protected | `InterviewsPage` (global, unscoped) |
 | `/reports` | Protected | `ReportsPage` |
 | `/reports/:applicationId` | Protected | `ReportDetailPage` |
-| `/graph` | Protected | `GraphPage` (2D/3D knowledge graph) |
+| `/graph` | Protected | `GraphPage` (focus / overview / 3D landscape; `?view=&job=&candidate=` deep links) |
 | `*` | Protected fallback | redirects to `/` (or `/login` first if unauthenticated) |
 
 All protected routes nest under one `ProtectedRoute` → `Layout` wrapper; no
@@ -143,7 +129,7 @@ this table adds only the frontend-specific consumption notes.
 | Schedule / reschedule / complete / cancel interview round | `POST /v1/applications/{id}/interview-rounds`, `.../{round_id}/reschedule\|complete\|cancel` | `api/applications.js`'s `createInterviewRound`/`rescheduleInterviewRound`/`completeInterviewRound`/`cancelInterviewRound`; `ApplicationsPage` only — see below. **Milestone 25**: `createInterviewRound` now also sends required `interviewerEmail`/optional `location`, and every round response carries `notification_status`/`notification_error` (phase 1 of automating human interview scheduling, see `handoff.md` milestone 41) |
 | Resend interview-round notification | `POST /v1/applications/{id}/interview-rounds/{round_id}/resend-notification` | **Milestone 25.** `api/applications.js`'s `resendInterviewRoundNotification`; `ApplicationsPage` only, shown solely when a round's `notification_status === "failed"`. Unlike every other action here, a `502` is a real failure outcome to render, not a bug — resending has no other value if delivery itself fails |
 | Interview report / recording | `GET /v1/interviews/{id}/report\|recording` | `ReportDetailPage`; recording played via a same-origin blob URL, RWS's proxy rewrite confirmed live — never a direct VoiceHR URL |
-| Knowledge graph | `GET /v1/graph/candidates-jobs` | `GraphPage`/`MatchGraph`/`MatchGraph3D`; see below |
+| Knowledge graph | `GET /v1/graph/candidates-jobs` | `GraphPage` and `components/graph/*`; also read best-effort by `JobsListPage` (qualified count per job) and `CandidateDetailPage` (that candidate's matches). Since milestone 26 each edge also carries the persisted `semantic_score`/`deterministic_score`/`skill_score`/`experience_score`/`title_score`; see below |
 
 **Never called from this frontend**: `POST /v1/scoring-configs` (service-key
 only) and `POST /v1/webhooks/voicehr` (HMAC-only, VoiceHR→RWS).
@@ -152,40 +138,46 @@ only) and `POST /v1/webhooks/voicehr` (HMAC-only, VoiceHR→RWS).
 
 ## 2D + 3D knowledge graph architecture
 
-**Data**: one call to `GET /v1/graph/candidates-jobs` (jobs + edges, every edge
-field copied straight off a persisted `MatchResult` — `final_score`,
-`qualified`, `hard_gate_passed`, matched/missing requirements) merged
-client-side with `GET /v1/candidates` for display names. Candidate nodes are
-derived from the unique `candidate_id`s on edges — the backend intentionally
-returns no `candidates[]` array. Both qualified and disqualified edges render
-(color-coded, not filtered) — the graph is a full audit-trail view.
+**Data**: one call to `GET /v1/graph/candidates-jobs` merged client-side with
+`GET /v1/candidates` for display names. Every edge field is copied off a
+persisted `MatchResult` (scores, components, `qualified`, `hard_gate_passed`,
+matched/missing requirements). The graph never calls
+`GET /v1/jobs/{id}/matches`: that endpoint may generate an advisory
+explanation on read, which is why the score components were added to the
+graph edge instead (`handoff.md` milestone 67).
 
-**2D (default view)** — `components/MatchGraph.jsx`, Cytoscape.js
-(`react-cytoscapejs`), `cose` force layout for the full graph / `concentric`
-for a candidate's own ego graph (embedded in `CandidateDetailPage`). Legend
-click-to-toggle qualified/disqualified, a minimum-score slider, and search all
-live in the sibling `components/GraphControls.jsx` (lifted out of `MatchGraph`
-so the same filter state survives a 2D↔3D switch). Click-to-select renders
-into the shared `components/GraphDetailPanel.jsx`.
+**Rules in one place**: `components/graph/graphModel.js` is pure (no React,
+no DOM) and unit-tested in `graphModel.test.jsx` (12 tests). A match's ring
+is read from the persisted flags only: `qualified` -> "qualified";
+not qualified with the gate failed -> "missing required skills"; not
+qualified with the gate passed -> "below the score threshold". A high score
+that failed the gate never moves inward. It also builds the overview matrix
+(a missing `MatchResult` stays `null`, distinct from a low score) and the
+radial positions.
 
-**3D (explicit, optional mode)** — `components/MatchGraph3D.jsx`, built
-directly on `3d-force-graph` (chosen over `react-force-graph`: that library
-pulled in unnecessary AR/VR dependencies and a git+SSH transitive dependency;
-`3d-force-graph`'s real dependency tree has neither, confirmed before
-installing). Reached only via `React.lazy()` — WebGL initializes only once a
-user actually clicks "3D." Reuses the same node/edge id scheme and the same
-`GraphDetailPanel` as 2D (via a plain-object selection shape both renderers
-produce identically), so the two views can never drift into different data
-semantics or a different detail experience. Real-browser-tuned (fog density,
-camera framing, node radii, glow-shell blending) after an initial pass looked
-washed-out at the default camera distance — the fix and before/after
-comparison are the kind of empirical tuning that doesn't need re-deriving
-unless the visual result changes again.
+**Focus view** (`FocusGraph.jsx`, plain SVG, no physics): one job at the
+centre, its matches on three rings, node size by score, labels only for the
+qualified ring, the best six of the middle ring and the selection.
+`MatchInspector.jsx` explains the selected match: final score, the persisted
+components, matched/missing skill chips with coverage, other jobs, and Select
+(only for qualified matches; already-selected matches read from
+`GET /v1/jobs/{id}/applications`). Nodes are keyboard-focusable buttons.
 
-**Shared, both views**: filters (qualified/disqualified toggle, min score) and
-search are owned by `GraphPage` and passed as controlled props to whichever
-renderer is mounted, so switching views never resets them. Only one renderer
-is ever mounted at a time.
+**Overview** (`MatchMatrix.jsx`): candidate x job grid, cell shade by score,
+white dot = qualified, orange outline = gate failed, dashed = not retrieved.
+Filters: sort by best/name, only jobs with a qualified candidate (default on),
+fade non-qualified. A cell opens the focus view on that job and candidate.
+
+**3D landscape** (`Landscape3D.jsx`, three.js + OrbitControls +
+CSS2DRenderer, lazy-loaded, wrapped in `SceneErrorBoundary`): the eight jobs
+with the most qualified candidates on a floor ring, each match a pin next to
+its job with height = final score, no edges. Positions are computed, so the
+scene is identical on every visit. Rotate/reset buttons, highlight-a-job
+dropdown, pin click selects the candidate.
+
+**URL state**: `view`, `job` and `candidate` live in the query string, so the
+job page ("See in graph"), the candidate page and the dashboard deep-link
+into a specific match, and the back button works.
 
 ---
 
@@ -405,6 +397,15 @@ the language gate. Covered by 18 Node-test-runner cases in
 
 ## Known limitations
 
+- **Upload processes files one after another in the browser** (milestone
+  26). `POST /v1/resumes` answers once the profile exists and RWS exposes no
+  ingestion-job status to the browser, so the "processing queue" is a
+  client-side list: it only progresses while the page stays open. Showing
+  Resume Intelligence's own durable queue would need a new RWS read endpoint.
+- **The demo database still holds smoke-test jobs.** They have many qualified
+  matches, so they dominate the 3D landscape (top 8 jobs by qualified count)
+  and can be the default focus job. `scripts/sql/clean_benchmark_rows.sql`
+  exists for this; it was deliberately not run (it deletes data).
 - **Interview-round *actions* (schedule/reschedule/complete/cancel) only
   exist on `ApplicationsPage`** — `CandidateDetailPage` shows the same
   rounds read-only (milestone 20) but has no form/button for any of the
@@ -414,49 +415,23 @@ the language gate. Covered by 18 Node-test-runner cases in
   other field on this page already works. Revisit only if a real recruiter
   workflow need for acting on a round from this specific page shows up.
 - **`JobDetailPage` has no interview-round summary, correctly** —
-  confirmed during the post-VoiceHR UX audit (milestone 20), not a silent
-  gap: this page never fetches `Application`s at all (only `MatchResult`s;
-  a match isn't an application until selected), and its existing "View
-  Applications" link already goes straight to the page with full round
-  detail. Adding a summary here would need a new API call plus match/
-  application reconciliation logic — not a small fix, and no concrete need
-  for it surfaced during the audit's real-browser walkthrough.
+  confirmed during the post-VoiceHR UX audit (milestone 20). Since milestone
+  26 it reads `GET /v1/jobs/{id}/applications`, but only to mark rows that
+  are already selected; round detail stays on the applications page, which
+  the header links to.
 - **`DashboardPage` doesn't reflect interview-round activity, correctly** —
   also confirmed during milestone 20: rounds are advisory, not a pipeline
   stage (the same reason they never gate `accept`/`reject`), so a
   dashboard-level count or recent-activity entry for them wouldn't
   correspond to any real funnel state worth surfacing at that level.
-- **`LoginPage` still renders the original V1 light theme** — deliberate, a
-  pre-auth screen never in scope for the V2 redesign.
-- **`--v2-*` and `--color-*` remain two separate token sets in
-  `variables.css`, permanently** — not a leftover to fold, on inspection
-  (milestone 17). The two dead tokens that inspection found (`--color-hover-bg`,
-  `--color-success-hover`, zero references anywhere) are gone; everything
-  else in `--color-*` is still genuinely load-bearing (`LoginPage`'s own
-  styles, `global.css`'s shared body defaults for the pre-paint/no-JS case,
-  and — since milestone 21 — `LoginPage.module.css`'s own scoped revert of
-  `global.css`'s shared `:focus-visible` rules, which default to `--v2-cyan`
-  now that every *other* page is V2) and can't be renamed onto `--v2-*`'s
-  names without breaking `LoginPage`'s light theme.
-  `--v2-*` can't be renamed onto `--color-*`'s names either: those exact
-  names are read live via `getComputedStyle()` in `MatchGraph.jsx` and
-  `MatchGraph3D.jsx`, so they're a public API, not free-floating internal
-  names. No pair of tokens across the two sets shares an actual color value
-  (`--v2-*`'s status colors were deliberately re-tuned brighter for AA
-  contrast on dark surfaces — see `variables.css`'s own comment), so there
-  was no genuine duplication to consolidate beyond the two dead tokens
-  removed. Treat this as closed, not deferred.
-- **The "V2 page panel" background treatment (aurora/grid + noise
-  pseudo-elements) is duplicated across ten page CSS files** rather than
-  extracted into one shared class — still a valid, purely-optional cleanup
-  target, deliberately skipped in milestone 17 to keep that pass's risk to
-  zero (see milestone 17).
-- **`StatusBadge`, `EmptyState`, and `PageHeader` each ship an unused
-  non-`glass` (`--color-*`-based) style branch** — every current call site
-  passes `variant="glass"`, so those rules never render, but the component
-  itself still exposes a non-glass default as part of its public contract.
-  Deliberately left alone (not "proven dead" in the same unambiguous sense
-  as an unreferenced token — it's a designed fallback, not forgotten code).
+- **Two token sets remain in `variables.css`** (`--color-*` base names read
+  by `global.css`, and the `--v2-*` theme names every stylesheet and the
+  graph components read). Since milestone 26 both hold the same light
+  palette; merging them into one set is optional cleanup, not a bug.
+- **`StatusBadge`, `EmptyState` and `PageHeader` still accept
+  `variant="glass"`** from older call sites. In the single light theme it
+  changes nothing visible (a hairline on the badge); removing the prop from
+  every caller is optional cleanup.
 - **Report audio uses the native `<audio controls>` element**, not a custom
   player — a deliberate choice (zero maintenance, fully accessible) over a
   cosmetic-only custom player.
@@ -478,8 +453,12 @@ presenter guidance) lives in `handoff.md` — this is cross-service scope, not
 frontend-only, so it is not duplicated here. Frontend-specific fact worth
 keeping close at hand: the demo sequence's entire frontend leg (Dashboard →
 Candidates → Candidate Detail → Jobs → Job Detail → Applications → Report
-Detail → Reports → Knowledge Graph 2D → 3D) was walked end to end in a real
-browser with zero broken cross-link and zero new console error.
+Detail → Reports → Knowledge Graph) was walked end to end in a real browser
+with zero broken cross-link and zero new console error before milestone 26;
+after it, every route was re-checked page by page (see milestone 26), not yet
+as one continuous walkthrough. For the defense, the graph is best shown as:
+focus view on a real job (inspector on a gate-failed candidate), then the
+overview, then the 3D landscape.
 
 ---
 
@@ -969,33 +948,47 @@ checking the actual source; use this only to orient, not to cite.
     beyond the same pre-existing orphaned-candidate 404 this section already
     calls out repeatedly.
 
+26. **Light theme + knowledge graph rebuild.** Reviewed first as an
+    11-screen canvas mockup, then implemented: token values switched to the
+    light palette (names kept), IBM Plex self-hosted, dark sidebar with the
+    account/log-out moved into it (`TopBar` removed), status tones remapped
+    (accepted = ink, rejected = neutral grey, language gate failed = orange,
+    red only for real errors). Graph rebuilt as focus/overview/3D on
+    `components/graph/*`; old `MatchGraph*`, `GraphControls`,
+    `GraphDetailPanel` and three graph dependencies removed. Page
+    restructures: Dashboard (attention panel from real counts), Jobs (table +
+    filters + side form + qualified counts), Job detail (rank, coverage,
+    result, Select only on qualified rows, already-selected rows read from
+    applications, expandable components + advisory explanation), Applications
+    (cards with progress steps), VoiceHR report (level on an A1-C2 scale,
+    weighted dimensions, collapsible transcript), Candidate profile, Upload
+    (multi-file list), Sign in. Backend: graph edges gained the five score
+    components (`handoff.md` milestone 67).
+    **Verification**: vitest 27 passed (3 files, incl. 12 new graph-model
+    tests), Node constants tests 34 passed, RWS suite 236 passed, `vite build`
+    clean. Real-browser Playwright/Edge screenshots at 1440x900 against the
+    live stack of every route (focus graph on a real job, overview, 3D, a
+    completed and an insufficient-evidence report, two applications pages,
+    expanded job-detail row, candidate profile, upload with two queued files,
+    sign-in), and again through the rebuilt RWS container on :8003.
+    **Not exercised**: a real upload through the new page (it would create a
+    candidate), Accept/Reject/schedule clicks in the new cards (logic
+    unchanged, markup moved), phone width (390px) for the new layouts, and a
+    full keyboard-only walkthrough.
+
 ---
 
 ## [NEXT]
 
-**No outstanding frontend task.** Milestone 25 (interview-round notification
-fields/badge/resend) is still the most recent *frontend code change*.
-`handoff.md`'s own milestone 42 (ICS calendar attachments + reschedule/
-cancel notifications) shipped since then and confirmed the prediction this
-section's own prior entry made: it needed zero frontend changes.
-`reschedule`/`cancel` already returned the same `InterviewRoundResponse`
-shape (`notification_status`/`notification_error`) milestone 25's badge and
-resend-button logic already renders generically, so a real reschedule/
-cancel notification just shows up correctly with no new code — confirmed by
-a real-browser pass in `handoff.md`'s own milestone 42 entry.
+**Close the gaps milestone 26 left unexercised**, in this order:
 
-`handoff.md`'s own `[NEXT]` (a real fresh end-to-end VoiceHR interview) is
-backend/manual-testing only and needs no frontend surface either.
+1. Phone width (390px) pass over the restyled pages, especially the jobs
+   table, the overview matrix and the application cards.
+2. A keyboard-only walkthrough of the focus graph (nodes are buttons with
+   Enter/Space handlers, never driven by a real keyboard yet).
+3. One real upload through the new multi-file page, on a throwaway resume.
+4. Decide with the user whether to run `scripts/sql/clean_benchmark_rows.sql`
+   before the defense, so smoke-test jobs stop dominating the graph views.
 
-Everything else on record is either a deliberate, already-documented,
-closed decision (the "V2 page panel" background duplication, the three
-shared components' unused non-`glass` branches, no pagination, native
-`<audio controls>` — see Known Limitations above, none of these are gaps
-waiting on a next session) or external and not implementable from this
-side: VoiceHR's Gemini access needs Google support/billing action, and both
-automatic invite emails and interview-round notifications need a real
-`RESEND_API_KEY` configured (each service's own key — see `handoff.md`).
-Before starting new work here, re-audit both handoff
-documents' Known Limitations for anything that became real since this was
-written — don't treat this section's silence alone as proof there's
-nothing left, the same discipline this file has asked of itself before.
+Before starting new work here, re-audit both handoff documents' Known
+Limitations for anything that became real since this was written.

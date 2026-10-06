@@ -1,6 +1,6 @@
 import styles from "./StatusBadge.module.css";
 
-const TONES = new Set(["neutral", "primary", "accent", "success", "warning", "danger"]);
+const TONES = new Set(["neutral", "primary", "accent", "success", "ink", "warning", "danger"]);
 
 /**
  * Small pill used for every status/qualification/evaluation label in the app --

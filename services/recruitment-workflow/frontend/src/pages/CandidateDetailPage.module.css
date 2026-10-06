@@ -1,237 +1,275 @@
-/* V2 design system, Phase 2 slice 2 (see FRONTEND_HANDOFF.md). Same dark-panel
-   treatment as ApplicationsPage.module.css et al.; see that file's own comment
-   for why this is safe and why the panel block is currently duplicated per page.
-   This page's own migration was prioritized specifically because "View Report"
-   links directly into ReportDetailPage, already V2/dark since Phase 22 --
-   leaving this page V1/light would have kept that drill-down seam open.
-
-   The embedded MatchGraph instance (the "Knowledge Graph" section) is
-   deliberately NOT covered by this file -- see the comment at its call site in
-   CandidateDetailPage.jsx for why. */
-
 .page {
-  position: relative;
-  max-width: 900px;
-  padding: var(--spacing-4);
-  border-radius: var(--v2-radius-lg);
-  border: 1px solid var(--v2-border);
-  background: var(--v2-bg);
-  box-shadow: var(--v2-shadow-elevated);
+  max-width: 1240px;
   color: var(--v2-text);
-  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
 }
 
-.page::before {
-  content: "";
-  position: absolute;
-  inset: 0;
-  pointer-events: none;
-  background-image:
-    radial-gradient(560px 360px at 10% 0%, var(--v2-cyan-bg), transparent 60%),
-    linear-gradient(rgba(255, 255, 255, 0.025) 1px, transparent 1px),
-    linear-gradient(90deg, rgba(255, 255, 255, 0.025) 1px, transparent 1px);
-  background-size:
-    auto,
-    36px 36px,
-    36px 36px;
+.backLink {
+  align-self: flex-start;
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--v2-cyan);
+  text-decoration: none;
 }
 
-.page::after {
-  content: "";
-  position: absolute;
-  inset: 0;
-  pointer-events: none;
-  opacity: 0.05;
-  mix-blend-mode: overlay;
-  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='200' height='200'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='2' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
+.backLink:hover {
+  text-decoration: underline;
 }
 
-.page > * {
-  position: relative;
+.header {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.who {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+}
+
+.avatar {
+  flex: 0 0 60px;
+  width: 60px;
+  height: 60px;
+  border-radius: 50%;
+  background: var(--v2-cyan);
+  color: #ffffff;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 20px;
+  font-weight: 600;
+}
+
+.whoText {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.title {
+  margin: 0;
+  font-size: var(--font-size-xl);
+  font-weight: 700;
+  letter-spacing: -0.01em;
+}
+
+.meta {
+  font-size: 14px;
+  color: var(--v2-text-muted);
+}
+
+.secondaryAction {
+  display: inline-flex;
+  align-items: center;
+  min-height: 44px;
+  padding: 0 16px;
+  border-radius: 9px;
+  border: 1px solid var(--v2-border-strong);
+  background: #ffffff;
+  color: var(--v2-text);
+  font-size: 14px;
+  font-weight: 500;
+  text-decoration: none;
+}
+
+.secondaryAction:hover {
+  border-color: var(--v2-text-faint);
 }
 
 .status {
+  margin: 0;
+  font-size: 14px;
   color: var(--v2-text-muted);
-  font-size: var(--font-size-base);
 }
 
 .error {
   background: var(--v2-danger-bg);
   color: var(--v2-danger);
-  padding: var(--spacing-2) var(--spacing-3);
-  border-radius: var(--v2-radius);
-  font-size: var(--font-size-base);
-  border: 1px solid rgba(251, 113, 133, 0.3);
+  border: 1px solid rgba(180, 35, 24, 0.25);
+  border-radius: 10px;
+  padding: 10px 12px;
+  font-size: 14px;
 }
 
-.content {
+.layout {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 18px;
+  align-items: flex-start;
+}
+
+.mainCol {
+  flex: 999 1 520px;
+  min-width: 0;
   display: flex;
   flex-direction: column;
-  gap: var(--spacing-4);
+  gap: 18px;
 }
 
-/* Phase 29 (see FRONTEND_HANDOFF.md): a real-browser audit found this page had
-   no cyan/violet accent anywhere -- every other migrated page/Dashboard uses
-   the pair somewhere, so this page's all-gray palette read as visually
-   disconnected from the rest of the app. A restrained top accent line (the
-   same device StatTile already uses on Dashboard), alternated per section,
-   ties it back in without adding any new color, gradient direction, or glow
-   intensity beyond what's already established elsewhere. */
-.section {
-  position: relative;
+.sideCol {
+  flex: 1 1 320px;
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+}
+
+.card {
   background: var(--v2-surface);
   border: 1px solid var(--v2-border);
-  border-radius: var(--v2-radius);
-  backdrop-filter: blur(var(--v2-blur));
-  -webkit-backdrop-filter: blur(var(--v2-blur));
-  padding: var(--spacing-3);
-  overflow: hidden;
+  border-radius: 14px;
+  padding: 20px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  min-width: 0;
 }
 
-.section::before {
-  content: "";
-  position: absolute;
-  top: 0;
-  left: 0;
-  right: 0;
-  height: 2px;
-}
-
-.content .section:nth-of-type(odd)::before {
-  background: linear-gradient(90deg, var(--v2-cyan), transparent 85%);
-}
-
-.content .section:nth-of-type(even)::before {
-  background: linear-gradient(90deg, var(--v2-violet), transparent 85%);
-}
-
-.sectionTitle {
-  margin: 0 0 var(--spacing-3);
-  font-size: var(--font-size-sm);
-  text-transform: uppercase;
-  letter-spacing: 0.02em;
-  color: var(--v2-text-muted);
+.cardTitle {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0;
+  font-size: 16px;
   font-weight: 600;
 }
 
-.knowledgeGrid {
+.matchList {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.matchRow {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
-  gap: var(--spacing-3);
-}
-
-.skillsField {
-  grid-column: 1 / -1;
-}
-
-.fieldLabel {
-  display: block;
-  font-size: var(--font-size-xs);
-  text-transform: uppercase;
-  letter-spacing: 0.02em;
-  color: var(--v2-text-muted);
-  font-weight: 600;
-  margin-bottom: var(--spacing-1);
-}
-
-.fieldValue {
-  margin: 0;
-  font-size: var(--font-size-base);
+  grid-template-columns: minmax(0, 1fr) auto 56px;
+  gap: 12px;
+  align-items: center;
+  padding: 12px 0;
+  border-top: 1px solid var(--v2-divider);
   color: var(--v2-text);
+  text-decoration: none;
 }
 
-/* Years of experience is this section's one headline number -- styled like
-   StatTile's own value (Dashboard) instead of plain body text, the same
-   "restrained accent, not a rewrite" reasoning as .section::before above. */
-.fieldValueAccent {
-  margin: 0;
-  font-size: 1.5rem;
-  font-weight: 700;
-  letter-spacing: -0.01em;
+.matchRow:hover .matchTitle {
   color: var(--v2-cyan);
-  font-variant-numeric: tabular-nums;
 }
 
-.chips {
+.matchText {
   display: flex;
-  flex-wrap: wrap;
-  gap: var(--spacing-1);
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
 }
 
-.chip {
-  background: var(--v2-neutral-bg);
-  color: var(--v2-text);
-  border-radius: var(--radius-pill);
-  padding: 2px 10px;
-  font-size: var(--font-size-xs);
-}
-
-/* Job titles are the smaller, more load-bearing of the two chip lists (a
-   handful of titles vs. potentially dozens of skills) -- a light violet tint
-   distinguishes them as a category without tinting every skill chip too,
-   which would read as busy/loud on a candidate with a large skill list. */
-.chipAccent {
-  background: var(--v2-violet-bg);
-  color: var(--v2-violet);
-  border-radius: var(--radius-pill);
-  padding: 2px 10px;
-  font-size: var(--font-size-xs);
+.matchTitle {
+  font-size: 14px;
   font-weight: 600;
 }
 
-.tableWrapper {
-  overflow-x: auto;
-}
-
-.table {
-  width: 100%;
-  min-width: 480px;
-  border-collapse: collapse;
-  font-size: var(--font-size-base);
-}
-
-.table th {
-  text-align: left;
-  padding: var(--spacing-2) var(--spacing-3);
+.reason {
+  font-size: 12px;
   color: var(--v2-text-muted);
-  font-weight: 600;
-  font-size: var(--font-size-xs);
-  text-transform: uppercase;
-  letter-spacing: 0.02em;
-  border-bottom: 1px solid var(--v2-border);
 }
 
-.table td {
-  padding: var(--spacing-2) var(--spacing-3);
-  border-bottom: 1px solid var(--v2-border);
-  vertical-align: middle;
-  color: var(--v2-text);
+.reasonWarn {
+  font-size: 12px;
+  color: var(--v2-warning);
 }
 
-.table tr:last-child td {
-  border-bottom: none;
+.matchScore {
+  font-family: var(--font-mono);
+  font-size: 15px;
+  text-align: right;
 }
 
-.interviewStatusEmpty {
-  color: var(--v2-text-faint);
-}
-
-.roundsCell {
-  min-width: 140px;
-}
-
-.roundsList {
+.appRow {
   display: flex;
   flex-wrap: wrap;
-  gap: var(--spacing-1);
+  align-items: center;
+  gap: 10px 14px;
+  padding: 12px 14px;
+  border: 1px solid var(--v2-divider);
+  border-radius: 10px;
+}
+
+.appJob {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--v2-text);
+  text-decoration: none;
+}
+
+.appJob:hover {
+  color: var(--v2-cyan);
+}
+
+.appMeta {
+  font-size: 13px;
+  color: var(--v2-text-muted);
+}
+
+.appRounds {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
 }
 
 .inlineLink {
-  color: var(--v2-cyan);
+  margin-left: auto;
+  font-size: 13px;
   font-weight: 500;
+  color: var(--v2-cyan);
   text-decoration: none;
 }
 
 .inlineLink:hover {
   text-decoration: underline;
+}
+
+.field {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.fieldLabel {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--v2-text-muted);
+}
+
+.fieldValue {
+  font-size: 14px;
+  line-height: 1.5;
+}
+
+.fieldValueMono {
+  font-family: var(--font-mono);
+  font-size: 18px;
+}
+
+.chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.chip {
+  padding: 4px 10px;
+  border-radius: 999px;
+  background: var(--v2-neutral-bg);
+  font-size: 12px;
+  font-weight: 500;
+}
+
+.note {
+  font-size: 12px;
+  color: var(--v2-text-muted);
+  line-height: 1.5;
 }

@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { Link, useParams } from "react-router-dom";
 import { getJobs, getJobMatches, setJobLanguageRequirement } from "../api/jobs.js";
-import { selectMatch } from "../api/applications.js";
+import { getApplications, selectMatch } from "../api/applications.js";
 import { ApiError } from "../api/client.js";
 import { useCandidateIdentity } from "../hooks/useCandidateIdentity.js";
 import PageHeader from "../components/PageHeader.jsx";
@@ -20,6 +20,7 @@ export default function JobDetailPage() {
 
   const [job, setJob] = useState(null); // best-effort header info from GET /v1/jobs
   const [matches, setMatches] = useState([]);
+  const [selectedMatchIds, setSelectedMatchIds] = useState(new Set()); // already selected, from GET applications
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
 
@@ -41,6 +42,12 @@ export default function JobDetailPage() {
       .then((jobs) => setJob(jobs.find((j) => j.job_id === jobId) ?? null))
       .catch(() => setJob(null));
 
+    // Also best-effort: which matches already have an application, so their row says
+    // "Selected" from the start instead of offering a selection RWS would refuse (409).
+    getApplications(jobId)
+      .then((applications) => setSelectedMatchIds(new Set(applications.map((app) => app.match_result_id))))
+      .catch(() => setSelectedMatchIds(new Set()));
+
     // The matches call is the page's real data and the real source of "does this job
     // exist" -- GET /v1/jobs/{job_id}/matches 404s if it doesn't. Always fetched fresh
     // here (never from router/navigation state), so a hard browser refresh on this URL
@@ -55,22 +62,32 @@ export default function JobDetailPage() {
     }
   }
 
+  const qualifiedCount = matches.filter((match) => match.qualified).length;
+
   return (
     <div className={styles.page}>
+      <Link to="/jobs" className={styles.backLink}>
+        Back to jobs
+      </Link>
       <PageHeader
-        title={job ? job.title : "Job Detail"}
+        title={job ? job.title : "Job detail"}
         subtitle={
           job &&
-          `${job.match_count} candidate${job.match_count === 1 ? "" : "s"} matched · posted ${new Date(
-            job.created_at
-          ).toLocaleDateString(undefined, { year: "numeric", month: "short", day: "numeric" })}`
+          `${job.match_count} matched · ${qualifiedCount} qualified · posted ${new Date(job.created_at).toLocaleDateString(
+            undefined,
+            { year: "numeric", month: "short", day: "numeric" },
+          )}`
         }
         actions={
-          <Link to={`/jobs/${jobId}/applications`} className={styles.applicationsLink}>
-            View Applications
-          </Link>
+          <>
+            <Link to={`/graph?job=${jobId}`} className={styles.secondaryAction}>
+              See in graph
+            </Link>
+            <Link to={`/jobs/${jobId}/applications`} className={styles.primaryAction}>
+              Applications
+            </Link>
+          </>
         }
-        variant="glass"
       />
 
       {job && <LanguageRequirementSection job={job} onUpdated={setJob} />}
@@ -120,15 +137,22 @@ export default function JobDetailPage() {
           <table className={styles.table}>
             <thead>
               <tr>
+                <th className={styles.rankCol}>#</th>
                 <th>Candidate</th>
-                <th>Score</th>
-                <th>Qualified</th>
+                <th>Final score</th>
+                <th>Required skills</th>
+                <th>Result</th>
                 <th aria-label="Actions" />
               </tr>
             </thead>
             <tbody>
-              {matches.map((match) => (
-                <CandidateRow key={match.match_id} match={match} />
+              {matches.map((match, index) => (
+                <CandidateRow
+                  key={match.match_id}
+                  match={match}
+                  rank={index + 1}
+                  alreadySelected={selectedMatchIds.has(match.match_id)}
+                />
               ))}
             </tbody>
           </table>
@@ -138,10 +162,18 @@ export default function JobDetailPage() {
   );
 }
 
-function CandidateRow({ match }) {
+// The three outcomes, read off the persisted flags only (same rule as the graph).
+function resultOf(match) {
+  if (match.qualified) return { label: "Qualified", tone: "success" };
+  if (!match.hard_gate_passed) return { label: "Missing required skills", tone: "warning" };
+  return { label: "Below threshold", tone: "neutral" };
+}
+
+function CandidateRow({ match, rank, alreadySelected }) {
   const identity = useCandidateIdentity(match.candidate_id);
   const [expanded, setExpanded] = useState(false);
-  const [selectStatus, setSelectStatus] = useState("idle"); // idle | selecting | selected | error
+  const [selectState, setSelectStatus] = useState("idle"); // idle | selecting | selected | error
+  const selectStatus = alreadySelected ? "selected" : selectState;
   const [selectError, setSelectError] = useState(null);
 
   const displayName =
@@ -176,60 +208,60 @@ function CandidateRow({ match }) {
     }
   }
 
+  const result = resultOf(match);
+  const matchedCount = match.matched_requirements?.length ?? 0;
+  const requiredCount = matchedCount + (match.missing_requirements?.length ?? 0);
+  const coverage = requiredCount ? matchedCount / requiredCount : null;
+  const detailId = `match-detail-${match.match_id}`;
+
   return (
     <>
-      <tr
-        className={styles.row}
-        onClick={() => setExpanded((value) => !value)}
-        onKeyDown={(event) => {
-          if (event.key === "Enter" || event.key === " ") {
-            if (event.key === " ") event.preventDefault();
-            setExpanded((value) => !value);
-          }
-        }}
-        role="button"
-        tabIndex={0}
-      >
+      <tr className={`${styles.row} ${expanded ? styles.rowOpen : ""}`}>
+        <td className={`${styles.rankCol} ${styles.mono}`}>{rank}</td>
         <td>
-          <Link
-            to={`/candidates/${match.candidate_id}`}
-            className={styles.candidateName}
-            onClick={(event) => event.stopPropagation()}
-          >
-            {displayName}
-          </Link>
-          {identity.status === "error" && (
-            <span className={styles.identityWarning}> (name unavailable)</span>
-          )}
-        </td>
-        <td>
-          <ScoreBar value={match.final_score} />
-        </td>
-        <td>
-          <StatusBadge variant="glass" tone={match.qualified ? "success" : "neutral"}>
-            {match.qualified ? "Qualified" : "Not qualified"}
-          </StatusBadge>
-        </td>
-        <td onClick={(event) => event.stopPropagation()}>
-          {selectStatus === "selected" ? (
-            <span className={styles.selectedLabel}>Selected ✓</span>
-          ) : (
+          <div className={styles.nameCell}>
             <button
               type="button"
-              className={styles.selectButton}
-              onClick={handleSelect}
-              disabled={!match.qualified || selectStatus === "selecting"}
-              title={!match.qualified ? "Only qualified candidates can be selected" : undefined}
+              className={styles.expandButton}
+              onClick={() => setExpanded((value) => !value)}
+              aria-expanded={expanded}
+              aria-controls={detailId}
+              aria-label={`${expanded ? "Hide" : "Show"} the score details of ${displayName}`}
             >
-              {selectStatus === "selecting" ? "Selecting…" : "Select"}
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                <path d="M9 6l6 6-6 6" />
+              </svg>
             </button>
-          )}
+            <Link to={`/candidates/${match.candidate_id}`} className={styles.candidateName}>
+              {displayName}
+            </Link>
+            {identity.status === "error" && <span className={styles.identityWarning}>(name unavailable)</span>}
+          </div>
+        </td>
+        <td>
+          <ScoreBar value={match.final_score} qualified={match.qualified} />
+        </td>
+        <td className={`${styles.mono} ${match.hard_gate_passed ? styles.coverageOk : styles.coverageLow}`}>
+          {coverage === null ? "—" : `${matchedCount}/${requiredCount} · ${coverage.toFixed(2)}`}
+        </td>
+        <td>
+          <StatusBadge tone={result.tone}>{result.label}</StatusBadge>
+        </td>
+        <td className={styles.actionCell}>
+          {match.qualified &&
+            (selectStatus === "selected" ? (
+              <span className={styles.selectedLabel}>Selected</span>
+            ) : (
+              <button type="button" className={styles.selectButton} onClick={handleSelect} disabled={selectStatus === "selecting"}>
+                {selectStatus === "selecting" ? "Selecting…" : "Select"}
+              </button>
+            ))}
         </td>
       </tr>
 
       {selectError && (
         <tr>
-          <td colSpan={4}>
+          <td colSpan={6}>
             <div className={styles.error} role="alert">
               {selectError}
             </div>
@@ -238,30 +270,46 @@ function CandidateRow({ match }) {
       )}
 
       {expanded && (
-        <tr>
-          <td colSpan={4}>
+        <tr className={styles.detailRow} id={detailId}>
+          <td colSpan={6}>
             <div className={styles.detail}>
-              <div className={styles.scoreBreakdown}>
-                <ScoreDetail label="Deterministic score" value={match.deterministic_score} />
-                <ScoreDetail label="Semantic score" value={match.semantic_score} />
-                <ScoreDetail label="Skill score" value={match.skill_score} />
-                <ScoreDetail label="Experience score" value={match.experience_score} />
-                <ScoreDetail label="Title score" value={match.title_score} />
-                <div className={styles.scoreDetailRow}>
-                  <span>Hard gate passed</span>
-                  <span>{match.hard_gate_passed ? "Yes" : "No"}</span>
-                </div>
+              <div className={styles.detailBlock}>
+                <span className={styles.detailTitle}>Score components</span>
+                <ScoreDetail label="Semantic" value={match.semantic_score} light />
+                <ScoreDetail label="Deterministic" value={match.deterministic_score} />
+                <ScoreDetail label="· Skills" value={match.skill_score} small />
+                <ScoreDetail label="· Experience" value={match.experience_score} small />
+                <ScoreDetail label="· Title" value={match.title_score} small />
               </div>
 
-              <RequirementChips label="Matched requirements" items={match.matched_requirements} tone="matched" />
-              <RequirementChips label="Missing requirements" items={match.missing_requirements} tone="missing" />
-
-              {match.explanation && (
-                <div className={styles.explanation}>
-                  <span className={styles.explanationLabel}>AI explanation</span>
-                  <p>{match.explanation}</p>
+              <div className={styles.detailBlock}>
+                <span className={styles.detailTitle}>Required skills</span>
+                <div className={styles.chips}>
+                  {match.matched_requirements.map((item) => (
+                    <span key={`m-${item}`} className={styles.chipMatched}>
+                      {item}
+                    </span>
+                  ))}
+                  {match.missing_requirements.map((item) => (
+                    <span key={`x-${item}`} className={styles.chipMissing}>
+                      {item}
+                    </span>
+                  ))}
+                  {requiredCount === 0 && <span className={styles.muted}>This job lists no required skill.</span>}
                 </div>
-              )}
+                <span className={styles.muted}>
+                  {match.hard_gate_passed ? "The required-skill gate passed." : "The required-skill gate failed, so this match cannot qualify."}
+                </span>
+              </div>
+
+              <div className={`${styles.detailBlock} ${styles.detailWide}`}>
+                <span className={styles.detailTitle}>
+                  AI explanation <span className={styles.advisory}>advisory, written after the score</span>
+                </span>
+                <p className={styles.explanationText}>
+                  {match.explanation ?? "Not generated yet. Only a few are written per visit, so it appears on a later visit to this page."}
+                </p>
+              </div>
             </div>
           </td>
         </tr>
@@ -374,42 +422,27 @@ function LanguageRequirementSection({ job, onUpdated }) {
   );
 }
 
-function ScoreBar({ value }) {
+function ScoreBar({ value, qualified }) {
   const percent = Math.round(value * 100);
   return (
     <div className={styles.scoreBarWrapper} aria-label={`Score: ${percent}%`}>
       <div className={styles.scoreBarTrack}>
-        <div className={styles.scoreBarFill} style={{ width: `${percent}%` }} />
+        <div className={qualified ? styles.scoreBarFill : styles.scoreBarFillMuted} style={{ width: `${percent}%` }} />
       </div>
       <span className={styles.scoreBarLabel}>{percent}%</span>
     </div>
   );
 }
 
-function ScoreDetail({ label, value }) {
+function ScoreDetail({ label, value, light, small }) {
+  const percent = Math.round(value * 100);
   return (
-    <div className={styles.scoreDetailRow}>
+    <div className={`${styles.scoreDetailRow} ${small ? styles.scoreDetailSmall : ""}`}>
       <span>{label}</span>
-      <span>{Math.round(value * 100)}%</span>
-    </div>
-  );
-}
-
-function RequirementChips({ label, items, tone }) {
-  if (!items || items.length === 0) return null;
-  return (
-    <div className={styles.chipGroup}>
-      <span className={styles.chipGroupLabel}>{label}</span>
-      <div className={styles.chips}>
-        {items.map((item) => (
-          <span
-            key={item}
-            className={tone === "matched" ? styles.chipMatched : styles.chipMissing}
-          >
-            {item}
-          </span>
-        ))}
-      </div>
+      <span className={styles.miniTrack}>
+        <span className={light ? styles.miniFillLight : styles.miniFill} style={{ width: `${percent}%` }} />
+      </span>
+      <span className={styles.mono}>{percent}</span>
     </div>
   );
 }

@@ -1,26 +1,27 @@
 .header {
   display: flex;
-  align-items: flex-start;
+  align-items: flex-end;
   justify-content: space-between;
   gap: var(--spacing-3);
   flex-wrap: wrap;
-  margin-bottom: var(--spacing-4);
+  margin-bottom: 20px;
 }
 
 .title {
-  margin: 0 0 var(--spacing-1);
+  margin: 0 0 6px;
   font-size: var(--font-size-xl);
   font-weight: 700;
   letter-spacing: -0.01em;
+  color: var(--v2-text);
 }
 
 .subtitle {
   margin: 0;
-  color: var(--color-text-muted);
-  font-size: var(--font-size-base);
+  color: var(--v2-text-muted);
+  font-size: 14px;
 }
 
-/* V2 design system, Phase 2 -- opt-in dark-surface variant, see PageHeader.jsx. */
+/* Kept so existing callers passing variant="glass" stay valid; same look. */
 .glass .subtitle {
   color: var(--v2-text-muted);
 }
@@ -30,6 +31,7 @@
   align-items: center;
   gap: var(--spacing-2);
   flex-shrink: 0;
+  flex-wrap: wrap;
 }
 
 @media (max-width: 480px) {

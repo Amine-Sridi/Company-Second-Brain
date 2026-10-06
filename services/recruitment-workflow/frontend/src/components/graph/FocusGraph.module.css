@@ -1,0 +1,163 @@
+.svg {
+  display: block;
+  width: 100%;
+  max-width: 760px;
+  height: auto;
+  margin: 0 auto;
+  font-family: var(--font-sans);
+  user-select: none;
+}
+
+.compact {
+  max-width: 560px;
+}
+
+.ring {
+  fill: none;
+  stroke: #d5d9e0;
+  stroke-width: 1;
+  stroke-dasharray: 4 5;
+}
+
+.ringCaption text {
+  font-size: 11px;
+  font-weight: 500;
+  letter-spacing: 0.02em;
+  paint-order: stroke;
+  stroke: #ffffff;
+  stroke-width: 6px;
+  stroke-linejoin: round;
+}
+
+.caption_qualified text {
+  fill: var(--v2-success);
+}
+
+.caption_gate text {
+  fill: var(--v2-warning);
+}
+
+.caption_below text {
+  fill: var(--v2-text-muted);
+}
+
+/* Edges: solid blue for qualified, dashed orange for the gate ring, faint grey
+   for the rest. The selected one is drawn at full strength. */
+.edge {
+  stroke-linecap: round;
+}
+
+.edge_qualified {
+  stroke: var(--v2-cyan);
+  stroke-width: 3;
+  opacity: 0.75;
+}
+
+.edge_gate {
+  stroke: var(--v2-warning-strong);
+  stroke-width: 2;
+  stroke-dasharray: 7 5;
+  opacity: 0.55;
+}
+
+.edge_below {
+  stroke: #a3aab6;
+  stroke-width: 1;
+  opacity: 0.35;
+}
+
+.edgeSelected {
+  opacity: 1;
+}
+
+.center rect {
+  fill: var(--v2-ink);
+  filter: drop-shadow(0 6px 14px rgba(20, 22, 28, 0.22));
+}
+
+.centerTitle {
+  fill: #ffffff;
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.centerSub {
+  fill: #b9bec9;
+  font-family: var(--font-mono);
+  font-size: 11px;
+}
+
+.node {
+  cursor: pointer;
+  outline: none;
+}
+
+.dot {
+  stroke: #ffffff;
+  stroke-width: 2;
+  transition: transform var(--v2-transition);
+}
+
+.node:hover .dot,
+.node:focus-visible .dot {
+  transform: scale(1.12);
+}
+
+.node:focus-visible .halo,
+.node:focus-visible .dot {
+  stroke: var(--v2-ink);
+}
+
+.node_qualified .dot {
+  fill: var(--v2-cyan);
+}
+
+.node_gate .dot {
+  fill: #ffffff;
+  stroke: var(--v2-warning-strong);
+  stroke-width: 3;
+}
+
+.node_below .dot {
+  fill: var(--v2-neutral-strong);
+}
+
+.halo {
+  fill: #ffffff;
+  stroke: var(--v2-ink);
+  stroke-width: 2.5;
+}
+
+.initials {
+  font-size: 11px;
+  font-weight: 600;
+  pointer-events: none;
+}
+
+.node_qualified .initials {
+  fill: #ffffff;
+}
+
+.node_gate .initials {
+  fill: var(--v2-warning);
+}
+
+.label {
+  font-size: 12px;
+  font-weight: 500;
+  fill: var(--v2-text);
+  paint-order: stroke;
+  stroke: #ffffff;
+  stroke-width: 5px;
+  stroke-linejoin: round;
+  pointer-events: none;
+}
+
+.labelScore {
+  font-family: var(--font-mono);
+  fill: var(--v2-text-muted);
+}
+
+.nodeSelected .label {
+  font-weight: 700;
+}

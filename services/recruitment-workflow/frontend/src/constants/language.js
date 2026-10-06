@@ -32,7 +32,9 @@ export const LANGUAGE_GATE_TONE = {
   not_required: "neutral",
   pending: "primary",
   passed: "success",
-  failed: "danger",
+  // Below the requirement is a screening result, not a system error: orange, like
+  // every other "high but missing something" signal in the app.
+  failed: "warning",
   needs_review: "warning",
 };
 

@@ -1,7 +1,7 @@
 .emptyState {
-  background: var(--color-surface);
-  border: 1px dashed var(--color-border);
-  border-radius: var(--radius);
+  background: var(--v2-surface);
+  border: 1px dashed var(--v2-border-strong);
+  border-radius: 12px;
   padding: var(--spacing-5) var(--spacing-4);
   text-align: center;
 }
@@ -9,30 +9,17 @@
 .title {
   margin: 0;
   font-weight: 600;
-  color: var(--color-text);
+  color: var(--v2-text);
   font-size: var(--font-size-base);
 }
 
 .description {
   margin: var(--spacing-1) 0 0;
-  color: var(--color-text-muted);
+  color: var(--v2-text-muted);
   font-size: var(--font-size-sm);
 }
 
-/* V2 design system, Phase 1 -- opt-in dark-surface variant, see EmptyState.jsx.
-   Two classes (higher specificity than the plain rules above) so this wins
-   without editing them. */
+/* Kept so existing callers passing variant="glass" stay valid; same look. */
 .emptyState.glass {
   background: var(--v2-surface);
-  border: 1px dashed var(--v2-border-strong);
-  backdrop-filter: blur(var(--v2-blur));
-  -webkit-backdrop-filter: blur(var(--v2-blur));
-}
-
-.glass .title {
-  color: var(--v2-text);
-}
-
-.glass .description {
-  color: var(--v2-text-muted);
 }

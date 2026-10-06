@@ -6,12 +6,8 @@ import PageHeader from "../components/PageHeader.jsx";
 import styles from "./ResumeUploadPage.module.css";
 
 const ACCEPTED_EXTENSIONS = ".pdf,.docx,.jpg,.jpeg,.png";
-const ACCEPTED_LABEL = "PDF, DOCX, JPG, JPEG, or PNG";
+const ACCEPTED_LABEL = "PDF, DOCX, JPG or PNG";
 
-// Phase 29 (see FRONTEND_HANDOFF.md): a real-browser audit found this drop
-// zone read as a bland, text-only box compared to the rest of the app's
-// visual polish -- same hand-authored inline-SVG style Sidebar.jsx's own nav
-// icons already use, not a new icon font/library dependency.
 function IconUploadGlyph(props) {
   return (
     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" {...props}>
@@ -22,185 +18,186 @@ function IconUploadGlyph(props) {
   );
 }
 
+const STATUS_TEXT = {
+  waiting: "Waiting",
+  uploading: "Reading and structuring",
+  created: "Profile created",
+  existing: "Already in the pool",
+  failed: "Failed",
+};
+
+let nextId = 1;
+
+/**
+ * Adds resumes to the pool. Several files can be chosen at once; they are sent one
+ * after another through the same POST /v1/resumes call (RWS forwards each to Resume
+ * Intelligence with its own service key), and each row shows its own outcome. A
+ * failed file never creates a half-empty candidate, so retrying it is safe.
+ *
+ * The browser waits for each file to finish (the endpoint answers once the profile
+ * exists), so the list only progresses while this page stays open.
+ */
 export default function ResumeUploadPage() {
-  const [file, setFile] = useState(null);
-  const [status, setStatus] = useState("idle"); // idle | uploading | success | error
-  const [result, setResult] = useState(null);
-  const [error, setError] = useState(null);
+  const [items, setItemsState] = useState([]); // { id, file, status, candidateId?, error? }
   const [dragActive, setDragActive] = useState(false);
+  const [running, setRunning] = useState(false);
   const fileInputRef = useRef(null);
+  // The upload loop runs across several awaits, so it reads the latest list from this
+  // ref instead of a stale render's `items`.
+  const itemsRef = useRef([]);
 
-  const busy = status === "uploading";
+  function setItems(change) {
+    setItemsState((current) => {
+      const next = change(current);
+      itemsRef.current = next;
+      return next;
+    });
+  }
 
-  function chooseFile(chosenFile) {
-    if (!chosenFile || busy) return;
-    setFile(chosenFile);
-    setError(null);
-    setStatus("idle");
+  function addFiles(fileList) {
+    const files = Array.from(fileList ?? []);
+    if (files.length === 0) return;
+    setItems((current) => [...current, ...files.map((file) => ({ id: nextId++, file, status: "waiting" }))]);
+  }
+
+  function update(id, patch) {
+    setItems((current) => current.map((item) => (item.id === id ? { ...item, ...patch } : item)));
+  }
+
+  async function uploadOne(item) {
+    update(item.id, { status: "uploading", error: null });
+    try {
+      const response = await uploadResume(item.file);
+      update(item.id, { status: response.is_new ? "created" : "existing", candidateId: response.candidate_id });
+    } catch (err) {
+      update(item.id, {
+        status: "failed",
+        error: err instanceof ApiError ? err.message : "Upload failed. Please try again.",
+      });
+    }
+  }
+
+  async function processWaiting() {
+    if (running) return;
+    setRunning(true);
+    // One file at a time; files added while running are picked up too.
+    let next = itemsRef.current.find((item) => item.status === "waiting");
+    while (next) {
+      await uploadOne(next);
+      next = itemsRef.current.find((item) => item.status === "waiting");
+    }
+    setRunning(false);
   }
 
   function handleInputChange(event) {
-    chooseFile(event.target.files?.[0] ?? null);
-    // Allow re-selecting the same file after a reset.
-    event.target.value = "";
+    addFiles(event.target.files);
+    event.target.value = ""; // allow choosing the same file again later
   }
 
   function handleDrop(event) {
     event.preventDefault();
     setDragActive(false);
-    if (busy) return;
-    chooseFile(event.dataTransfer.files?.[0] ?? null);
-  }
-
-  function handleDragOver(event) {
-    event.preventDefault();
-    if (busy) return;
-    setDragActive(true);
-  }
-
-  function handleDragLeave() {
-    setDragActive(false);
+    addFiles(event.dataTransfer.files);
   }
 
   function openFilePicker() {
-    if (busy) return;
     fileInputRef.current?.click();
   }
 
-  function clearSelectedFile(event) {
-    event.stopPropagation();
-    setFile(null);
-    setError(null);
+  function retry(item) {
+    update(item.id, { status: "waiting", error: null });
   }
 
-  async function handleUpload() {
-    if (!file || busy) return;
-    setStatus("uploading");
-    setError(null);
-    try {
-      // Real POST /v1/resumes call -- browser talks only to RWS; RWS forwards to
-      // Resume Intelligence server-side using its own service key.
-      const response = await uploadResume(file);
-      setResult(response);
-      setStatus("success");
-    } catch (err) {
-      setError(err instanceof ApiError ? err.message : "Upload failed. Please try again.");
-      setStatus("error");
-    }
+  function removeItem(item) {
+    setItems((current) => current.filter((entry) => entry.id !== item.id));
   }
 
-  function handleReset() {
-    setFile(null);
-    setResult(null);
-    setError(null);
-    setStatus("idle");
-  }
-
-  if (status === "success" && result) {
-    return (
-      <div className={styles.page}>
-        <PageHeader
-          title="Upload Resume"
-          subtitle="Add a candidate's resume to the talent pool."
-          variant="glass"
-        />
-
-        <div className={styles.success} role="status">
-          <p className={styles.successTitle}>
-            Resume uploaded — the candidate is now in the pool.
-          </p>
-          <div className={styles.successField}>
-            <span className={styles.successLabel}>Candidate ID</span>
-            <span className={styles.successValue}>{result.candidate_id}</span>
-          </div>
-          <div className={styles.successField}>
-            <span className={styles.successLabel}>Status</span>
-            <span>
-              {result.is_new
-                ? "Newly added to the candidate pool"
-                : "Matched an existing candidate (already in the pool)"}
-            </span>
-          </div>
-        </div>
-
-        <div className={styles.actions}>
-          {/* The created/matched candidate is never a dead-end UUID -- this is the
-              same real candidate_id CandidateDetailPage already renders. */}
-          <Link to={`/candidates/${result.candidate_id}`} className={styles.uploadButton}>
-            View Candidate
-          </Link>
-          <button type="button" className={styles.resetButton} onClick={handleReset}>
-            Upload another resume
-          </button>
-        </div>
-      </div>
-    );
-  }
+  const waitingCount = items.filter((item) => item.status === "waiting").length;
+  const doneCount = items.filter((item) => item.status === "created" || item.status === "existing").length;
 
   return (
     <div className={styles.page}>
       <PageHeader
-        title="Upload Resume"
-        subtitle="Add a candidate's resume to the talent pool."
-        variant="glass"
+        title="Add candidates to the pool"
+        subtitle="Each resume is read, structured and stored as a candidate profile. Files are processed one after another."
       />
 
       <div
-        className={[
-          styles.dropZone,
-          dragActive ? styles.dropZoneActive : "",
-          busy ? styles.dropZoneDisabled : "",
-        ]
-          .filter(Boolean)
-          .join(" ")}
+        className={`${styles.dropZone} ${dragActive ? styles.dropZoneActive : ""}`}
         onClick={openFilePicker}
+        onKeyDown={(event) => {
+          if (event.key === "Enter" || event.key === " ") {
+            event.preventDefault();
+            openFilePicker();
+          }
+        }}
         onDrop={handleDrop}
-        onDragOver={handleDragOver}
-        onDragLeave={handleDragLeave}
+        onDragOver={(event) => {
+          event.preventDefault();
+          setDragActive(true);
+        }}
+        onDragLeave={() => setDragActive(false)}
         role="button"
         tabIndex={0}
-        aria-disabled={busy}
+        aria-label="Choose resume files"
       >
         <IconUploadGlyph className={styles.dropZoneIcon} />
-        <p>Click to choose a file, or drag one here</p>
-        <p className={styles.dropZoneHint}>Supported formats: {ACCEPTED_LABEL}</p>
+        <span className={styles.dropTitle}>Drop resumes here, or choose files</span>
+        <span className={styles.dropZoneHint}>{ACCEPTED_LABEL} · several files at once</span>
         <input
           ref={fileInputRef}
           type="file"
+          multiple
           accept={ACCEPTED_EXTENSIONS}
           className={styles.fileInput}
           onChange={handleInputChange}
-          disabled={busy}
+          tabIndex={-1}
         />
       </div>
 
-      {file && (
-        <div className={styles.selectedFile}>
-          <span className={styles.selectedFileName}>{file.name}</span>
-          {!busy && (
-            <button type="button" className={styles.clearButton} onClick={clearSelectedFile}>
-              Remove
+      {items.length > 0 && (
+        <section className={styles.queue} aria-label="Processing queue">
+          <div className={styles.queueHead}>
+            <h2 className={styles.queueTitle}>Processing queue</h2>
+            <span className={styles.queueSummary}>
+              {doneCount} of {items.length} processed
+            </span>
+            <button type="button" className={styles.uploadButton} onClick={processWaiting} disabled={running || waitingCount === 0}>
+              {running ? "Processing…" : waitingCount > 0 ? `Upload ${waitingCount} file${waitingCount === 1 ? "" : "s"}` : "All files sent"}
             </button>
-          )}
-        </div>
+          </div>
+          <ul className={styles.queueList}>
+            {items.map((item) => (
+              <li key={item.id} className={styles.queueRow}>
+                <span className={styles.fileCell}>
+                  <span className={styles.fileName}>{item.file.name}</span>
+                  <span className={styles.progressTrack}>
+                    <span className={`${styles.progressFill} ${styles[`progress_${item.status}`]}`} />
+                  </span>
+                  {item.error && <span className={styles.rowError}>{item.error}</span>}
+                </span>
+                <span className={`${styles.badge} ${styles[`badge_${item.status}`]}`}>{STATUS_TEXT[item.status]}</span>
+                <span className={styles.rowAction}>
+                  {(item.status === "created" || item.status === "existing") && (
+                    <Link to={`/candidates/${item.candidateId}`}>Open candidate</Link>
+                  )}
+                  {item.status === "failed" && (
+                    <button type="button" className={styles.rowButton} onClick={() => retry(item)} disabled={running}>
+                      Retry
+                    </button>
+                  )}
+                  {item.status === "waiting" && !running && (
+                    <button type="button" className={styles.rowButton} onClick={() => removeItem(item)}>
+                      Remove
+                    </button>
+                  )}
+                </span>
+              </li>
+            ))}
+          </ul>
+          <p className={styles.queueNote}>A failed file never creates a half-empty candidate, so retrying it is safe.</p>
+        </section>
       )}
-
-      {error && (
-        <div className={styles.error} role="alert">
-          {error}
-        </div>
-      )}
-
-      <div className={styles.actions}>
-        <button
-          type="button"
-          className={styles.uploadButton}
-          onClick={handleUpload}
-          disabled={!file || busy}
-        >
-          {busy ? "Uploading…" : "Upload Resume"}
-        </button>
-      </div>
     </div>
   );
 }

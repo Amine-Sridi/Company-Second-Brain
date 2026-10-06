@@ -1,43 +1,22 @@
-/* V2 design system, Phase 1 (see FRONTEND_HANDOFF.md). Self-contained dark-glass
-   chrome -- every color here is a --v2-* token, never a --color-* one, so this
-   component cannot leak the light theme any un-migrated page still depends on,
-   and cannot be affected by it either. */
+/* The one dark surface of the light theme. Its own --sb-* tokens keep it
+   independent from the page palette. */
 
 .sidebar {
-  position: relative;
-  background: var(--v2-bg-elevated);
-  border-right: 1px solid var(--v2-border);
+  position: sticky;
+  top: 0;
+  height: 100vh;
+  background: var(--sb-bg);
+  color: var(--sb-text);
   padding: var(--spacing-4) var(--spacing-3);
   display: flex;
   flex-direction: column;
-  gap: var(--spacing-4);
-  overflow: hidden;
-}
-
-/* Faint technical grid + a single soft aurora bloom anchored to the top of the
-   sidebar -- "subtle", not a wallpaper: opacity is low enough that it reads as
-   texture, not pattern, at a glance. Pure CSS, no image asset. */
-.sidebar::before {
-  content: "";
-  position: absolute;
-  inset: 0;
-  pointer-events: none;
-  background-image:
-    radial-gradient(480px 320px at 15% -10%, var(--v2-cyan-bg), transparent 60%),
-    linear-gradient(rgba(255, 255, 255, 0.035) 1px, transparent 1px),
-    linear-gradient(90deg, rgba(255, 255, 255, 0.035) 1px, transparent 1px);
-  background-size:
-    auto,
-    28px 28px,
-    28px 28px;
-  opacity: 0.9;
+  gap: 28px;
 }
 
 .brand {
-  position: relative;
   display: flex;
   align-items: center;
-  gap: var(--spacing-2);
+  gap: 10px;
   padding: 0 var(--spacing-2);
 }
 
@@ -46,29 +25,26 @@
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 28px;
-  height: 28px;
+  width: 30px;
+  height: 30px;
   border-radius: 8px;
-  background: linear-gradient(135deg, var(--v2-cyan), var(--v2-violet));
-  box-shadow: var(--v2-shadow-glow-cyan);
+  background: var(--v2-cyan);
 }
 
 .brandMarkIcon {
-  width: 16px;
-  height: 16px;
-  color: var(--v2-bg-inset);
+  width: 18px;
+  height: 18px;
+  color: #ffffff;
 }
 
 .brandText {
-  font-weight: 700;
-  font-size: var(--font-size-base);
-  letter-spacing: -0.01em;
-  color: var(--v2-text);
-  line-height: 1.15;
+  font-weight: 600;
+  font-size: 15px;
+  line-height: 1.2;
+  color: var(--sb-text-active);
 }
 
 .nav {
-  position: relative;
   display: flex;
   flex-direction: column;
   gap: 2px;
@@ -78,53 +54,45 @@
   position: relative;
   display: flex;
   align-items: center;
-  gap: var(--spacing-2);
-  padding: var(--spacing-2);
-  border-radius: 10px;
+  gap: 10px;
+  min-height: 42px;
+  padding: 0 10px;
+  border-radius: 8px;
   text-decoration: none;
-  color: var(--v2-text-muted);
-  font-size: var(--font-size-base);
+  color: var(--sb-text);
+  font-size: 14px;
   font-weight: 500;
   transition: color var(--v2-transition);
   isolation: isolate;
 }
 
 .link:hover {
-  color: var(--v2-text);
+  color: var(--sb-text-active);
 }
 
-/* No :focus-visible override needed here anymore -- global.css's shared rule now
-   defaults to --v2-cyan itself (app-wide dark-theme focus-ring audit), since every
-   post-login page runs V2. This component's own override (here since Phase 28, back
-   when the shared rule still defaulted to a light-theme blue) is redundant now, not
-   just harmless, so it's removed rather than left duplicating the shared default. */
-
 .linkActive {
-  color: var(--v2-text);
+  color: var(--sb-text-active);
   font-weight: 600;
 }
 
-/* The shared motion.span (layoutId) that slides between items -- sits behind
-   the icon/label (z-index via isolation above + this being the first child),
-   never re-mounted on navigation, only repositioned. */
+/* The shared motion.span (layoutId) that slides between items. */
 .activePill {
   position: absolute;
   inset: 0;
   z-index: -1;
-  border-radius: 10px;
-  background: linear-gradient(135deg, var(--v2-cyan-bg), var(--v2-violet-bg));
-  border: 1px solid var(--v2-border-strong);
+  border-radius: 8px;
+  background: var(--sb-active-bg);
 }
 
 .icon,
 .iconActive {
-  width: 16px;
-  height: 16px;
+  width: 17px;
+  height: 17px;
   flex-shrink: 0;
 }
 
 .iconActive {
-  color: var(--v2-cyan);
+  color: #9db0f0;
 }
 
 .linkLabel {
@@ -133,15 +101,52 @@
   white-space: nowrap;
 }
 
-/* Below the tablet breakpoint, Layout.module.css stacks the sidebar above the page
-   content -- a full-height vertical nav there would push content off screen, so it
-   becomes a compact horizontal bar instead. */
+.account {
+  margin-top: auto;
+  border-top: 1px solid var(--sb-border);
+  padding: var(--spacing-3) var(--spacing-2) 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-2);
+}
+
+.accountEmail {
+  font-size: 13px;
+  color: var(--sb-muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.logoutButton {
+  align-self: flex-start;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 36px;
+  padding: 0 12px;
+  border-radius: 8px;
+  border: 1px solid var(--sb-border);
+  background: transparent;
+  color: var(--sb-text);
+  font-size: 13px;
+  font-weight: 500;
+  transition: color var(--v2-transition), border-color var(--v2-transition);
+}
+
+.logoutButton:hover {
+  color: var(--sb-text-active);
+  border-color: var(--sb-muted);
+}
+
+/* Below the tablet breakpoint, Layout.module.css stacks the sidebar above the page:
+   it becomes a compact horizontal bar. */
 @media (max-width: 768px) {
   .sidebar {
+    position: static;
+    height: auto;
     flex-direction: row;
     align-items: center;
-    border-right: none;
-    border-bottom: 1px solid var(--v2-border);
     padding: var(--spacing-2) var(--spacing-3);
     gap: var(--spacing-3);
     overflow-x: auto;
@@ -149,6 +154,10 @@
 
   .brand {
     padding: 0;
+  }
+
+  .brandText br {
+    display: none;
   }
 
   .brandText {
@@ -163,5 +172,17 @@
   .link,
   .linkActive {
     white-space: nowrap;
+  }
+
+  .account {
+    margin-top: 0;
+    border-top: 0;
+    padding: 0;
+    flex-direction: row;
+    align-items: center;
+  }
+
+  .accountEmail {
+    display: none;
   }
 }

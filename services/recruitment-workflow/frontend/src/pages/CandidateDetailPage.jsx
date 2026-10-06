@@ -5,10 +5,8 @@ import { getAllApplications } from "../api/applications.js";
 import { getCandidatesJobsGraph } from "../api/graph.js";
 import { ApiError } from "../api/client.js";
 import { useCandidateIdentity } from "../hooks/useCandidateIdentity.js";
-import PageHeader from "../components/PageHeader.jsx";
 import StatusBadge from "../components/StatusBadge.jsx";
-import EmptyState from "../components/EmptyState.jsx";
-import MatchGraph, { EGO_GRAPH_LAYOUT } from "../components/MatchGraph.jsx";
+import { coverageOf, ringFor } from "../components/graph/graphModel.js";
 import { STATUS_LABELS, STATUS_TONE } from "../constants/applicationStatus.js";
 import { ROUND_TYPE_LABELS, roundStatusLabel, roundStatusTone, describeRound } from "../constants/interviewRounds.js";
 import styles from "./CandidateDetailPage.module.css";
@@ -28,7 +26,7 @@ const INTERVIEW_STATUS_LABELS = {
  * (its own cache + failure handling, not re-implemented here -- "avoid duplicate
  * API logic"), knowledge and applications are fetched locally with their own
  * loading/error state so a failure in one section never blanks the others. Reused
- * everywhere: StatusBadge, PageHeader, EmptyState, the shared status/tone constants.
+ * everywhere: StatusBadge and the shared status/tone constants.
  */
 export default function CandidateDetailPage() {
   const { candidateId } = useParams();
@@ -113,189 +111,199 @@ export default function CandidateDetailPage() {
         ? "Loading…"
         : `Candidate ${candidateId.slice(0, 8)}…`;
 
-  // MatchGraph resolves a candidate node's label from this map -- reuses the name
-  // already fetched by useCandidateIdentity above instead of a second GET
-  // /v1/candidates call (GraphPage's own name source) for a graph of just one
-  // candidate.
-  const candidateNames = useMemo(() => new Map([[candidateId, displayName]]), [candidateId, displayName]);
+  // This candidate's matches, best first, each with the reason for its result -- read
+  // off the persisted flags and requirement lists, never recomputed.
+  const matches = useMemo(() => {
+    if (!egoGraph) return [];
+    const titles = new Map(egoGraph.jobs.map((job) => [job.job_id, job.title]));
+    return [...egoGraph.edges]
+      .sort((a, b) => b.final_score - a.final_score)
+      .map((edge) => {
+        const ring = ringFor(edge);
+        const { matched, total, ratio } = coverageOf(edge);
+        const missing = edge.missing_requirements;
+        const reason =
+          ring === "qualified"
+            ? total
+              ? `${matched} of ${total} required skills covered`
+              : "No required skill listed"
+            : ring === "gate"
+              ? `Missing ${missing.slice(0, 3).join(", ")}${missing.length > 3 ? "…" : ""} · coverage ${ratio?.toFixed(2) ?? "—"}`
+              : "Below the score threshold";
+        return { edge, ring, reason, title: titles.get(edge.job_id) ?? "Job" };
+      });
+  }, [egoGraph]);
+  const bestMatch = matches[0]?.edge ?? null;
+  const initials = displayName
+    .split(/\s+/)
+    .filter(Boolean)
+    .map((part) => part[0])
+    .slice(0, 2)
+    .join("")
+    .toUpperCase();
+  const RESULT = {
+    qualified: { label: "Qualified", tone: "success" },
+    gate: { label: "Missing required skills", tone: "warning" },
+    below: { label: "Below threshold", tone: "neutral" },
+  };
 
   return (
     <div className={styles.page}>
-      <PageHeader
-        title={displayName}
-        subtitle={identity.status === "ready" ? identity.email ?? undefined : undefined}
-        variant="glass"
-      />
+      <Link to="/candidates" className={styles.backLink}>
+        Back to candidates
+      </Link>
+      <header className={styles.header}>
+        <div className={styles.who}>
+          <span className={styles.avatar} aria-hidden="true">
+            {initials || "?"}
+          </span>
+          <div className={styles.whoText}>
+            <h1 className={styles.title}>{displayName}</h1>
+            <span className={styles.meta}>
+              {[
+                knowledge?.job_titles?.[0],
+                knowledge?.years_of_experience != null ? `${knowledge.years_of_experience} years of experience` : null,
+              ]
+                .filter(Boolean)
+                .join(" · ")}
+            </span>
+          </div>
+        </div>
+        {bestMatch && (
+          <Link to={`/graph?job=${bestMatch.job_id}&candidate=${candidateId}`} className={styles.secondaryAction}>
+            Show in knowledge graph
+          </Link>
+        )}
+      </header>
 
       {identity.status === "error" && (
         <div className={styles.error} role="alert">
-          Unable to load this candidate's identity. They may no longer exist in
-          Resume Intelligence.
+          Unable to load this candidate's identity. They may no longer exist in Resume Intelligence.
         </div>
       )}
 
-      <div className={styles.content}>
-        <section className={styles.section}>
-          <h2 className={styles.sectionTitle}>Professional knowledge</h2>
-          {knowledgeLoading && <p className={styles.status}>Loading…</p>}
-          {!knowledgeLoading && knowledgeError && (
-            <div className={styles.error} role="alert">
-              {knowledgeError}
-            </div>
-          )}
-          {!knowledgeLoading && !knowledgeError && knowledge && (
-            <div className={styles.knowledgeGrid}>
-              <div>
-                <span className={styles.fieldLabel}>Years of experience</span>
-                <p className={styles.fieldValueAccent}>
-                  {knowledge.years_of_experience != null ? knowledge.years_of_experience : "—"}
-                </p>
+      <div className={styles.layout}>
+        <div className={styles.mainCol}>
+          <section className={styles.card} aria-label="Job matches">
+            <h2 className={styles.cardTitle}>Job matches</h2>
+            {egoGraphLoading && <p className={styles.status}>Loading…</p>}
+            {!egoGraphLoading && egoGraphError && (
+              <div className={styles.error} role="alert">
+                {egoGraphError}
               </div>
-              <div>
-                <span className={styles.fieldLabel}>Job titles</span>
-                {knowledge.job_titles.length > 0 ? (
-                  <div className={styles.chips}>
-                    {knowledge.job_titles.map((title) => (
-                      <span key={title} className={styles.chipAccent}>
-                        {title}
+            )}
+            {!egoGraphLoading && !egoGraphError && matches.length === 0 && (
+              <p className={styles.status}>This candidate has no stored match against any job yet.</p>
+            )}
+            {matches.length > 0 && (
+              <ul className={styles.matchList}>
+                {matches.map(({ edge, ring, reason, title }) => (
+                  <li key={edge.match_id}>
+                    <Link to={`/graph?job=${edge.job_id}&candidate=${candidateId}`} className={styles.matchRow}>
+                      <span className={styles.matchText}>
+                        <span className={styles.matchTitle}>{title}</span>
+                        <span className={ring === "gate" ? styles.reasonWarn : styles.reason}>{reason}</span>
                       </span>
-                    ))}
-                  </div>
-                ) : (
-                  <p className={styles.fieldValue}>—</p>
+                      <StatusBadge tone={RESULT[ring].tone}>{RESULT[ring].label}</StatusBadge>
+                      <span className={styles.matchScore}>{Math.round(edge.final_score * 100)}%</span>
+                    </Link>
+                  </li>
+                ))}
+              </ul>
+            )}
+          </section>
+
+          <section className={styles.card} aria-label="Applications">
+            <h2 className={styles.cardTitle}>Applications</h2>
+            {applicationsLoading && <p className={styles.status}>Loading…</p>}
+            {!applicationsLoading && applicationsError && (
+              <div className={styles.error} role="alert">
+                {applicationsError}
+              </div>
+            )}
+            {!applicationsLoading && !applicationsError && applications.length === 0 && (
+              <p className={styles.status}>Not selected for any job yet.</p>
+            )}
+            {applications.map((application) => (
+              <div key={application.application_id} className={styles.appRow}>
+                <Link to={`/jobs/${application.job_id}/applications`} className={styles.appJob}>
+                  {application.job_title}
+                </Link>
+                <StatusBadge tone={STATUS_TONE[application.status] ?? "neutral"}>
+                  {STATUS_LABELS[application.status] ?? application.status}
+                </StatusBadge>
+                <span className={styles.appMeta}>
+                  {application.interview_status
+                    ? `Interview ${(INTERVIEW_STATUS_LABELS[application.interview_status] ?? application.interview_status).toLowerCase()}`
+                    : "No interview yet"}
+                  {(application.interview_rounds ?? []).length > 0 &&
+                    ` · ${application.interview_rounds.length} human round${application.interview_rounds.length === 1 ? "" : "s"}`}
+                </span>
+                <span className={styles.appRounds}>
+                  {(application.interview_rounds ?? []).map((round) => (
+                    <StatusBadge key={round.id} tone={roundStatusTone(round)} title={describeRound(round)}>
+                      {ROUND_TYPE_LABELS[round.round_type] ?? round.round_type}: {roundStatusLabel(round)}
+                    </StatusBadge>
+                  ))}
+                </span>
+                {application.interview_assessment != null && (
+                  <Link to={`/reports/${application.application_id}`} className={styles.inlineLink}>
+                    Open report
+                  </Link>
                 )}
               </div>
-              <div className={styles.skillsField}>
-                <span className={styles.fieldLabel}>Skills</span>
-                {knowledge.skills.length > 0 ? (
+            ))}
+          </section>
+        </div>
+
+        <aside className={styles.sideCol}>
+          <section className={styles.card} aria-label="Professional knowledge">
+            <h2 className={styles.cardTitle}>Professional knowledge</h2>
+            {knowledgeLoading && <p className={styles.status}>Loading…</p>}
+            {!knowledgeLoading && knowledgeError && (
+              <div className={styles.error} role="alert">
+                {knowledgeError}
+              </div>
+            )}
+            {!knowledgeLoading && !knowledgeError && knowledge && (
+              <>
+                <div className={styles.field}>
+                  <span className={styles.fieldLabel}>Job titles</span>
+                  <span className={styles.fieldValue}>{knowledge.job_titles.length > 0 ? knowledge.job_titles.join(" · ") : "—"}</span>
+                </div>
+                <div className={styles.field}>
+                  <span className={styles.fieldLabel}>Years of experience</span>
+                  <span className={styles.fieldValueMono}>{knowledge.years_of_experience ?? "—"}</span>
+                </div>
+                <div className={styles.field}>
+                  <span className={styles.fieldLabel}>Skills · {knowledge.skills.length}</span>
                   <div className={styles.chips}>
                     {knowledge.skills.map((skill) => (
                       <span key={skill} className={styles.chip}>
                         {skill}
                       </span>
                     ))}
+                    {knowledge.skills.length === 0 && <span className={styles.fieldValue}>—</span>}
                   </div>
-                ) : (
-                  <p className={styles.fieldValue}>—</p>
-                )}
-              </div>
-            </div>
-          )}
-        </section>
+                </div>
+              </>
+            )}
+          </section>
 
-        <section className={styles.section}>
-          <h2 className={styles.sectionTitle}>Applications</h2>
-          {applicationsLoading && <p className={styles.status}>Loading…</p>}
-          {!applicationsLoading && applicationsError && (
-            <div className={styles.error} role="alert">
-              {applicationsError}
-            </div>
-          )}
-          {!applicationsLoading && !applicationsError && applications.length === 0 && (
-            <EmptyState
-              variant="glass"
-              title="No applications yet"
-              description="This candidate hasn't been selected for any job yet."
-            />
-          )}
-          {!applicationsLoading && !applicationsError && applications.length > 0 && (
-            <div className={styles.tableWrapper}>
-              <table className={styles.table}>
-                <thead>
-                  <tr>
-                    <th>Job</th>
-                    <th>Status</th>
-                    <th>Interview</th>
-                    <th>Interview rounds</th>
-                    <th aria-label="Report" />
-                  </tr>
-                </thead>
-                <tbody>
-                  {applications.map((application) => (
-                    <tr key={application.application_id}>
-                      <td>
-                        <Link to={`/jobs/${application.job_id}`} className={styles.inlineLink}>
-                          {application.job_title}
-                        </Link>
-                      </td>
-                      <td>
-                        <StatusBadge variant="glass" tone={STATUS_TONE[application.status] ?? "neutral"}>
-                          {STATUS_LABELS[application.status] ?? application.status}
-                        </StatusBadge>
-                      </td>
-                      <td>
-                        {application.interview_status ? (
-                          INTERVIEW_STATUS_LABELS[application.interview_status] ?? application.interview_status
-                        ) : (
-                          <span className={styles.interviewStatusEmpty}>—</span>
-                        )}
-                      </td>
-                      <td className={styles.roundsCell}>
-                        {(application.interview_rounds ?? []).length === 0 ? (
-                          <span className={styles.interviewStatusEmpty}>—</span>
-                        ) : (
-                          <div className={styles.roundsList}>
-                            {application.interview_rounds.map((round) => (
-                              <StatusBadge
-                                key={round.id}
-                                variant="glass"
-                                tone={roundStatusTone(round)}
-                                title={describeRound(round)}
-                              >
-                                {ROUND_TYPE_LABELS[round.round_type] ?? round.round_type}: {roundStatusLabel(round)}
-                              </StatusBadge>
-                            ))}
-                          </div>
-                        )}
-                      </td>
-                      <td>
-                        {application.interview_assessment != null && (
-                          <Link
-                            to={`/reports/${application.application_id}`}
-                            className={styles.inlineLink}
-                          >
-                            View Report
-                          </Link>
-                        )}
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          )}
-        </section>
-
-        <section className={styles.section}>
-          <h2 className={styles.sectionTitle}>Knowledge Graph</h2>
-          {egoGraphLoading && <p className={styles.status}>Loading…</p>}
-          {!egoGraphLoading && egoGraphError && (
-            <div className={styles.error} role="alert">
-              {egoGraphError}
-            </div>
-          )}
-          {!egoGraphLoading && !egoGraphError && egoGraph && egoGraph.edges.length === 0 && (
-            <EmptyState
-              variant="glass"
-              title="No job matches yet"
-              description="This candidate has no persisted matches against any job yet."
-            />
-          )}
-          {!egoGraphLoading && !egoGraphError && egoGraph && egoGraph.edges.length > 0 && (
-            // MatchGraph.jsx's own buildStylesheet() now reads --v2-* tokens
-            // directly (V2 design system, final slice -- see
-            // FRONTEND_HANDOFF.md) since both of its real call sites (here and
-            // GraphPage) are on V2 as of this same pass -- no theme prop needed
-            // here, this call is unchanged from before that migration.
-            <MatchGraph
-              rawGraph={egoGraph}
-              candidateNames={candidateNames}
-              layout={EGO_GRAPH_LAYOUT}
-              showResetButton
-              size="ego"
-            />
-          )}
-        </section>
+          <section className={styles.card} aria-label="Contact">
+            <h2 className={styles.cardTitle}>
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                <rect x="5" y="10" width="14" height="10" rx="2" />
+                <path d="M8 10V7a4 4 0 0 1 8 0v3" />
+              </svg>
+              Contact
+            </h2>
+            <span className={styles.fieldValue}>{identity.status === "ready" ? identity.email ?? "No email on file" : "—"}</span>
+            <span className={styles.note}>
+              Read live from Resume Intelligence each time. This service stores only the opaque candidate id.
+            </span>
+          </section>
+        </aside>
       </div>
     </div>
   );

@@ -20,12 +20,13 @@ import PageHeader from "../components/PageHeader.jsx";
 import StatusBadge from "../components/StatusBadge.jsx";
 import EmptyState from "../components/EmptyState.jsx";
 import AssessmentPanel from "../components/AssessmentPanel.jsx";
-import { STATUS_LABELS, STATUS_TONE } from "../constants/applicationStatus.js";
+import { STATUS_LABELS } from "../constants/applicationStatus.js";
 import {
   EVALUATION_STATUS_LABELS,
   LANGUAGE_GATE_LABELS,
   LANGUAGE_GATE_TONE,
   describeLanguageGate,
+  formatLanguageRequirement,
 } from "../constants/language.js";
 import {
   ROUND_TYPE_LABELS,
@@ -136,7 +137,18 @@ export default function ApplicationsPage() {
 
   return (
     <div className={styles.page}>
-      <PageHeader title={job ? `Applications — ${job.title}` : "Applications"} variant="glass" />
+      <Link to={`/jobs/${jobId}`} className={styles.backLink}>
+        Back to the job
+      </Link>
+      <PageHeader
+        title={job ? job.title : "Applications"}
+        subtitle={
+          job &&
+          `Applications · ${applications.length} candidate${applications.length === 1 ? "" : "s"}${
+            job.required_language ? ` · requires ${formatLanguageRequirement(job.required_language, job.min_language_cefr)}` : ""
+          }`
+        }
+      />
 
       {loading && <p className={styles.status}>Loading applications…</p>}
 
@@ -155,28 +167,14 @@ export default function ApplicationsPage() {
       )}
 
       {!loading && !error && applications.length > 0 && (
-        <div className={styles.tableWrapper}>
-          <table className={styles.table}>
-            <thead>
-              <tr>
-                <th>Candidate</th>
-                <th>Status</th>
-                <th>Interview</th>
-                <th>Language screening</th>
-                <th>Interview rounds</th>
-                <th aria-label="Actions" />
-              </tr>
-            </thead>
-            <tbody>
-              {applications.map((application) => (
-                <ApplicationRow
-                  key={application.application_id}
-                  application={application}
-                  onUpdated={handleApplicationUpdated}
-                />
-              ))}
-            </tbody>
-          </table>
+        <div className={styles.cards}>
+          {applications.map((application) => (
+            <ApplicationRow
+              key={application.application_id}
+              application={application}
+              onUpdated={handleApplicationUpdated}
+            />
+          ))}
         </div>
       )}
     </div>
@@ -362,71 +360,104 @@ function ApplicationRow({ application, onUpdated }) {
     }
   }
 
+  // Progress line: the three steps of the state machine before a decision, then the
+  // decision itself. A step is "done" when the application is past it.
+  const STEP_ORDER = ["selected", "invited", "interviewed"];
+  const decided = application.status === "accepted" || application.status === "rejected";
+  const currentIndex = decided ? 3 : STEP_ORDER.indexOf(application.status);
+  const steps = [
+    ...STEP_ORDER.map((status, index) => ({
+      label: STATUS_LABELS[status],
+      state: index < currentIndex ? "done" : index === currentIndex ? "current" : "todo",
+    })),
+    {
+      label: decided ? STATUS_LABELS[application.status] : "Decision",
+      state: decided ? (application.status === "accepted" ? "accepted" : "rejected") : "todo",
+    },
+  ];
+  const assessment = application.interview_assessment;
+  const initials = displayName
+    .split(/\s+/)
+    .filter(Boolean)
+    .map((part) => part[0])
+    .slice(0, 2)
+    .join("")
+    .toUpperCase();
+
   return (
-    <>
-      <tr
-        className={hasAssessment ? styles.row : undefined}
-        onClick={hasAssessment ? () => setExpanded((value) => !value) : undefined}
-        onKeyDown={
-          hasAssessment
-            ? (event) => {
-                if (event.key === "Enter" || event.key === " ") {
-                  if (event.key === " ") event.preventDefault();
-                  setExpanded((value) => !value);
-                }
-              }
-            : undefined
-        }
-        role={hasAssessment ? "button" : undefined}
-        tabIndex={hasAssessment ? 0 : undefined}
-      >
-        <td>
-          <Link
-            to={`/candidates/${application.candidate_id}`}
-            className={styles.candidateName}
-            onClick={(event) => event.stopPropagation()}
-          >
-            {displayName}
-          </Link>
-          {identity.status === "error" && (
-            <span className={styles.identityWarning}> (name unavailable)</span>
-          )}
-        </td>
-        <td>
-          <StatusBadge variant="glass" tone={STATUS_TONE[application.status] ?? "neutral"}>
-            {STATUS_LABELS[application.status] ?? application.status}
-          </StatusBadge>
-        </td>
-        <td>
-          {application.interview_status ? (
-            <span className={styles.interviewStatus}>
-              {INTERVIEW_STATUS_LABELS[application.interview_status] ?? application.interview_status}
-              {hasAssessment && (
-                <span className={styles.expandHint}>{expanded ? " ▾" : " ▸"}</span>
-              )}
+    <article className={styles.card}>
+      <div className={styles.cardHead}>
+        <div className={styles.who}>
+          <span className={styles.avatar} aria-hidden="true">
+            {initials || "?"}
+          </span>
+          <div className={styles.whoText}>
+            <Link to={`/candidates/${application.candidate_id}`} className={styles.candidateName}>
+              {displayName}
+            </Link>
+            {identity.status === "error" && <span className={styles.identityWarning}>(name unavailable)</span>}
+            <span className={styles.whoMeta}>
+              Selected {new Date(application.selected_at).toLocaleDateString(undefined, { day: "numeric", month: "short" })}
             </span>
+          </div>
+        </div>
+        <ol className={styles.steps} aria-label="Progress">
+          {steps.map((step) => (
+            <li key={step.label} className={styles[`step_${step.state}`]} aria-current={step.state === "current" ? "step" : undefined}>
+              {step.label}
+            </li>
+          ))}
+        </ol>
+      </div>
+
+      <div className={styles.panels}>
+        <section className={styles.panel} aria-label="VoiceHR interview">
+          <span className={styles.panelTitle}>VoiceHR interview</span>
+          {assessment ? (
+            <>
+              <span className={styles.voiceLine}>
+                <span className={styles.cefr}>{assessment.cefr_level ?? "—"}</span>
+                <span className={styles.voiceMeta}>
+                  {assessment.overall_score != null ? `${Math.round(assessment.overall_score)}/100 · ` : ""}
+                  {INTERVIEW_STATUS_LABELS[application.interview_status] ?? application.interview_status}
+                </span>
+              </span>
+              <span className={styles.panelLinks}>
+                <Link to={`/reports/${application.application_id}`}>Open report</Link>
+                <button type="button" className={styles.textButton} onClick={() => setExpanded((value) => !value)} aria-expanded={expanded}>
+                  {expanded ? "Hide assessment" : "Show assessment"}
+                </button>
+              </span>
+            </>
           ) : (
-            <span className={styles.interviewStatusEmpty}>—</span>
+            <span className={styles.panelEmpty}>
+              {application.status === "invited"
+                ? "Invitation sent, waiting for the interview."
+                : application.interview_status
+                  ? INTERVIEW_STATUS_LABELS[application.interview_status] ?? application.interview_status
+                  : "Not invited yet."}
+            </span>
           )}
-        </td>
-        <td onClick={(event) => event.stopPropagation()}>
+        </section>
+
+        <section className={`${styles.panel} ${gate.status === "failed" ? styles.panelWarn : ""}`} aria-label="Language screening">
+          <span className={styles.panelTitle}>Language screening</span>
           {gate.status === "not_required" ? (
-            <span className={styles.interviewStatusEmpty}>—</span>
+            <span className={styles.panelEmpty}>No language requirement for this job.</span>
           ) : (
-            <StatusBadge
-              variant="glass"
-              tone={LANGUAGE_GATE_TONE[gate.status] ?? "neutral"}
-              title={describeLanguageGate(gate) ?? undefined}
-            >
-              {LANGUAGE_GATE_LABELS[gate.status] ?? gate.status}
-            </StatusBadge>
+            <>
+              <StatusBadge tone={LANGUAGE_GATE_TONE[gate.status] ?? "neutral"}>
+                {LANGUAGE_GATE_LABELS[gate.status] ?? gate.status}
+              </StatusBadge>
+              <span className={styles.panelNote}>{describeLanguageGate(gate)}</span>
+            </>
           )}
-        </td>
-        <td onClick={(event) => event.stopPropagation()} className={styles.roundsCell}>
+        </section>
+
+        <section className={styles.panel} aria-label="Human interview rounds">
+          <span className={styles.panelTitle}>Human interview rounds</span>
           <div className={styles.roundsList}>
-            {rounds.length === 0 && !schedulingOpen && (
-              <span className={styles.interviewStatusEmpty}>—</span>
-            )}
+            {rounds.length === 0 && !schedulingOpen && <span className={styles.panelEmpty}>No round scheduled.</span>}
             {rounds.map((round) => (
               <InterviewRoundItem
                 key={round.id}
@@ -450,7 +481,7 @@ function ApplicationRow({ application, onUpdated }) {
               disabled={rowBusy || !canSchedule}
               title={scheduleBlockedReason ?? undefined}
             >
-              Schedule interview
+              Schedule a round
             </button>
           ) : (
             <form className={styles.scheduleForm} onSubmit={handleSchedule}>
@@ -471,6 +502,7 @@ function ApplicationRow({ application, onUpdated }) {
                 type="text"
                 className={styles.scheduleFormInput}
                 placeholder="Interviewer name"
+                aria-label="Interviewer name"
                 value={interviewerName}
                 onChange={(event) => setInterviewerName(event.target.value)}
                 disabled={scheduling}
@@ -480,6 +512,7 @@ function ApplicationRow({ application, onUpdated }) {
                 type="email"
                 className={styles.scheduleFormInput}
                 placeholder="Interviewer email"
+                aria-label="Interviewer email"
                 value={interviewerEmail}
                 onChange={(event) => setInterviewerEmail(event.target.value)}
                 disabled={scheduling}
@@ -498,6 +531,7 @@ function ApplicationRow({ application, onUpdated }) {
                 type="text"
                 className={styles.scheduleFormInput}
                 placeholder="Meeting link or location (optional)"
+                aria-label="Meeting link or location"
                 value={roundLocation}
                 onChange={(event) => setRoundLocation(event.target.value)}
                 disabled={scheduling}
@@ -505,21 +539,17 @@ function ApplicationRow({ application, onUpdated }) {
               <textarea
                 className={styles.scheduleFormTextarea}
                 placeholder="Notes (optional)"
+                aria-label="Notes"
                 value={roundNotes}
                 onChange={(event) => setRoundNotes(event.target.value)}
                 disabled={scheduling}
                 rows={2}
               />
               <div className={styles.scheduleFormActions}>
-                <button type="submit" className={styles.scheduleRoundButton} disabled={scheduling}>
-                  {scheduling ? "Scheduling…" : "Save"}
+                <button type="submit" className={styles.primaryButton} disabled={scheduling}>
+                  {scheduling ? "Scheduling…" : "Save and send invitations"}
                 </button>
-                <button
-                  type="button"
-                  className={styles.scheduleRoundCancelButton}
-                  onClick={resetScheduleForm}
-                  disabled={scheduling}
-                >
+                <button type="button" className={styles.scheduleRoundCancelButton} onClick={resetScheduleForm} disabled={scheduling}>
                   Cancel
                 </button>
               </div>
@@ -530,113 +560,74 @@ function ApplicationRow({ application, onUpdated }) {
               )}
             </form>
           )}
-        </td>
-        <td onClick={(event) => event.stopPropagation()}>
-          <div className={styles.actions}>
-            {canInvite && (
-              <div className={styles.inviteGroup}>
-                {lastInviteFailed && !inviting && (
-                  <span className={styles.inviteFailedText}>Invitation not sent</span>
-                )}
-                <button
-                  type="button"
-                  className={styles.inviteButton}
-                  onClick={handleInvite}
-                  disabled={rowBusy}
-                >
-                  {inviting ? "Sending…" : lastInviteFailed ? "Retry" : "Invite"}
-                </button>
-              </div>
+        </section>
+      </div>
+
+      <div className={styles.cardFoot}>
+        {canInvite && (
+          <>
+            {lastInviteFailed && !inviting && <span className={styles.inviteFailedText}>Invitation not sent</span>}
+            <button type="button" className={styles.primaryButton} onClick={handleInvite} disabled={rowBusy}>
+              {inviting ? "Sending…" : lastInviteFailed ? "Retry the invitation" : "Send VoiceHR invitation"}
+            </button>
+          </>
+        )}
+        {canResend && (
+          <>
+            <span className={styles.inviteSentText}>{resendSuccess && !resending ? "Invitation resent" : "Invitation sent"}</span>
+            <button type="button" className={styles.secondaryButton} onClick={handleResend} disabled={rowBusy}>
+              {resending ? "Sending…" : "Resend invitation"}
+            </button>
+          </>
+        )}
+        {canDecide && (
+          <>
+            <button
+              type="button"
+              className={styles.acceptButton}
+              onClick={() => handleDecide("accept")}
+              disabled={rowBusy || !canAccept}
+              title={!canAccept ? describeLanguageGate(gate) ?? undefined : undefined}
+            >
+              {deciding === "accept" ? "Accepting…" : "Accept"}
+            </button>
+            <button type="button" className={styles.rejectButton} onClick={() => handleDecide("reject")} disabled={rowBusy}>
+              {deciding === "reject" ? "Rejecting…" : "Reject"}
+            </button>
+            {!canAccept && (
+              <span className={styles.blockedNote}>Acceptance is blocked by the language screening. Rejecting is always possible.</span>
             )}
-            {canResend && (
-              <div className={styles.inviteGroup}>
-                <span className={styles.inviteSentText}>
-                  {resendSuccess && !resending ? "Invitation resent" : "Invitation sent"}
-                </span>
-                <button
-                  type="button"
-                  className={styles.inviteButton}
-                  onClick={handleResend}
-                  disabled={rowBusy}
-                >
-                  {resending ? "Sending…" : "Resend invitation"}
-                </button>
-              </div>
-            )}
-            {canDecide && (
-              <>
-                <button
-                  type="button"
-                  className={styles.acceptButton}
-                  onClick={() => handleDecide("accept")}
-                  disabled={rowBusy || !canAccept}
-                  title={!canAccept ? describeLanguageGate(gate) ?? undefined : undefined}
-                >
-                  {deciding === "accept" ? "Accepting…" : "Accept"}
-                </button>
-                <button
-                  type="button"
-                  className={styles.rejectButton}
-                  onClick={() => handleDecide("reject")}
-                  disabled={rowBusy}
-                >
-                  {deciding === "reject" ? "Rejecting…" : "Reject"}
-                </button>
-              </>
-            )}
-            {application.status === "accepted" && (
-              <span className={styles.decidedLabelAccepted}>Accepted ✓</span>
-            )}
-            {application.status === "rejected" && (
-              <span className={styles.decidedLabelRejected}>Rejected</span>
-            )}
-            {hasAssessment && (
-              <Link to={`/reports/${application.application_id}`} className={styles.inlineLink}>
-                View Report
-              </Link>
-            )}
-          </div>
-        </td>
-      </tr>
+          </>
+        )}
+        {decided && (
+          <>
+            <StatusBadge tone={application.status === "accepted" ? "ink" : "neutral"}>{STATUS_LABELS[application.status]}</StatusBadge>
+            <span className={styles.decidedNote}>
+              Decided {application.decided_at ? new Date(application.decided_at).toLocaleDateString(undefined, { day: "numeric", month: "short", year: "numeric" }) : ""}.
+              The decision is recorded with the recruiter and the previous state.
+            </span>
+          </>
+        )}
+      </div>
 
       {inviteError && (
-        <tr>
-          <td colSpan={6}>
-            <div className={styles.error} role="alert">
-              {inviteError}
-            </div>
-          </td>
-        </tr>
+        <div className={styles.error} role="alert">
+          {inviteError}
+        </div>
       )}
-
       {resendError && (
-        <tr>
-          <td colSpan={6}>
-            <div className={styles.error} role="alert">
-              {resendError}
-            </div>
-          </td>
-        </tr>
+        <div className={styles.error} role="alert">
+          {resendError}
+        </div>
       )}
-
       {decideError && (
-        <tr>
-          <td colSpan={6}>
-            <div className={styles.error} role="alert">
-              {decideError}
-            </div>
-          </td>
-        </tr>
+        <div className={styles.error} role="alert">
+          {decideError}
+        </div>
       )}
 
-      {expanded && hasAssessment && (
-        <tr>
-          <td colSpan={6}>
-            <AssessmentPanel assessment={application.interview_assessment} />
-          </td>
-        </tr>
-      )}
-    </>
+      {expanded && hasAssessment && <AssessmentPanel assessment={application.interview_assessment} />}
+    </article>
   );
 }
 

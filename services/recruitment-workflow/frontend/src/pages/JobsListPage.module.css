@@ -1,116 +1,270 @@
-/* V2 design system, Phase 2 slice 3 (see FRONTEND_HANDOFF.md). Same dark-panel
-   treatment as ApplicationsPage.module.css et al.; see that file's own comment
-   for why this is safe and why the panel block is currently duplicated per page.
-   This page's own migration was prioritized specifically because its job cards
-   link directly into JobDetailPage, already V2/dark since Phase 23 -- leaving
-   this page V1/light would have kept that drill-down seam open. */
-
 .page {
-  position: relative;
-  max-width: 760px;
-  padding: var(--spacing-4);
-  border-radius: var(--v2-radius-lg);
-  border: 1px solid var(--v2-border);
-  background: var(--v2-bg);
-  box-shadow: var(--v2-shadow-elevated);
+  max-width: 1240px;
   color: var(--v2-text);
-  overflow: hidden;
-}
-
-.page::before {
-  content: "";
-  position: absolute;
-  inset: 0;
-  pointer-events: none;
-  background-image:
-    radial-gradient(560px 360px at 10% 0%, var(--v2-cyan-bg), transparent 60%),
-    linear-gradient(rgba(255, 255, 255, 0.025) 1px, transparent 1px),
-    linear-gradient(90deg, rgba(255, 255, 255, 0.025) 1px, transparent 1px);
-  background-size:
-    auto,
-    36px 36px,
-    36px 36px;
-}
-
-.page::after {
-  content: "";
-  position: absolute;
-  inset: 0;
-  pointer-events: none;
-  opacity: 0.05;
-  mix-blend-mode: overlay;
-  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='200' height='200'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='2' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
-}
-
-.page > * {
-  position: relative;
 }
 
 .newJobButton {
-  flex-shrink: 0;
-  background: linear-gradient(120deg, var(--v2-cyan), var(--v2-violet));
-  color: var(--v2-bg-inset);
-  border: none;
-  border-radius: var(--v2-radius);
-  padding: var(--spacing-2) var(--spacing-4);
-  font-size: var(--font-size-base);
-  font-weight: 700;
+  min-height: 44px;
+  padding: 0 18px;
+  border-radius: 9px;
+  border: 0;
+  background: var(--v2-cyan);
+  color: #ffffff;
+  font-size: 14px;
+  font-weight: 600;
   white-space: nowrap;
-  transition: transform var(--v2-transition);
 }
 
 .newJobButton:hover {
-  transform: translateY(-1px);
+  background: var(--v2-cyan-hover);
+}
+
+.layout {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 20px;
+  align-items: flex-start;
+}
+
+.listCard {
+  flex: 999 1 600px;
+  min-width: 0;
+  background: var(--v2-surface);
+  border: 1px solid var(--v2-border);
+  border-radius: 14px;
+  overflow: hidden;
+}
+
+.toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  padding: 12px 16px;
+  border-bottom: 1px solid var(--v2-divider);
+}
+
+.filter,
+.filterOn {
+  min-height: 38px;
+  padding: 0 14px;
+  border-radius: 8px;
+  font-size: 13px;
+  font-weight: 500;
+  border: 1px solid var(--v2-border-strong);
+  background: #ffffff;
+  color: var(--v2-text);
+}
+
+.filterOn {
+  background: var(--v2-ink);
+  border-color: var(--v2-ink);
+  color: #ffffff;
+  font-weight: 600;
+}
+
+.spacer {
+  flex: 1 1 auto;
+}
+
+.search {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 38px;
+  padding: 0 12px;
+  border: 1px solid var(--v2-border-strong);
+  border-radius: 8px;
+  color: var(--v2-text-muted);
+}
+
+.search input {
+  border: 0;
+  outline: none;
+  width: 170px;
+  font-size: 13px;
+  background: transparent;
+  color: var(--v2-text);
+}
+
+.search:focus-within {
+  border-color: var(--v2-cyan);
+  box-shadow: 0 0 0 3px var(--v2-cyan-bg);
+}
+
+.tableScroll {
+  overflow-x: auto;
+}
+
+.table {
+  width: 100%;
+  min-width: 760px;
+  border-collapse: collapse;
+}
+
+.table th {
+  text-align: left;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--v2-text-muted);
+  padding: 10px 16px;
+  border-bottom: 1px solid var(--v2-divider);
+}
+
+.table td {
+  padding: 13px 16px;
+  border-bottom: 1px solid var(--v2-divider);
+  font-size: 14px;
+}
+
+.table tr:last-child td {
+  border-bottom: 0;
+}
+
+.table tbody tr:hover td {
+  background: #fafbfc;
+}
+
+.jobLink {
+  font-weight: 600;
+  color: var(--v2-text);
+  text-decoration: none;
+}
+
+.jobLink:hover {
+  color: var(--v2-cyan);
+}
+
+.num {
+  text-align: right;
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+}
+
+.table th.num {
+  font-family: var(--font-sans);
+}
+
+.qualified {
+  color: var(--v2-success);
+  font-weight: 600;
+}
+
+.zero {
+  color: var(--v2-warning);
+  font-weight: 600;
+}
+
+.muted {
+  color: var(--v2-text-body);
+  font-size: 13px;
+  white-space: nowrap;
+}
+
+.status {
+  padding: 14px 16px;
+  margin: 0;
+  color: var(--v2-text-muted);
+}
+
+.error {
+  margin: 12px 16px;
+  background: var(--v2-danger-bg);
+  color: var(--v2-danger);
+  border: 1px solid rgba(180, 35, 24, 0.25);
+  border-radius: 10px;
+  padding: 10px 12px;
+  font-size: 14px;
 }
 
 .form {
+  flex: 1 1 360px;
   background: var(--v2-surface);
   border: 1px solid var(--v2-border);
-  border-radius: var(--v2-radius);
-  backdrop-filter: blur(var(--v2-blur));
-  -webkit-backdrop-filter: blur(var(--v2-blur));
-  padding: var(--spacing-4);
-  margin-bottom: var(--spacing-4);
+  border-radius: 14px;
+  padding: 20px;
   display: flex;
   flex-direction: column;
-  gap: var(--spacing-3);
+  gap: 14px;
+}
+
+.form .error {
+  margin: 0;
+}
+
+.formTitle {
+  margin: 0;
+  font-size: 16px;
+  font-weight: 600;
 }
 
 .field {
   display: flex;
   flex-direction: column;
-  gap: var(--spacing-1);
-  font-size: var(--font-size-sm);
+  gap: 6px;
+  font-size: 13px;
   font-weight: 500;
-  color: var(--v2-text-muted);
 }
 
 .field input,
-.field textarea {
-  padding: var(--spacing-2);
+.field textarea,
+.field select,
+.languageRequirementRow select {
+  min-height: 42px;
+  padding: 0 12px;
   border: 1px solid var(--v2-border-strong);
-  border-radius: var(--v2-radius);
-  background: var(--v2-bg-inset);
-  font-size: var(--font-size-base);
-  font-family: inherit;
+  border-radius: 8px;
+  background: #ffffff;
   color: var(--v2-text);
+  font-size: 14px;
+  font-weight: 400;
+}
+
+.field textarea {
+  padding: 10px 12px;
   resize: vertical;
 }
 
-.field input:focus-visible,
-.field textarea:focus-visible {
-  outline: none;
-  border-color: var(--v2-cyan);
+.languageRequirementToggle {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+  font-weight: 500;
+  cursor: pointer;
+}
+
+.languageRequirementToggle input {
+  width: 16px;
+  height: 16px;
+  accent-color: var(--v2-ink);
+}
+
+.languageRequirementRow {
+  display: flex;
+  gap: 8px;
+}
+
+.languageRequirementRow select {
+  flex: 1 1 0;
+}
+
+.languageRequirementHint {
+  margin: 0;
+  font-size: 12px;
+  font-weight: 400;
+  color: var(--v2-text-muted);
 }
 
 .advancedToggle {
   align-self: flex-start;
-  border: none;
+  border: 0;
   background: none;
-  color: var(--v2-cyan);
-  font-size: var(--font-size-sm);
-  font-weight: 500;
   padding: 0;
+  min-height: 32px;
+  color: var(--v2-cyan);
+  font-size: 13px;
+  font-weight: 500;
 }
 
 .advancedToggle:hover {
@@ -119,139 +273,34 @@
 
 .advancedFields {
   display: flex;
-  gap: var(--spacing-3);
   flex-wrap: wrap;
+  gap: 10px;
 }
 
 .advancedFields .field {
-  flex: 1 1 200px;
-}
-
-.formActions {
-  display: flex;
+  flex: 1 1 140px;
 }
 
 .submitButton {
-  background: linear-gradient(120deg, var(--v2-cyan), var(--v2-violet));
-  color: var(--v2-bg-inset);
-  border: none;
-  border-radius: var(--v2-radius);
-  padding: var(--spacing-2) var(--spacing-4);
-  font-size: var(--font-size-md);
-  font-weight: 700;
-  transition: transform var(--v2-transition);
+  min-height: 46px;
+  border-radius: 9px;
+  border: 0;
+  background: var(--v2-cyan);
+  color: #ffffff;
+  font-size: 14px;
+  font-weight: 600;
 }
 
 .submitButton:hover:not(:disabled) {
-  transform: translateY(-1px);
+  background: var(--v2-cyan-hover);
 }
 
 .submitButton:disabled {
-  opacity: 0.5;
-  cursor: not-allowed;
-  transform: none;
+  opacity: 0.6;
 }
 
-.status {
-  color: var(--v2-text-muted);
-  font-size: var(--font-size-base);
-}
-
-.error {
-  background: var(--v2-danger-bg);
-  color: var(--v2-danger);
-  padding: var(--spacing-2) var(--spacing-3);
-  border-radius: var(--v2-radius);
-  font-size: var(--font-size-base);
-  border: 1px solid rgba(251, 113, 133, 0.3);
-}
-
-.jobList {
-  list-style: none;
+.formNote {
   margin: 0;
-  padding: 0;
-  display: flex;
-  flex-direction: column;
-  gap: var(--spacing-2);
-}
-
-.jobCard {
-  width: 100%;
-  text-align: left;
-  background: var(--v2-surface);
-  border: 1px solid var(--v2-border);
-  border-radius: var(--v2-radius);
-  padding: var(--spacing-3);
-  display: flex;
-  flex-direction: column;
-  gap: var(--spacing-1);
-  font-family: inherit;
-  backdrop-filter: blur(var(--v2-blur));
-  -webkit-backdrop-filter: blur(var(--v2-blur));
-  transition: border-color var(--v2-transition), background-color var(--v2-transition);
-}
-
-.jobCard:hover {
-  border-color: var(--v2-cyan);
-  background: var(--v2-surface-strong);
-}
-
-.jobTitle {
-  display: flex;
-  align-items: center;
-  gap: var(--spacing-2);
-  font-weight: 600;
-  font-size: var(--font-size-lg);
-  color: var(--v2-text);
-}
-
-.jobMeta {
+  font-size: 12px;
   color: var(--v2-text-muted);
-  font-size: var(--font-size-sm);
-}
-
-.languageRequirementToggle {
-  display: flex;
-  align-items: center;
-  gap: var(--spacing-2);
-  font-size: var(--font-size-sm);
-  font-weight: 500;
-  color: var(--v2-text-muted);
-  flex: 1 1 100%;
-}
-
-.languageRequirementRow {
-  display: flex;
-  gap: var(--spacing-2);
-}
-
-.languageRequirementRow select {
-  padding: var(--spacing-2);
-  border: 1px solid var(--v2-border-strong);
-  border-radius: var(--v2-radius);
-  background: var(--v2-bg-inset);
-  font-size: var(--font-size-base);
-  font-family: inherit;
-  color: var(--v2-text);
-}
-
-.languageRequirementHint {
-  margin: 0;
-  font-size: var(--font-size-sm);
-  font-weight: 400;
-  color: var(--v2-text-muted);
-}
-
-@media (max-width: 480px) {
-  .newJobButton {
-    width: 100%;
-  }
-
-  .advancedFields {
-    flex-direction: column;
-  }
-
-  .submitButton {
-    width: 100%;
-  }
 }

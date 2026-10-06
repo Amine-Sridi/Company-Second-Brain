@@ -1,44 +1,51 @@
-import { NavLink } from "react-router-dom";
+import { NavLink, useNavigate } from "react-router-dom";
 import { motion, useReducedMotion } from "motion/react";
+import { useAuth } from "../context/AuthContext.jsx";
 import styles from "./Sidebar.module.css";
 
-// Only routes that actually exist get a nav entry -- every item here was added
-// only once its own page actually worked (see FRONTEND_HANDOFF.md). This is now
-// every screen named in the original admin-dashboard redesign proposal.
+// Only routes that actually exist get a nav entry (see FRONTEND_HANDOFF.md).
 const NAV_ITEMS = [
   { to: "/", label: "Dashboard", icon: IconDashboard, end: true },
-  { to: "/candidates", label: "Candidates", icon: IconCandidates },
-  { to: "/upload", label: "Upload Resume", icon: IconUpload },
   { to: "/jobs", label: "Jobs", icon: IconJobs },
-  { to: "/interviews", label: "VoiceHR", icon: IconVoiceHR },
+  { to: "/candidates", label: "Candidates", icon: IconCandidates },
+  { to: "/upload", label: "Upload resumes", icon: IconUpload },
+  { to: "/interviews", label: "VoiceHR interviews", icon: IconVoiceHR },
   { to: "/reports", label: "Reports", icon: IconReports },
-  { to: "/graph", label: "Knowledge Graph", icon: IconGraph },
+  { to: "/graph", label: "Knowledge graph", icon: IconGraph },
 ];
 
 /**
- * V2 design system, Phase 1 (see FRONTEND_HANDOFF.md): the persistent dark-glass
- * shell chrome, rendered around every page regardless of that page's own
- * still-unmigrated (light) styling -- safe because this component is entirely
- * self-contained (its own --v2-* colors, its own classes), so redesigning it
- * cannot affect any other page's contrast or layout.
+ * The persistent shell navigation: the one dark surface in the light theme. It also
+ * carries the signed-in account and the log-out action, which used to live in a
+ * separate top bar that held nothing else.
  *
- * The active item is a single shared `motion.span` (layoutId) that slides
- * between nav entries instead of each link drawing its own static highlight --
- * the one "nav active state" motion moment this phase's brief asks for.
+ * The active item is a single shared `motion.span` (layoutId) that slides between
+ * nav entries instead of each link drawing its own static highlight.
  */
 export default function Sidebar() {
   const shouldReduceMotion = useReducedMotion();
+  const { recruiter, logout } = useAuth();
+  const navigate = useNavigate();
   const pillTransition = shouldReduceMotion
     ? { duration: 0 }
     : { type: "spring", stiffness: 420, damping: 34 };
 
+  function handleLogout() {
+    logout();
+    navigate("/login", { replace: true });
+  }
+
   return (
-    <nav className={styles.sidebar}>
+    <nav className={styles.sidebar} aria-label="Main">
       <div className={styles.brand}>
         <span className={styles.brandMark} aria-hidden="true">
           <IconGraph className={styles.brandMarkIcon} />
         </span>
-        <span className={styles.brandText}>Company Second Brain</span>
+        <span className={styles.brandText}>
+          Company
+          <br />
+          Second Brain
+        </span>
       </div>
 
       <div className={styles.nav}>
@@ -65,7 +72,27 @@ export default function Sidebar() {
           </NavLink>
         ))}
       </div>
+
+      <div className={styles.account}>
+        <span className={styles.accountEmail} title={recruiter?.email}>
+          {recruiter?.email}
+        </span>
+        <button type="button" className={styles.logoutButton} onClick={handleLogout}>
+          <IconLogout className={styles.icon} />
+          Log out
+        </button>
+      </div>
     </nav>
+  );
+}
+
+function IconLogout(props) {
+  return (
+    <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.6" {...props}>
+      <path d="M8 3.5H5a1.5 1.5 0 0 0-1.5 1.5v10A1.5 1.5 0 0 0 5 16.5h3" />
+      <path d="M13 13.5 17 10l-4-3.5" />
+      <path d="M17 10H8" />
+    </svg>
   );
 }
 

@@ -4,20 +4,12 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>VoiceHR Interview</title>
-    <style>
-        /* Purely structural (which wizard step is visible) -- all visual styling
-           lives in theme.css so this page shares one design system with the rest
-           of the product instead of carrying its own bespoke light theme. */
-        * { box-sizing: border-box; margin: 0; padding: 0; }
-        .step { display: none; }
-        .step.active { display: block; }
-    </style>
-    <link rel="stylesheet" href="/theme.css">
+    <link rel="stylesheet" href="/interview.css">
 </head>
-<body class="midnight-page">
-    <div class="card">
-        <div class="brand-row" aria-hidden="true">
-            <span class="brand-mark">
+<body class="sarah-speaking">
+    <header class="topbar">
+        <div class="brand">
+            <span class="brand-mark" aria-hidden="true">
                 <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6">
                     <circle cx="5" cy="6" r="2" />
                     <circle cx="5" cy="14" r="2" />
@@ -26,90 +18,202 @@
                     <path d="M6.8 13.1 11.7 11" />
                 </svg>
             </span>
-            <span class="brand-text">Company Second Brain</span>
+            <span>Company Second Brain</span>
         </div>
+        <span class="topbar-note">Language interview<span id="header-lang"></span></span>
+    </header>
+
+    <main class="page">
         <div class="step active" id="step-loading">
-            <div class="loading">
-                <p>Loading...</p>
+            <div class="state-card">
+                <div class="loading-title"><span class="spinner" aria-hidden="true"></span><h2>Opening your interview…</h2></div>
             </div>
         </div>
 
         <div class="step" id="step-error">
-            <div class="error-msg" id="error-text"></div>
+            <div class="state-card" role="alert">
+                <span class="badge error">Cannot open</span>
+                <h2 id="error-text"></h2>
+                <p>If this keeps happening, contact the recruiter who invited you.</p>
+            </div>
         </div>
 
         <div class="step" id="step-consent">
-            <h2>Welcome, <span id="candidate-name"></span></h2>
-            <p>Language: <strong id="lang-display"></strong></p>
-            <div class="consent-box">
-                <p>This interview will be recorded for evaluation purposes.</p>
+            <div class="narrow">
+                <ol class="stepper" aria-label="Steps">
+                    <li class="current" aria-current="step">1 · Welcome</li>
+                    <li>2 · Microphone</li>
+                    <li>3 · Interview</li>
+                </ol>
+                <div>
+                    <h1>Welcome, <span id="candidate-name"></span></h1>
+                    <p class="lead">You are about to talk with Sarah, an AI interviewer, in <strong id="lang-display"></strong>. She asks about your experience and lets you answer in your own words. There are no trick questions.</p>
+                </div>
+
+                <section class="panel" aria-label="What to expect">
+                    <span class="panel-title">What to expect</span>
+                    <div class="expect"><span class="num">1</span><strong>Check your microphone</strong><span>A quick test, so Sarah can hear you clearly.</span></div>
+                    <div class="expect"><span class="num">2</span><strong>Talk with Sarah for a few minutes</strong><span>Speak naturally and give examples when you can. You can see the conversation as it happens.</span></div>
+                    <div class="expect"><span class="num">3</span><strong>The recruitment team follows up</strong><span>A recruiter reviews the result. The decision is never taken by the AI alone.</span></div>
+                </section>
+
+                <section class="panel" aria-label="Recording consent">
+                    <div class="notice">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="9" y="3" width="6" height="11" rx="3"></rect><path d="M5 11a7 7 0 0 0 14 0"></path><path d="M12 18v3"></path></svg>
+                        <div>
+                            <span class="panel-title">This interview is recorded</span>
+                            <p>Your voice is recorded and transcribed so your answers can be evaluated. The recording is used only for this evaluation.</p>
+                        </div>
+                    </div>
+                    <label class="check"><input type="checkbox" id="consent-check" onchange="document.getElementById('consent-btn').disabled = !this.checked"> I agree to be recorded for this interview.</label>
+                    <button id="consent-btn" class="btn block" disabled onclick="enterMicStep()">Continue to the microphone check</button>
+                </section>
+                <p class="small center">Use a recent Chrome, Edge or Safari, in a quiet place. Headphones help.</p>
             </div>
-            <label><input type="checkbox" id="consent-check" onchange="document.getElementById('consent-btn').disabled = !this.checked"> I agree to be recorded.</label>
-            <br>
-            <button id="consent-btn" disabled onclick="enterMicStep()">Continue</button>
         </div>
 
         <div class="step" id="step-mic">
-            <h2>Microphone Test</h2>
-            <p>Speak into your microphone to see the level below.</p>
-            <div class="mic-bar-container">
-                <div class="mic-bar" id="mic-bar"></div>
+            <div class="narrow">
+                <ol class="stepper" aria-label="Steps">
+                    <li class="done">1 · Welcome</li>
+                    <li class="current" aria-current="step">2 · Microphone</li>
+                    <li>3 · Interview</li>
+                </ol>
+                <div>
+                    <h1>Check your microphone</h1>
+                    <p class="lead">Say a few words. The bar moves when Sarah will be able to hear you.</p>
+                </div>
+
+                <section class="panel" aria-label="Microphone level">
+                    <div class="mic-row">
+                        <span class="mic-icon" aria-hidden="true">
+                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="3" width="6" height="11" rx="3"></rect><path d="M5 11a7 7 0 0 0 14 0"></path><path d="M12 18v3"></path></svg>
+                        </span>
+                        <div class="mic-bar-container"><div class="mic-bar" id="mic-bar"></div></div>
+                    </div>
+                    <p class="mic-status" id="mic-status" aria-live="polite">Waiting for your voice…</p>
+                    <p class="inline-error" id="mic-error" style="display:none;">Could not access microphone. Please check browser permissions.</p>
+                    <button id="mic-retry-btn" class="btn secondary small-btn" style="display:none;" onclick="retryMicAccess()">Try again</button>
+                </section>
+
+                <section class="tips" aria-label="Tips">
+                    <div class="tip"><strong>A quiet place</strong>Background noise makes your answers harder to understand.</div>
+                    <div class="tip"><strong>Headphones</strong>They stop Sarah's voice from reaching your microphone.</div>
+                    <div class="tip"><strong>Take your time</strong>Sarah waits for you to finish before she speaks.</div>
+                </section>
+
+                <p class="inline-error" id="model-error" style="display:none;"></p>
+                <div class="start-row">
+                    <button id="start-btn" class="btn" disabled onclick="startInterview()">Preparing Sarah…</button>
+                </div>
+                <p class="small">The microphone is only used during the interview. Your browser asks for permission once.</p>
             </div>
-            <p id="mic-error" style="display:none;">Could not access microphone. Please check browser permissions.</p>
-            <button id="mic-retry-btn" style="display:none;" onclick="retryMicAccess()">Try again</button>
-            <p id="model-error" style="display:none;"></p>
-            <button id="start-btn" disabled onclick="startInterview()">Preparing Sarah...</button>
         </div>
 
         <div class="step" id="step-interview">
-             <div class="interview-shell">
-                 <div class="interview-top"><span class="candidate-name" id="interview-candidate"></span><span class="elapsed-timer" id="timer">00:00</span></div>
-                  <div class="orb-wrap"><div class="orb speaking" id="sarah-orb"><div class="orb-core"></div></div><p class="orb-label" id="sarah-label">Connecting to Sarah…</p></div>
-                 <div class="wave" id="wave"><div class="bar"></div><div class="bar"></div><div class="bar"></div><div class="bar"></div><div class="bar"></div><div class="bar"></div><div class="bar"></div><div class="bar"></div><div class="bar"></div><div class="bar"></div><div class="bar"></div><div class="bar"></div></div>
-                    <div class="task-card"><p class="task-label task-indicator">Interview in progress</p><p class="task-text">Sarah will guide you through 4 tasks. Speak naturally and give Sarah examples when you can.</p></div>
-                    <div class="live-transcript" id="live-transcript" aria-live="polite" aria-label="Live transcript">
-                        <p class="live-transcript-title">Live transcript</p>
+            <div class="interview-shell">
+                <div class="interview-top">
+                    <span class="candidate-name" id="interview-candidate"></span>
+                    <span class="top-right">
+                        <span class="rec"><span class="rec-dot" aria-hidden="true"></span>Recording</span>
+                        <span class="elapsed-timer" id="timer" aria-label="Elapsed time">00:00</span>
+                    </span>
+                </div>
+
+                <div class="interview-grid">
+                    <section class="stage" aria-label="Conversation">
+                        <div class="orb-wrap">
+                            <div class="orb speaking" id="sarah-orb" aria-hidden="true">
+                                <span class="orb-pulse"></span>
+                                <span class="orb-pulse late"></span>
+                                <div class="orb-core">
+                                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M4 10v4M8 7v10M12 4v16M16 7v10M20 10v4"></path></svg>
+                                </div>
+                            </div>
+                            <p class="orb-label" id="sarah-label" aria-live="polite">Connecting to Sarah…</p>
+                            <div class="persona"><strong>Sarah</strong><span>AI interviewer</span></div>
+                        </div>
+
+                        <div class="mic-meter">
+                            <div class="mic-meter-head">
+                                <span>Your microphone</span>
+                                <span class="listening">Sarah is listening</span>
+                                <span class="waiting">Waiting for Sarah to finish</span>
+                            </div>
+                            <div class="wave" id="wave" aria-hidden="true"><div class="bar"></div><div class="bar"></div><div class="bar"></div><div class="bar"></div><div class="bar"></div><div class="bar"></div><div class="bar"></div><div class="bar"></div><div class="bar"></div><div class="bar"></div><div class="bar"></div><div class="bar"></div><div class="bar"></div><div class="bar"></div><div class="bar"></div><div class="bar"></div><div class="bar"></div><div class="bar"></div><div class="bar"></div><div class="bar"></div><div class="bar"></div><div class="bar"></div><div class="bar"></div><div class="bar"></div><div class="bar"></div><div class="bar"></div><div class="bar"></div><div class="bar"></div><div class="bar"></div><div class="bar"></div></div>
+                        </div>
+
+                        <div class="task-card">
+                            <p class="task-label task-indicator">Interview in progress</p>
+                            <p class="task-text">Speak naturally and give Sarah examples when you can.</p>
+                        </div>
+
+                        <div class="stage-foot">
+                            <span class="small">Take your time. Sarah waits until you have finished before she continues.</span>
+                            <button id="finish-ask" class="btn secondary" onclick="askFinish()">Finish the interview</button>
+                            <div class="finish-confirm" id="finish-confirm">
+                                <span>Finish now? Your answers are saved.</span>
+                                <button id="finish-btn" class="btn dark" onclick="finishInterview()">Finish</button>
+                                <button class="btn secondary" onclick="cancelFinish()">Keep talking</button>
+                            </div>
+                        </div>
+                    </section>
+
+                    <section class="live-transcript" id="live-transcript" aria-live="polite" aria-label="Live transcript">
+                        <div class="live-transcript-head">
+                            <p class="live-transcript-title">Live transcript</p>
+                            <span class="small">Updates as you speak</span>
+                        </div>
                         <div id="live-transcript-lines"><p class="live-transcript-placeholder">Your conversation will appear here.</p></div>
-                    </div>
-                 <button id="finish-btn" onclick="finishInterview()">Finish Interview</button>
-             </div>
-        </div>
-
-        <div class="step" id="step-retry">
-            <h2>Connection Lost</h2>
-            <p>The connection was interrupted. Your answers so far were saved. You can reconnect to continue -- Sarah will restart the conversation, but your earlier answers are kept for review.</p>
-            <button onclick="retryInterview()">Reconnect</button>
-        </div>
-
-        <div class="step" id="step-mic-lost">
-            <h2>Microphone problem</h2>
-            <p id="mic-lost-text">Your microphone stopped working or was disconnected. Your answers so far were saved.</p>
-            <button onclick="retryInterview()">Resume with microphone</button>
-        </div>
-
-        <div class="step" id="step-finalizing">
-            <div class="loading">
-                <p>Finishing up…</p>
-                <p>Please wait while your interview is saved. This can take a few seconds.</p>
+                        <p class="small">This live view helps you follow the conversation. Your answers are evaluated from the complete transcript after the interview.</p>
+                    </section>
+                </div>
             </div>
         </div>
 
-         <div class="step" id="step-done">
-             <div class="thank-you">
-                 <h2>Thank you!</h2>
-                 <p>Your interview is complete.</p>
-                 <p>The recruitment team will be in touch.</p>
-             </div>
-         </div>
+        <div class="step" id="step-retry">
+            <div class="state-card retry-card">
+                <p>The connection was interrupted. Your answers so far were saved. You can reconnect to continue: Sarah will restart the conversation, but your earlier answers are kept for review.</p>
+                <span class="badge warn">Interrupted</span>
+                <h2>The connection was lost</h2>
+                <button class="btn" onclick="retryInterview()">Reconnect</button>
+            </div>
+        </div>
 
-         <div class="step" id="step-terminated">
-             <div class="thank-you">
-                 <h2>Interview ended</h2>
-                 <p id="termination-text">The interview has ended.</p>
-                 <p>The recruitment team will review the available report.</p>
-             </div>
-         </div>
-    </div>
+        <div class="step" id="step-mic-lost">
+            <div class="state-card">
+                <span class="badge warn">Interrupted</span>
+                <h2>Your microphone stopped</h2>
+                <p id="mic-lost-text">Your microphone stopped working or was disconnected. Your answers so far were saved.</p>
+                <button class="btn" onclick="retryInterview()">Resume with the microphone</button>
+            </div>
+        </div>
+
+        <div class="step" id="step-finalizing">
+            <div class="state-card" role="status">
+                <span class="badge neutral">Finishing</span>
+                <div class="loading-title"><span class="spinner" aria-hidden="true"></span><h2>Saving your interview</h2></div>
+                <p>This takes a few seconds. Please keep this page open until it is done.</p>
+            </div>
+        </div>
+
+        <div class="step" id="step-done">
+            <div class="state-card">
+                <span class="done-mark" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12.5l4.5 4.5L19 7.5"></path></svg></span>
+                <h2>Thank you</h2>
+                <p>Your interview is complete. The recruitment team reviews it and will be in touch. You can close this page.</p>
+            </div>
+        </div>
+
+        <div class="step" id="step-terminated">
+            <div class="state-card">
+                <span class="badge neutral">Ended early</span>
+                <h2>The interview has ended</h2>
+                <p id="termination-text">The interview has ended.</p>
+                <p>The recruitment team will review the available report.</p>
+            </div>
+        </div>
+    </main>
 
     <script>
         const params = new URLSearchParams(window.location.search);
@@ -215,7 +319,8 @@
               }
              if (message.type === 'transcript_delta' && message.text) {
                  if (!liveTranscriptCurrent || liveTranscriptCurrent.role !== role) {
-                     if (lines.children.length === 1 && lines.children[0].tagName === 'P') lines.innerHTML = '';
+                     const placeholder = lines.querySelector('.live-transcript-placeholder');
+                     if (placeholder) placeholder.remove();
                      const line = document.createElement('p');
                      line.className = `live-transcript-line ${role}`;
                      const speaker = document.createElement('span');
@@ -253,6 +358,7 @@
                  document.getElementById('candidate-name').textContent = candidateName;
                  document.getElementById('interview-candidate').textContent = candidateName;
                  document.getElementById('lang-display').textContent = language === 'en' ? 'English' : 'French';
+                 document.getElementById('header-lang').textContent = language === 'en' ? ' · English' : ' · French';
                  showStep('step-consent');
                  preparePromise = prepareSarah(language);
                  initMic();
@@ -286,9 +392,12 @@
         function updateStartButton() {
             const startButton = document.getElementById('start-btn');
             startButton.disabled = !(micReady && modelsReady);
-            startButton.textContent = modelsReady
-                ? 'Mic is working — Start Interview'
-                : 'Preparing Sarah...';
+            startButton.textContent = modelsReady ? 'Start the interview' : 'Preparing Sarah…';
+            const micStatus = document.getElementById('mic-status');
+            if (micStatus) {
+                micStatus.textContent = micReady ? 'We can hear you clearly.' : 'Waiting for your voice…';
+                micStatus.classList.toggle('ok', micReady);
+            }
         }
 
         async function initMic() {
@@ -620,6 +729,7 @@
                          // interview and told the candidate something false. What is
                          // actually happening is already shown, live and accurately, by
                          // the transcript panel (renderLiveTranscriptEvent).
+                         document.body.classList.toggle('clarifying', message.phase === 'clarifying');
                          document.querySelector('.task-indicator').textContent =
                              message.phase === 'clarifying'
                                  ? 'Sarah is asking for a little more detail'
@@ -776,7 +886,10 @@
         function setSpeaking(isSpeaking) {
             candidateListening = !isSpeaking;
             document.getElementById('sarah-orb').classList.toggle('speaking', isSpeaking);
-            document.getElementById('sarah-label').textContent = isSpeaking ? 'Sarah is speaking…' : 'Your turn';
+            document.body.classList.toggle('sarah-speaking', isSpeaking);
+            document.getElementById('sarah-label').textContent = isSpeaking
+                ? (document.body.classList.contains('clarifying') ? 'Sarah is asking for a little more detail' : 'Sarah is speaking')
+                : 'Your turn · speak naturally';
         }
 
         function handleInterviewClose(event) {
@@ -828,6 +941,16 @@
              ending = false;
              await startInterview();
          }
+
+        function askFinish() {
+            document.getElementById('finish-ask').style.display = 'none';
+            document.getElementById('finish-confirm').classList.add('open');
+        }
+
+        function cancelFinish() {
+            document.getElementById('finish-confirm').classList.remove('open');
+            document.getElementById('finish-ask').style.display = '';
+        }
 
         function finishInterview() {
             if (ending) return; // guards against a double-click or a duplicate trigger

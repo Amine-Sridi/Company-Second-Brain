@@ -1,0 +1,47 @@
+.host {
+  position: relative;
+  width: 100%;
+  height: 620px;
+  overflow: hidden;
+  background: linear-gradient(#ffffff, #f1f3f7);
+  cursor: grab;
+}
+
+.host:active {
+  cursor: grabbing;
+}
+
+.labelLayer {
+  position: absolute;
+  top: 0;
+  left: 0;
+  pointer-events: none;
+}
+
+.jobLabel,
+.pinLabel {
+  font-family: var(--font-sans);
+  white-space: nowrap;
+  border: 1px solid var(--v2-border);
+  border-radius: 7px;
+  background: rgba(255, 255, 255, 0.95);
+}
+
+.jobLabel {
+  padding: 3px 9px;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--v2-text);
+  transition: opacity var(--v2-transition);
+}
+
+.pinLabel {
+  padding: 2px 7px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--v2-text);
+}
+
+.dim {
+  opacity: 0.35;
+}

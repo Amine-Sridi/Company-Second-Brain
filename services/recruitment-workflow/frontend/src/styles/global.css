@@ -49,25 +49,9 @@ select {
 }
 
 /* A shared focus treatment so every page looks and behaves the same way for keyboard
-   navigation -- form controls get a soft focus ring (matches the primary color),
-   everything else (buttons, links, custom clickable rows/cards) gets a plain visible
-   outline. Applies only on keyboard focus (:focus-visible), not on every mouse click.
-
-   Uses --v2-cyan/--v2-cyan-bg, not --color-primary/--color-primary-bg: every
-   post-login page now runs the V2 dark theme (see FRONTEND_HANDOFF.md's "Current
-   state"), so the dark ring is the correct *default* now, not the exception it used
-   to be when this rule was first written against a still-mostly-light app. Confirmed
-   live (app-wide dark-theme focus-ring audit) that this single shared rule is now
-   enough on its own -- the per-component overrides that used to compensate for it
-   pointing the wrong way (Sidebar.module.css, ApplicationsPage.module.css) have been
-   removed as redundant, not left in as harmless duplication.
-
-   LoginPage is the one deliberate exception (still V1 light theme by design) --
-   LoginPage.module.css carries its own small, self-contained override back to
-   --color-primary/--color-primary-bg for exactly its own three focusable elements,
-   the same "scoped override, cannot affect any other page" pattern this file's own
-   rule used to require of every V2 page before this change inverted which theme is
-   the default. */
+   navigation -- form controls get a soft focus ring in the accent color, everything
+   else (buttons, links, clickable rows/cards) gets a plain visible outline. Applies
+   only on keyboard focus (:focus-visible), not on every mouse click. */
 :focus-visible {
   outline: 2px solid var(--v2-cyan);
   outline-offset: 2px;
@@ -81,10 +65,14 @@ select:focus-visible {
   box-shadow: 0 0 0 3px var(--v2-cyan-bg);
 }
 
-/* App-wide reduced-motion support (V2 design system, Phase 1 -- see
-   FRONTEND_HANDOFF.md). Two layers exist and both need this: plain CSS
-   transitions/@keyframes (the aurora backdrop's slow drift, hover states) are
-   caught here; `motion`-driven animations (page transitions, the sidebar's
+/* Numbers (scores, counts, levels) use the monospace face so columns line up. */
+.num {
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+}
+
+/* App-wide reduced-motion support. Two layers exist and both need this: plain CSS
+   transitions/@keyframes (hover states) are caught here; `motion`-driven animations (page transitions, the sidebar's
    active-nav indicator, animated stat numbers) are JS-driven and check
    `useReducedMotion()` individually wherever they're used, since this CSS rule
    cannot reach into an animation library's own requestAnimationFrame loop. */

@@ -1,432 +1,331 @@
-/* V2 design system, Phase 1 (see FRONTEND_HANDOFF.md). Dashboard is the first full
-   page redesign: everything below is scoped to this one file's classes, using only
-   --v2-* tokens -- it cannot affect any other page, and (Layout.module.css's
-   `.content` is intentionally untouched) sits inside the same light shell content
-   area every other page still does, painting its own dark "panel" over it rather
-   than repainting the whole app background. */
-
 .page {
-  position: relative;
-  max-width: 1400px;
-  padding: var(--spacing-5);
-  border-radius: var(--v2-radius-lg);
-  border: 1px solid var(--v2-border);
-  background: var(--v2-bg);
-  box-shadow: var(--v2-shadow-elevated);
+  max-width: 1240px;
   color: var(--v2-text);
   display: flex;
   flex-direction: column;
-  gap: var(--spacing-5);
-  overflow: hidden;
+  gap: 20px;
 }
 
-/* Three layered background effects, each restrained per this phase's own brief
-   ("subtle", "faint", "no excessive gradients/glow"): two soft aurora blooms
-   (cyan top-left, violet bottom-right), a faint technical grid, and a barely-
-   there noise layer (inline SVG feTurbulence data-URI -- no image asset, no new
-   dependency) for texture so large flat dark areas don't look like a flat color
-   fill. All three sit behind the actual content (z-index/stacking via normal
-   document order) and never intercept pointer events. */
-.page::before {
-  content: "";
-  position: absolute;
-  inset: 0;
-  pointer-events: none;
-  background-image:
-    radial-gradient(640px 420px at 8% 0%, var(--v2-cyan-bg), transparent 60%),
-    radial-gradient(560px 420px at 96% 100%, var(--v2-violet-bg), transparent 60%),
-    linear-gradient(rgba(255, 255, 255, 0.025) 1px, transparent 1px),
-    linear-gradient(90deg, rgba(255, 255, 255, 0.025) 1px, transparent 1px);
-  background-size:
-    auto,
-    auto,
-    36px 36px,
-    36px 36px;
+.header {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 16px;
 }
 
-.page::after {
-  content: "";
-  position: absolute;
-  inset: 0;
-  pointer-events: none;
-  opacity: 0.05;
-  mix-blend-mode: overlay;
-  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='200' height='200'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='2' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
+.headerText {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
 }
 
-.page > * {
-  position: relative;
+.eyebrow {
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--v2-text-muted);
+}
+
+.title {
+  margin: 0;
+  font-size: var(--font-size-xl);
+  font-weight: 700;
+  letter-spacing: -0.01em;
+}
+
+.actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.actionPrimary,
+.actionSecondary {
+  display: inline-flex;
+  align-items: center;
+  min-height: 44px;
+  padding: 0 18px;
+  border-radius: 9px;
+  font-size: 14px;
+  text-decoration: none;
+}
+
+.actionPrimary {
+  background: var(--v2-cyan);
+  color: #ffffff;
+  font-weight: 600;
+}
+
+.actionPrimary:hover {
+  background: var(--v2-cyan-hover);
+}
+
+.actionSecondary {
+  border: 1px solid var(--v2-border-strong);
+  background: #ffffff;
+  color: var(--v2-text);
+  font-weight: 500;
+}
+
+.actionSecondary:hover {
+  border-color: var(--v2-text-faint);
 }
 
 .status {
   color: var(--v2-text-muted);
-  font-size: var(--font-size-base);
 }
 
 .error {
   background: var(--v2-danger-bg);
   color: var(--v2-danger);
-  padding: var(--spacing-2) var(--spacing-3);
-  border-radius: var(--v2-radius);
-  font-size: var(--font-size-base);
-  border: 1px solid rgba(251, 113, 133, 0.3);
+  border: 1px solid rgba(180, 35, 24, 0.25);
+  border-radius: 10px;
+  padding: 12px 14px;
 }
 
-/* ---------------------------------------------------------------------------
-   Hero
---------------------------------------------------------------------------- */
-
-.hero {
-  display: flex;
-  align-items: flex-end;
-  justify-content: space-between;
-  flex-wrap: wrap;
-  gap: var(--spacing-4);
-  padding-bottom: var(--spacing-4);
-  border-bottom: 1px solid var(--v2-border);
-}
-
-.heroText {
-  display: flex;
-  flex-direction: column;
-  gap: var(--spacing-1);
-  min-width: 0;
-}
-
-.heroEyebrow {
-  display: inline-flex;
-  align-items: center;
-  gap: var(--spacing-1);
-  width: fit-content;
-  font-size: var(--font-size-xs);
-  font-weight: 700;
-  text-transform: uppercase;
-  letter-spacing: 0.08em;
-  color: var(--v2-cyan);
-}
-
-.heroEyebrow::before {
-  content: "";
-  width: 6px;
-  height: 6px;
-  border-radius: 50%;
-  background: var(--v2-cyan);
-  box-shadow: 0 0 8px 1px var(--v2-cyan);
-}
-
-.heroTitle {
-  margin: 0;
-  font-size: clamp(1.6rem, 2.4vw, 2.1rem);
-  font-weight: 700;
-  letter-spacing: -0.02em;
-  color: var(--v2-text);
-}
-
-.heroName {
-  background: linear-gradient(120deg, var(--v2-cyan), var(--v2-violet));
-  -webkit-background-clip: text;
-  background-clip: text;
-  color: transparent;
-}
-
-.heroSubtitle {
-  margin: 0;
-  color: var(--v2-text-muted);
-  font-size: var(--font-size-base);
-}
-
-.quickActions {
-  display: flex;
-  gap: var(--spacing-2);
-  flex-wrap: wrap;
-  flex-shrink: 0;
-}
-
-.actionPrimary {
-  background: linear-gradient(120deg, var(--v2-cyan), var(--v2-violet));
-  color: var(--v2-bg-inset);
-  border-radius: var(--v2-radius);
-  padding: var(--spacing-2) var(--spacing-4);
-  font-size: var(--font-size-base);
-  font-weight: 700;
-  text-decoration: none;
-  transition: transform var(--v2-transition), box-shadow var(--v2-transition);
-}
-
-.actionPrimary:hover {
-  transform: translateY(-1px);
-  box-shadow: var(--v2-shadow-glow-cyan);
-}
-
-.actionSecondary {
-  background: var(--v2-surface);
-  border: 1px solid var(--v2-border-strong);
-  color: var(--v2-text);
-  border-radius: var(--v2-radius);
-  padding: var(--spacing-2) var(--spacing-4);
-  font-size: var(--font-size-base);
-  font-weight: 600;
-  text-decoration: none;
-  backdrop-filter: blur(var(--v2-blur));
-  -webkit-backdrop-filter: blur(var(--v2-blur));
-  transition: border-color var(--v2-transition), transform var(--v2-transition);
-}
-
-.actionSecondary:hover {
-  border-color: var(--v2-cyan);
-  transform: translateY(-1px);
-}
-
-/* ---------------------------------------------------------------------------
-   Bento grid -- 4 equal columns; the KPI tiles fill row 1 one-per-column, the
-   three panels below split row 2 asymmetrically (2 + 1 + 1), the "bento
-   composition" this phase's brief asks for.
---------------------------------------------------------------------------- */
-
-.bento {
+.kpis {
   display: grid;
-  grid-template-columns: repeat(4, 1fr);
-  gap: var(--spacing-3);
+  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+  gap: 12px;
+}
+
+.row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 20px;
   align-items: stretch;
 }
 
-/* A `1fr` grid track's implicit min-width is `auto`, not `0` -- confirmed live
-   in a real browser (Phase 28) that at phone width this let a bento cell's own
-   non-shrinking content (see .activityLabel below) force the whole grid, and
-   with it the page panel and body, wider than the viewport, clipping text at
-   the screen edge instead of the ellipsis truncation those cells already
-   style for. This is the standard fix, applied once here rather than
-   repeated per grid-item class. */
-.bento > * {
+.panel {
+  flex: 1 1 320px;
+  background: var(--v2-surface);
+  border: 1px solid var(--v2-border);
+  border-radius: 14px;
+  padding: 20px;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
   min-width: 0;
 }
 
-.pipelinePanel {
-  grid-column: span 2;
+.wide {
+  flex: 999 1 520px;
 }
 
-.activityPanel,
-.graphTeaser {
-  grid-column: span 1;
-}
-
-.pipelinePanel,
-.activityPanel {
-  background: var(--v2-surface);
-  border: 1px solid var(--v2-border);
-  border-radius: var(--v2-radius);
-  backdrop-filter: blur(var(--v2-blur));
-  -webkit-backdrop-filter: blur(var(--v2-blur));
-  box-shadow: var(--v2-shadow-elevated);
-  padding: var(--spacing-4);
+.panelHead {
   display: flex;
-  flex-direction: column;
-  gap: var(--spacing-3);
+  justify-content: space-between;
+  align-items: baseline;
 }
 
 .panelTitle {
   margin: 0;
-  font-size: var(--font-size-base);
-  font-weight: 700;
-  color: var(--v2-text);
+  font-size: 16px;
+  font-weight: 600;
 }
 
-/* ---------------------------------------------------------------------------
-   Pipeline distribution bar
---------------------------------------------------------------------------- */
-
-.distributionBar {
+.bars {
   display: flex;
-  width: 100%;
-  height: 10px;
-  border-radius: var(--radius-pill);
+  flex-direction: column;
+  gap: 12px;
+}
+
+.barRow {
+  display: grid;
+  grid-template-columns: 110px minmax(0, 1fr) 36px;
+  gap: 14px;
+  align-items: center;
+  font-size: 14px;
+}
+
+.barTrack {
+  height: 22px;
+  border-radius: 5px;
+  background: #f0f2f5;
   overflow: hidden;
-  background: var(--v2-neutral-bg);
 }
 
-.distributionSegment {
+.barFill {
+  display: block;
   height: 100%;
-}
-
-.segment-selected {
-  background: var(--v2-text-faint);
-}
-
-.segment-invited {
+  border-radius: 5px;
   background: var(--v2-cyan);
+  transition: width 400ms ease;
 }
 
-.segment-interviewed {
+.fill_selected {
+  background: #8c9bd8;
+}
+
+.fill_invited {
   background: var(--v2-violet);
 }
 
-.segment-accepted {
-  background: var(--v2-success);
+.fill_interviewed {
+  background: var(--v2-cyan);
 }
 
-.segment-rejected {
-  background: var(--v2-danger);
+.fill_accepted {
+  background: var(--v2-ink);
 }
 
-.statusLegend {
+.fill_rejected {
+  background: #8c93a1;
+}
+
+.barCount {
+  font-family: var(--font-mono);
+  text-align: right;
+}
+
+.note {
+  margin: 0;
+  font-size: 13px;
+  color: var(--v2-text-muted);
+}
+
+.attention {
   display: flex;
   flex-direction: column;
-  gap: var(--spacing-1);
+  gap: 10px;
 }
 
-.statusLegendRow {
+.attentionItem {
   display: flex;
-  align-items: center;
-  justify-content: space-between;
-  padding: 2px 0;
+  gap: 12px;
+  align-items: flex-start;
+  padding: 12px;
+  border-radius: 10px;
+  color: var(--v2-text);
+  text-decoration: none;
+  transition: transform var(--v2-transition);
 }
 
-.statusCount {
+.attentionItem:hover {
+  transform: translateX(2px);
+}
+
+.attention_warn {
+  background: var(--v2-warning-bg);
+}
+
+.attention_info,
+.attention_neutral {
+  background: #f0f2f5;
+}
+
+.attentionDot {
+  flex: 0 0 8px;
+  width: 8px;
+  height: 8px;
+  margin-top: 6px;
+  border-radius: 50%;
+  background: var(--v2-text-muted);
+}
+
+.attention_warn .attentionDot {
+  background: var(--v2-warning-strong);
+}
+
+.attention_info .attentionDot {
+  background: var(--v2-cyan);
+}
+
+.attentionText {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  font-size: 13px;
+  color: var(--v2-text-body);
+}
+
+.attentionTitle {
+  font-size: 14px;
   font-weight: 600;
-  font-variant-numeric: tabular-nums;
   color: var(--v2-text);
 }
 
-/* ---------------------------------------------------------------------------
-   Recent activity
---------------------------------------------------------------------------- */
-
-.activityList {
+.activity {
   list-style: none;
   margin: 0;
   padding: 0;
-  display: flex;
-  flex-direction: column;
-  overflow-y: auto;
 }
 
-.activityRow {
+.activity li {
   display: flex;
-  align-items: baseline;
   justify-content: space-between;
-  gap: var(--spacing-2);
-  padding: var(--spacing-2) 0;
-}
-
-.activityRow + .activityRow {
-  border-top: 1px solid var(--v2-border);
+  gap: 12px;
+  padding: 10px 0;
+  border-top: 1px solid var(--v2-divider);
+  font-size: 14px;
 }
 
 .activityLabel {
   min-width: 0;
-  font-size: var(--font-size-sm);
-  color: var(--v2-text);
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+}
+
+.activityKind {
+  color: var(--v2-text-muted);
+}
+
+.activityLabel a {
+  color: var(--v2-cyan);
+  text-decoration: none;
+  font-weight: 500;
+}
+
+.activityLabel a:hover {
+  text-decoration: underline;
 }
 
 .activityDate {
   flex-shrink: 0;
-  color: var(--v2-text-faint);
-  font-size: var(--font-size-xs);
-  white-space: nowrap;
+  font-size: 13px;
+  color: var(--v2-text-muted);
 }
 
-/* ---------------------------------------------------------------------------
-   Graph teaser -- "subtle visual connection to the graph feature" without
-   fetching graph data or overstating the card (no number, see DashboardPage.jsx).
---------------------------------------------------------------------------- */
-
-.graphTeaser {
-  background: var(--v2-surface);
-  border: 1px solid var(--v2-border);
-  border-radius: var(--v2-radius);
-  backdrop-filter: blur(var(--v2-blur));
-  -webkit-backdrop-filter: blur(var(--v2-blur));
-  box-shadow: var(--v2-shadow-elevated);
-  padding: var(--spacing-4);
+.graphCard {
+  flex: 1 1 320px;
+  position: relative;
+  overflow: hidden;
+  min-height: 220px;
+  background: var(--v2-ink);
+  color: #ffffff;
+  border-radius: 14px;
+  padding: 20px;
   display: flex;
   flex-direction: column;
-  gap: var(--spacing-2);
+  gap: 10px;
   text-decoration: none;
-  transition: border-color var(--v2-transition);
 }
 
-.graphTeaser:hover {
-  border-color: rgba(167, 139, 250, 0.4);
-}
-
-.graphGlyph {
-  width: 56px;
-  height: 35px;
-  color: var(--v2-text-faint);
-}
-
-.glyphCyan {
-  fill: var(--v2-cyan);
-  opacity: 0.9;
-}
-
-.glyphViolet {
-  fill: var(--v2-violet);
-  opacity: 0.9;
-}
-
-.glyphLine {
-  opacity: 0.5;
-}
-
-.graphTeaserText {
-  margin: var(--spacing-1) 0 0;
-  color: var(--v2-text-muted);
-  font-size: var(--font-size-sm);
-}
-
-.graphTeaserLink {
-  margin-top: auto;
-  align-self: flex-start;
-  color: var(--v2-cyan);
-  font-size: var(--font-size-sm);
+.graphTitle {
+  font-size: 16px;
   font-weight: 600;
-  text-decoration: none;
 }
 
-.graphTeaser:hover .graphTeaserLink {
+.graphText {
+  max-width: 230px;
+  font-size: 14px;
+  color: #c5c9d3;
+}
+
+.graphLink {
+  margin-top: auto;
+  font-size: 14px;
+  font-weight: 600;
+  color: #9db0f0;
+}
+
+.graphCard:hover .graphLink {
   text-decoration: underline;
 }
 
-@media (max-width: 768px) {
-  .bento {
-    grid-template-columns: repeat(2, 1fr);
-  }
-
-  .pipelinePanel {
-    grid-column: span 2;
-  }
-}
-
-@media (max-width: 480px) {
-  .page {
-    padding: var(--spacing-3);
-  }
-
-  .hero {
-    align-items: flex-start;
-  }
-
-  .quickActions {
-    width: 100%;
-  }
-
-  .actionPrimary,
-  .actionSecondary {
-    flex: 1 1 auto;
-    text-align: center;
-  }
-
-  .bento {
-    grid-template-columns: 1fr;
-  }
-
-  .pipelinePanel,
-  .activityPanel,
-  .graphTeaser {
-    grid-column: span 1;
-  }
+.graphGlyph {
+  position: absolute;
+  right: 18px;
+  top: 50%;
+  width: 130px;
+  height: 130px;
+  transform: translateY(-40%);
 }

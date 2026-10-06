@@ -7,7 +7,6 @@ import PageHeader from "../components/PageHeader.jsx";
 import StatusBadge from "../components/StatusBadge.jsx";
 import {
   EVALUATION_STATUS_LABELS,
-  EVALUATION_STATUS_TONE,
   INSUFFICIENT_EVIDENCE_EXPLANATION,
   LANGUAGE_GATE_LABELS,
   LANGUAGE_GATE_TONE,
@@ -37,119 +36,116 @@ function LanguageScreeningSection({ gate }) {
     ? [gate.assessed_cefr, gate.assessed_language ? (LANGUAGE_LABELS[gate.assessed_language] ?? gate.assessed_language) : null]
         .filter(Boolean)
         .join(" ")
-    : "No result yet";
+    : "no result yet";
+  const blocked = gate.status === "failed" || gate.status === "needs_review";
 
   return (
-    <div className={styles.languageGate}>
-      <h2 className={styles.notesTitle}>Language screening</h2>
-      <div className={styles.languageGateRow}>
-        <span>Required</span>
-        <span>
-          {gate.required_cefr} {requiredLabel}
-        </span>
-      </div>
-      <div className={styles.languageGateRow}>
-        <span>Assessed</span>
-        <span>{assessedText}</span>
-      </div>
-      <div className={styles.languageGateRow}>
-        <span>Result</span>
-        <StatusBadge variant="glass" tone={LANGUAGE_GATE_TONE[gate.status] ?? "neutral"}>
-          {LANGUAGE_GATE_LABELS[gate.status] ?? gate.status}
-        </StatusBadge>
-      </div>
-    </div>
+    <section className={`${styles.card} ${blocked ? styles.cardWarn : ""}`} aria-label="Language screening">
+      <span className={styles.cardEyebrow}>Language screening for this job</span>
+      <StatusBadge tone={LANGUAGE_GATE_TONE[gate.status] ?? "neutral"}>{LANGUAGE_GATE_LABELS[gate.status] ?? gate.status}</StatusBadge>
+      <span className={styles.cardText}>
+        Assessed {assessedText}, the job requires {gate.required_cefr} {requiredLabel}.
+        {gate.status === "failed" ? " Acceptance is blocked for this job; rejecting stays possible." : ""}
+      </span>
+    </section>
   );
 }
+
+const CEFR_SCALE = ["A1", "A2", "B1", "B2", "C1", "C2"];
+const TRANSCRIPT_PREVIEW = 8;
 
 /**
- * First-class treatment for whether VoiceHR's own evaluation produced enough to
- * trust at all -- distinct from, and shown above, the Language Screening verdict
- * (which can only ever be as good as this). "insufficient_evidence" is never styled
- * like "failed": inconclusive is not the same as failed (a warning tone throughout,
- * never danger), and no fake CEFR/0-score is ever shown in its place -- overall_score/
- * cefr_level are genuinely null for this status, by construction on VoiceHR's side.
+ * The assessed level, shown as a position on the A1..C2 scale. When VoiceHR issued no
+ * level (insufficient evidence, failed), the card says so plainly and shows no score:
+ * overall_score/cefr_level are genuinely null for those statuses on VoiceHR's side.
  */
-function AssessmentQualitySection({ report }) {
+function LevelCard({ report }) {
   const status = report.evaluation_status;
+  const hasLevel = status === "completed" && report.cefr_level;
   return (
-    <div className={styles.section}>
-      <h2 className={styles.notesTitle}>Assessment quality</h2>
-      <div className={styles.qualityRow}>
-        <StatusBadge variant="glass" tone={EVALUATION_STATUS_TONE[status] ?? "neutral"}>
-          {EVALUATION_STATUS_LABELS[status] ?? status}
-        </StatusBadge>
-        {status === "completed" && report.cefr_level && (
-          <span className={styles.qualityDetail}>
-            {report.cefr_level}
-            {report.overall_score != null ? ` · ${report.overall_score}/100` : ""}
+    <section className={styles.levelCard} aria-label="Assessed level">
+      <span className={styles.levelEyebrow}>{hasLevel ? "Assessed level" : "No level issued"}</span>
+      {hasLevel ? (
+        <>
+          <span className={styles.levelLine}>
+            <span className={styles.levelBig}>{report.cefr_level}</span>
+            {report.overall_score != null && <span className={styles.levelScore}>{report.overall_score}/100</span>}
           </span>
-        )}
-      </div>
-      {status === "insufficient_evidence" && (
-        <p className={styles.qualityExplanation}>{INSUFFICIENT_EVIDENCE_EXPLANATION}</p>
+          <div className={styles.scale} aria-hidden="true">
+            {CEFR_SCALE.map((level) => (
+              <span key={level} className={level === report.cefr_level ? styles.scaleOn : styles.scaleOff}>
+                <span className={styles.scaleBar} />
+                <span className={styles.scaleLabel}>{level}</span>
+              </span>
+            ))}
+          </div>
+        </>
+      ) : (
+        <span className={styles.levelExplain}>
+          {status === "insufficient_evidence"
+            ? INSUFFICIENT_EVIDENCE_EXPLANATION
+            : status === "failed"
+              ? "Evaluation failed, so no score is available for this interview."
+              : "The evaluation did not produce a reliable level."}{" "}
+          The application goes to human review.
+        </span>
       )}
-      {status === "failed" && (
-        <p className={styles.qualityExplanation}>
-          Evaluation failed — no scores are available for this interview.
-        </p>
-      )}
-    </div>
+      <span className={styles.levelStatus}>{EVALUATION_STATUS_LABELS[status] ?? status}</span>
+    </section>
   );
 }
 
-// The five real, evidenced rubric dimensions (backend/services/evaluator.py:
-// DIMENSION_WEIGHTS) -- pronunciation is deliberately absent everywhere in this
-// section: it is always null (the evaluator only ever sees text, never audio), and
-// listing it here would only invite "why is this always blank?" instead of
-// answering that question.
+// The five real, evidenced rubric dimensions with their weights in the overall score
+// (VoiceHR evaluator.py: DIMENSION_WEIGHTS). Pronunciation is deliberately absent: the
+// evaluator only ever sees text, never audio, so it is always null.
 const PROFILE_DIMENSIONS = [
-  { key: "fluency_coherence", label: "Fluency & coherence" },
-  { key: "vocabulary_range", label: "Vocabulary" },
-  { key: "grammar_language_control", label: "Grammar" },
-  { key: "comprehension_relevance", label: "Comprehension" },
-  { key: "interaction_spontaneity", label: "Interaction" },
+  { key: "comprehension_relevance", label: "Comprehension and relevance", weight: "25%" },
+  { key: "fluency_coherence", label: "Fluency and coherence", weight: "25%" },
+  { key: "grammar_language_control", label: "Grammar and language control", weight: "20%" },
+  { key: "vocabulary_range", label: "Vocabulary range", weight: "15%" },
+  { key: "interaction_spontaneity", label: "Interaction and spontaneity", weight: "15%" },
 ];
 
-// A short, concrete, observable note tied to this dimension -- transcript quotes or
-// the evaluator's own brief factual observation, never private model reasoning
-// (evaluator.py's own prompt never asks for -- and normalize_result never copies --
-// anything resembling chain-of-thought).
+// A short, concrete note tied to this dimension -- a transcript quote or the
+// evaluator's brief factual observation, never private model reasoning.
 function evidenceNoteFor(report, dimensionKey) {
   const item = (report.evidence || []).find((entry) => entry.dimension === dimensionKey);
   if (!item) return null;
   return item.note || item.quote || null;
 }
 
-/**
- * Only shown once a real, confident verdict exists (evaluation_status === "completed")
- * -- for "insufficient_evidence"/"failed", AssessmentQualitySection above is already
- * the complete, honest picture; a per-dimension breakdown here would risk implying
- * these numbers are as trustworthy as a normal result, which is exactly what this
- * task's own "insufficient evidence needs first-class treatment" instruction warns
- * against.
- */
+/** Only shown once a real, confident verdict exists (evaluation_status === "completed"). */
 function LanguageProfileSection({ report }) {
   if (report.evaluation_status !== "completed") return null;
   return (
-    <div className={styles.section}>
-      <h2 className={styles.notesTitle}>Language profile</h2>
-      <div className={styles.profileGrid}>
-        {PROFILE_DIMENSIONS.map(({ key, label }) => {
+    <section className={`${styles.card} ${styles.wide}`} aria-label="Language profile">
+      <h2 className={styles.cardTitle}>Five dimensions</h2>
+      <div className={styles.dimensions}>
+        {PROFILE_DIMENSIONS.map(({ key, label, weight }) => {
           const score = report.dimensions?.[key] ?? null;
           const note = evidenceNoteFor(report, key);
           return (
-            <div key={key} className={styles.profileRow}>
-              <div className={styles.profileHeader}>
-                <span className={styles.profileLabel}>{label}</span>
-                <span className={styles.profileRating}>{describeDimensionScore(score)}</span>
+            <div key={key} className={styles.dimension}>
+              <div className={styles.dimensionRow}>
+                <span>{label}</span>
+                <span className={styles.track}>
+                  <span className={styles.fill} style={{ width: `${score ?? 0}%` }} />
+                </span>
+                <span className={styles.mono}>{score ?? "—"}</span>
+                <span className={styles.weight}>{weight}</span>
               </div>
-              {note && <p className={styles.profileEvidence}>"{note}"</p>}
+              <span className={styles.dimensionNote}>
+                {describeDimensionScore(score)}
+                {note ? ` · "${note}"` : ""}
+              </span>
             </div>
           );
         })}
       </div>
-    </div>
+      <p className={styles.cardNote}>
+        The model scores each dimension. VoiceHR computes the weighted total and maps it to CEFR with fixed boundaries.
+      </p>
+    </section>
   );
 }
 
@@ -184,6 +180,7 @@ export default function ReportDetailPage() {
 
   const [recordingUrl, setRecordingUrl] = useState(null);
   const [recordingError, setRecordingError] = useState(null);
+  const [showFullTranscript, setShowFullTranscript] = useState(false);
 
   // Best-effort only, for the "candidate name links to Candidate Detail" and "job
   // title links to Job Detail" cross-links: VoiceHR's report has no concept of
@@ -261,8 +258,14 @@ export default function ReportDetailPage() {
     };
   }, [report]);
 
+  const transcript = report?.transcript ?? [];
+  const shownTranscript = showFullTranscript ? transcript : transcript.slice(0, TRANSCRIPT_PREVIEW);
+
   return (
     <div className={styles.page}>
+      <Link to="/reports" className={styles.backLink}>
+        Back to reports
+      </Link>
       <PageHeader
         title={
           report ? (
@@ -277,13 +280,27 @@ export default function ReportDetailPage() {
             "Report"
           )
         }
-        subtitle={report ? (report.language === "fr" ? "French interview" : "English interview") : undefined}
-        actions={
-          <Link to="/reports" className={styles.backLink}>
-            Back to Reports
-          </Link>
+        subtitle={
+          report
+            ? [
+                "VoiceHR interview report",
+                job?.jobTitle,
+                report.language === "fr" ? "French" : "English",
+                report.interview_date
+                  ? new Date(report.interview_date).toLocaleDateString(undefined, { year: "numeric", month: "short", day: "numeric" })
+                  : null,
+              ]
+                .filter(Boolean)
+                .join(" · ")
+            : undefined
         }
-        variant="glass"
+        actions={
+          job && (
+            <Link to={`/jobs/${job.jobId}/applications`} className={styles.secondaryAction}>
+              Open the job's applications
+            </Link>
+          )
+        }
       />
 
       {loading && <p className={styles.status}>Loading report…</p>}
@@ -296,91 +313,94 @@ export default function ReportDetailPage() {
 
       {!loading && !error && report && (
         <div className={styles.content}>
-          <div className={styles.meta}>
-            {job && (
-              <Link to={`/jobs/${job.jobId}`} className={styles.inlineLink}>
-                {job.jobTitle}
-              </Link>
+          <div className={styles.topRow}>
+            <LevelCard report={report} />
+            {languageGate && languageGate.status !== "not_required" ? (
+              <LanguageScreeningSection gate={languageGate} />
+            ) : (
+              <section className={styles.card} aria-label="Language screening">
+                <span className={styles.cardEyebrow}>Language screening for this job</span>
+                <span className={styles.cardText}>This job has no language requirement, so the level is informative only.</span>
+              </section>
             )}
-            {report.candidate_email && <span>{report.candidate_email}</span>}
-            {report.interview_date && (
-              <span>
-                {new Date(report.interview_date).toLocaleDateString(undefined, {
-                  year: "numeric",
-                  month: "short",
-                  day: "numeric",
-                })}
-              </span>
-            )}
-            {report.status && <span>Status: {report.status}</span>}
           </div>
 
-          {languageGate && languageGate.status !== "not_required" && (
-            <LanguageScreeningSection gate={languageGate} />
-          )}
+          <div className={styles.row}>
+            <LanguageProfileSection report={report} />
 
-          <AssessmentQualitySection report={report} />
+            {(report.strengths?.length > 0 || report.concerns?.length > 0) && (
+              <section className={styles.card} aria-label="Observations">
+                {report.strengths?.length > 0 && (
+                  <div className={styles.notes}>
+                    <h2 className={styles.strengthsTitle}>Strengths</h2>
+                    <ul className={styles.notesList}>
+                      {report.strengths.map((item, index) => (
+                        <li key={index}>{noteText(item)}</li>
+                      ))}
+                    </ul>
+                  </div>
+                )}
+                {report.concerns?.length > 0 && (
+                  <div className={styles.notes}>
+                    <h2 className={styles.concernsTitle}>Concerns</h2>
+                    <ul className={styles.notesList}>
+                      {report.concerns.map((item, index) => (
+                        <li key={index}>{noteText(item)}</li>
+                      ))}
+                    </ul>
+                  </div>
+                )}
+              </section>
+            )}
+          </div>
 
-          <LanguageProfileSection report={report} />
+          {(report.recording?.available || transcript.length > 0) && (
+            <section className={styles.card} aria-label="Recording and transcript">
+              {report.recording?.available && (
+                <div className={styles.recording}>
+                  <h2 className={styles.cardTitle}>Recording</h2>
+                  {recordingUrl && (
+                    <audio controls src={recordingUrl} className={styles.audio}>
+                      Your browser does not support audio playback.
+                    </audio>
+                  )}
+                  {recordingError && (
+                    <div className={styles.error} role="alert">
+                      {recordingError}
+                    </div>
+                  )}
+                  {!recordingUrl && !recordingError && <p className={styles.status}>Loading recording…</p>}
+                </div>
+              )}
 
-          {(report.strengths?.length > 0 || report.concerns?.length > 0) && (
-            <div className={styles.notesGrid}>
-              {report.strengths?.length > 0 && (
-                <div className={styles.notesColumn}>
-                  <h2 className={styles.notesTitle}>Strengths</h2>
-                  <ul className={styles.notesList}>
-                    {report.strengths.map((item, index) => (
-                      <li key={index}>{noteText(item)}</li>
+              {transcript.length > 0 && (
+                <div className={styles.transcriptBlock}>
+                  <div className={styles.transcriptHead}>
+                    <h2 className={styles.cardTitle}>Transcript</h2>
+                    {transcript.length > TRANSCRIPT_PREVIEW && (
+                      <button
+                        type="button"
+                        className={styles.toggleButton}
+                        onClick={() => setShowFullTranscript((value) => !value)}
+                        aria-expanded={showFullTranscript}
+                      >
+                        {showFullTranscript ? "Show less" : `Show all ${transcript.length} turns`}
+                      </button>
+                    )}
+                  </div>
+                  <div className={styles.transcript}>
+                    {shownTranscript.map((turn, index) => (
+                      <div key={index} className={styles.turn}>
+                        <span className={turn.role === "user" ? styles.roleCandidate : styles.roleInterviewer}>
+                          {turn.role === "user" ? "Candidate" : "Interviewer"}
+                        </span>
+                        <span className={styles.turnText}>{turn.text}</span>
+                      </div>
                     ))}
-                  </ul>
+                  </div>
                 </div>
               )}
-              {report.concerns?.length > 0 && (
-                <div className={styles.notesColumn}>
-                  <h2 className={styles.notesTitle}>Concerns</h2>
-                  <ul className={styles.notesList}>
-                    {report.concerns.map((item, index) => (
-                      <li key={index}>{noteText(item)}</li>
-                    ))}
-                  </ul>
-                </div>
-              )}
-            </div>
-          )}
-
-          {report.recording?.available && (
-            <div className={styles.section}>
-              <h2 className={styles.notesTitle}>Recording</h2>
-              {recordingUrl && (
-                <audio controls src={recordingUrl} className={styles.audio}>
-                  Your browser does not support audio playback.
-                </audio>
-              )}
-              {recordingError && (
-                <div className={styles.error} role="alert">
-                  {recordingError}
-                </div>
-              )}
-              {!recordingUrl && !recordingError && (
-                <p className={styles.status}>Loading recording…</p>
-              )}
-            </div>
-          )}
-
-          {report.transcript?.length > 0 && (
-            <div className={styles.section}>
-              <h2 className={styles.notesTitle}>Transcript</h2>
-              <div className={styles.transcript}>
-                {report.transcript.map((turn, index) => (
-                  <p key={index} className={styles.transcriptLine}>
-                    <span className={styles.transcriptRole}>
-                      {turn.role === "user" ? "Candidate" : "Interviewer"}:
-                    </span>{" "}
-                    {turn.text}
-                  </p>
-                ))}
-              </div>
-            </div>
+            </section>
           )}
         </div>
       )}

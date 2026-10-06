@@ -1,44 +1,39 @@
 /* Shared design tokens. Plain CSS custom properties -- no CSS-in-JS, no theme library.
    Every page/component pulls colors, spacing, radii, shadows, and type sizes from
-   here so the app reads as one consistent product rather than five separately-styled
+   here so the app reads as one consistent product rather than separately-styled
    pages (see FRONTEND_HANDOFF.md §15). */
 :root {
-  /* Base surfaces */
-  --color-bg: #f7f8fa;
+  /* Base surfaces (V1 names, still read by LoginPage and the shared focus ring). */
+  --color-bg: #f4f5f7;
   --color-surface: #ffffff;
   --color-border: #e2e5ea;
-  --color-text: #1f2430;
-  --color-text-muted: #6b7280;
+  --color-text: #15171c;
+  --color-text-muted: #5b6170;
 
-  /* Brand / primary action */
-  --color-primary: #2f5fdb;
-  --color-primary-hover: #2549ad;
-  --color-primary-bg: #eaf0fd;
+  --color-primary: #2448c7;
+  --color-primary-hover: #1b3591;
+  --color-primary-bg: #e8edfb;
 
-  --color-neutral-bg: #f1f2f4;
+  --color-neutral-bg: #eceef1;
 
-  /* Semantic status colors -- used only for status/error signal, never decoration
-     (§15). Shared across qualified/matched-requirement/status/evaluation badges so
-     "green" and "red" mean the same thing everywhere in the app. */
-  --color-danger: #c0392b;
+  --color-danger: #b42318;
   --color-danger-bg: #fdecea;
-  --color-success: #1f7a45;
-  --color-success-bg: #e5f7ec;
-  --color-warning: #9a6b0a;
-  --color-warning-bg: #fdf3e0;
-  --color-accent: #6b3fc4;
-  --color-accent-bg: #f1eafd;
+  --color-success: #1b3591;
+  --color-success-bg: #e8edfb;
+  --color-warning: #8a4307;
+  --color-warning-bg: #fceedf;
+  --color-accent: #2448c7;
+  --color-accent-bg: #e8edfb;
 
   --radius: 8px;
   --radius-pill: 999px;
 
   /* Single source of truth for the sidebar column width, shared by Layout.module.css's
-     grid and Sidebar.module.css (Phase 1 admin-shell pass). */
-  --sidebar-width: 220px;
+     grid and Sidebar.module.css. */
+  --sidebar-width: 240px;
 
-  /* Subtle elevation only -- a card/surface lift, never a decorative drop shadow. */
-  --shadow-sm: 0 1px 2px rgba(16, 24, 40, 0.06), 0 1px 1px rgba(16, 24, 40, 0.04);
-  --shadow-md: 0 8px 24px rgba(16, 24, 40, 0.10), 0 2px 6px rgba(16, 24, 40, 0.05);
+  --shadow-sm: 0 1px 2px rgba(20, 22, 28, 0.06);
+  --shadow-md: 0 6px 18px rgba(20, 22, 28, 0.1);
 
   --spacing-1: 4px;
   --spacing-2: 8px;
@@ -46,91 +41,86 @@
   --spacing-4: 24px;
   --spacing-5: 32px;
 
-  /* A small type scale so heading/body/label sizes are chosen from a fixed set
-     rather than ad hoc rem values scattered per file. */
   --font-size-xs: 0.75rem;
   --font-size-sm: 0.85rem;
-  --font-size-base: 0.95rem;
+  --font-size-base: 0.9375rem;
   --font-size-md: 1rem;
   --font-size-lg: 1.1rem;
-  --font-size-xl: 1.4rem;
+  --font-size-xl: 1.75rem;
 
-  --font-sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial,
-    sans-serif;
+  /* IBM Plex is self-hosted through @fontsource (imported in main.jsx), so the demo
+     renders the same with no network. */
+  --font-sans: "IBM Plex Sans", system-ui, -apple-system, "Segoe UI", sans-serif;
+  --font-mono: "IBM Plex Mono", ui-monospace, "Cascadia Mono", monospace;
 
-  /* Hover/focus color changes only -- no new animation beyond this (§15). */
   --transition-fast: 120ms ease;
 }
 
-/* Custom properties can't be read inside a @media condition, so the two shared
-   breakpoints live here as a plain convention instead of a token: 768px (sidebar
-   collapses to a top bar -- Layout.module.css) and 480px (a second tier for tighter
-   phone-width layouts). Every page's own @media rules below reuse these two literal
-   values rather than inventing a third. */
+/* Breakpoints stay a convention, not a token (custom properties can't be read
+   inside @media): 768px (sidebar becomes a top bar) and 480px (tight phone width). */
 
 /* ===========================================================================
-   V2 design system -- "AI recruitment command center" visual direction.
-   Every page now renders through this token set (the migration the comment
-   here used to describe as future work is complete). --color-* above is not
-   dead, though: LoginPage -- deliberately never migrated, see
-   FRONTEND_HANDOFF.md's Known Limitations -- still reads it directly for its
-   permanent light theme, and global.css's shared body/focus-ring defaults
-   also read it (the one V2-page inconsistency that already existed before
-   this comment was rewritten: an un-overridden focus ring or the pre-paint
-   body background on a V2 page is light-themed --color-primary/--color-bg,
-   not dark --v2-*; see Sidebar.module.css's own note on the same thing).
-   That collision is exactly why --v2-* was never renamed onto --color-*'s
-   names: LoginPage needs those specific token names to keep resolving to
-   their light values. --v2-* token names are also read live via
-   getComputedStyle() in MatchGraph.jsx/MatchGraph3D.jsx, so treat every name
-   below as a public API, not an internal implementation detail free to
-   rename. =================================================================*/
+   Theme tokens. The --v2-* names are kept from the previous dark theme because
+   every page stylesheet and the graph components (read live through
+   getComputedStyle) already use them; only their values changed to the light
+   "calm operations" palette:
+   - one ground (--v2-bg) with white surfaces and thin borders, no glass;
+   - one accent, blue, for primary actions and for "qualified / meets";
+   - orange for "high score but missing something" and other warnings;
+   - grey for neutral or weaker states; red is kept for real errors only.
+   The names --v2-cyan / --v2-violet now hold the blue accent and its lighter
+   companion: renaming them would touch every file for no visible gain.
+   =========================================================================== */
 :root {
-  /* Deep charcoal/navy cinematic base -- never pure black (flat/lifeless) or a
-     literal navy hue (reads as "corporate blue", not "command center"). */
-  --v2-bg: #0a0c14;
-  --v2-bg-elevated: #10131e;
-  --v2-bg-inset: #06070d;
+  --v2-bg: #f4f5f7;
+  --v2-bg-elevated: #ffffff;
+  --v2-bg-inset: #f4f5f7;
 
-  /* Glass panel surfaces -- translucent over --v2-bg, not opaque hex fills, so
-     the aurora/grid backdrop shows faintly through every card (the "layered
-     glass" requirement). Combined with backdrop-filter: blur() where applied. */
-  --v2-surface: rgba(255, 255, 255, 0.035);
-  --v2-surface-strong: rgba(255, 255, 255, 0.06);
-  --v2-border: rgba(255, 255, 255, 0.09);
-  --v2-border-strong: rgba(255, 255, 255, 0.16);
+  --v2-surface: #ffffff;
+  --v2-surface-strong: #f8f9fb;
+  --v2-border: #e2e5ea;
+  --v2-border-strong: #d3d7de;
+  --v2-divider: #eceef1;
 
-  --v2-text: #eef0f7;
-  --v2-text-muted: #9297ab;
-  --v2-text-faint: #5c6178;
+  --v2-text: #15171c;
+  --v2-text-muted: #5b6170;
+  --v2-text-faint: #8c93a1;
+  --v2-text-body: #3d4250;
 
-  /* The one signature brand pairing -- restrained deliberately: used for the
-     wordmark, the active-nav indicator, focus rings, and chart accents only,
-     never as a full background fill ("no excessive gradients/glow"). */
-  --v2-cyan: #3fd8e8;
-  --v2-violet: #a78bfa;
-  --v2-cyan-bg: rgba(63, 216, 232, 0.12);
-  --v2-violet-bg: rgba(167, 139, 250, 0.12);
+  --v2-cyan: #2448c7;
+  --v2-cyan-hover: #1b3591;
+  --v2-violet: #5b74cf;
+  --v2-cyan-bg: #e8edfb;
+  --v2-violet-bg: #eef1fb;
+  --v2-on-primary: #ffffff;
 
-  /* Status colors, re-tuned (brighter/more saturated than --color-*'s versions)
-     specifically for AA contrast against the dark surfaces above -- the light
-     theme's --color-success etc. would be too dim to read here. */
-  --v2-success: #4ade80;
-  --v2-success-bg: rgba(74, 222, 128, 0.12);
-  --v2-danger: #fb7185;
-  --v2-danger-bg: rgba(251, 113, 133, 0.14);
-  --v2-warning: #fbbf24;
-  --v2-warning-bg: rgba(251, 191, 36, 0.12);
-  --v2-neutral-bg: rgba(255, 255, 255, 0.07);
+  /* Dark fill used for the selected segment, the active filter and the job node. */
+  --v2-ink: #15171c;
 
-  --v2-radius: 14px;
-  --v2-radius-lg: 20px;
-  --v2-blur: 20px;
+  --v2-success: #1b3591;
+  --v2-success-bg: #e8edfb;
+  --v2-danger: #b42318;
+  --v2-danger-bg: #fdecea;
+  --v2-warning: #8a4307;
+  --v2-warning-strong: #c2620a;
+  --v2-warning-bg: #fceedf;
+  --v2-neutral-bg: #eceef1;
+  --v2-neutral-strong: #c9ced6;
 
-  /* Elevation reads as a dark-surface glow/shadow combination, not the light
-     theme's soft-gray drop shadow (invisible on a dark background). */
-  --v2-shadow-elevated: 0 24px 60px -12px rgba(0, 0, 0, 0.55), 0 1px 0 0 rgba(255, 255, 255, 0.04) inset;
-  --v2-shadow-glow-cyan: 0 0 1px rgba(63, 216, 232, 0.4), 0 8px 30px -8px rgba(63, 216, 232, 0.25);
+  --v2-radius: 10px;
+  --v2-radius-lg: 14px;
+  --v2-blur: 0px;
 
-  --v2-transition: 180ms cubic-bezier(0.4, 0, 0.2, 1);
+  --v2-shadow-elevated: 0 1px 2px rgba(20, 22, 28, 0.06);
+  --v2-shadow-glow-cyan: none;
+
+  --v2-transition: 150ms ease;
+
+  /* The sidebar is the one dark surface left in the app. */
+  --sb-bg: #15171c;
+  --sb-text: #c5c9d3;
+  --sb-text-active: #ffffff;
+  --sb-active-bg: #262a33;
+  --sb-border: #2b2f38;
+  --sb-muted: #9ca2af;
 }

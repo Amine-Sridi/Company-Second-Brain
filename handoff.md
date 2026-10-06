@@ -776,7 +776,7 @@ not carried forward from memory.
 | `GET /v1/candidates/{id}/identity` | JWT | Transient proxy to Resume Intelligence; no `db` dependency. |
 | `GET /v1/candidates` | JWT | Transient proxy to Resume Intelligence; no `db` dependency. |
 | `GET /v1/candidates/{id}/knowledge` | JWT | Transient proxy to Second Brain; no `db` dependency. |
-| `GET /v1/graph/candidates-jobs` | JWT | Reads RWS's own persisted `MatchResult`/`Job` rows only — the 2D/3D knowledge graph's sole data source. Both qualified and disqualified edges included, unfiltered. |
+| `GET /v1/graph/candidates-jobs` | JWT | Reads RWS's own persisted `MatchResult`/`Job` rows only — the knowledge graph's sole data source. Both qualified and disqualified edges included, unfiltered. Each edge also carries the persisted `semantic_score`/`deterministic_score`/`skill_score`/`experience_score`/`title_score` (milestone 67). |
 | `POST /v1/matches/{match_id}/select` | JWT | 422 if not qualified; 409 on duplicate (DB `UNIQUE` constraint). Snapshots the job's current language requirement (if any) onto the new `Application`. |
 | `POST /v1/applications/{id}/invite` | JWT | Pre-flight Resume Intelligence contact lookup (422 if none, before ever calling VoiceHR); idempotent retry via `{application_id}:{attempt}`. If the application has a snapshotted language requirement, VoiceHR is invited in that language regardless of the request body's own `language` field. Also passes the job's `title` (cosmetic, for VoiceHR's candidate email). **Success now means VoiceHR actually emailed the candidate** — a `502` here can mean either VoiceHR is unreachable or the email failed to send; either way the application is never marked `invited`. Callable from `selected` (first send) or `invited` (still callable directly, though the frontend now only surfaces this button while `selected` — see below); a failed attempt leaves `invite_attempt_number` un-persisted, so the very next call recomputes the same attempt number/idempotency key, which is what makes a frontend "Retry" click reuse VoiceHR's already-created interview instead of creating a duplicate one. |
 | `POST /v1/applications/{id}/resend-invite` | JWT | **New this session.** Explicit resend, only callable while `invited` (409 otherwise). Calls VoiceHR's new `POST /api/rws/interviews/{id}/resend-invite`, which reuses the exact interview/token created at invite time via the same `deliver_invitation_email` function every other send path already shares — never creates a new interview, never accepts/needs an `Idempotency-Key`, never looks up or persists the candidate's contact (VoiceHR already has it). A failure (`502`) never reverts the application away from `invited`. A short in-memory per-application cooldown (10s, module-level dict, no Redis) returns `429` on a rapid repeat click — a UX safeguard, not a persisted field or new workflow status. |
@@ -4620,6 +4620,68 @@ than the threshold being wrong. They now carry full answers. The fourth was a di
 expectation change: `test_normalize_result_...` asserted `confidence == "High"` for an
 **11-word** transcript, purely because `duration_seconds` was 600 -- the exact behaviour
 this milestone removes. It now asserts `"Low"`.
+
+### Milestone 67 — graph edges carry the persisted score components
+
+The rebuilt knowledge graph (`FRONTEND_HANDOFF.md` milestone 26) explains a
+selected match with its score components. The only endpoint that already
+returned them, `GET /v1/jobs/{id}/matches`, may generate an advisory
+explanation on read (a provider call), so calling it just to show five numbers
+would have been slow and spent quota. Instead `GraphEdge` gained
+`semantic_score`, `deterministic_score`, `skill_score`, `experience_score` and
+`title_score`, copied straight off the `MatchResult` row in
+`get_candidates_jobs_graph`, like every other edge field. Additive and
+read-only: no migration, no write, nothing recomputed; `extra="forbid"` is
+unchanged.
+
+**Verified:** `tests/test_candidates_jobs_graph.py` updated (exact-field-set
+test, pass-through test now also pins the five components): 8 passed; full
+RWS suite **236 passed**. Live: container rebuilt, the endpoint returns the
+new keys, and the focus view renders the split from them.
+
+### Milestone 68 — the candidate interview page moves to the recruiter theme
+
+`services/voicehr/frontend/interview.html` now uses the same light theme as the
+recruiter frontend (`FRONTEND_HANDOFF.md` milestone 26). The change is presentation
+only, within the CLAUDE.md rule that VoiceHR's internals are not rewritten. The
+WebSocket session, recording, reconnect, finalize and evaluation code are untouched.
+
+- **New `frontend/interview.css`.** The inline `<style>` and the `theme.css` link were
+  removed from this page only. `admin.html` and `report.html` still use `theme.css`.
+- **IBM Plex fonts bundled in `frontend/fonts/`.** They are copied from the RWS
+  `@fontsource` packages, with the OFL licence, so the candidate page makes no
+  third-party font request.
+- **New markup.**
+  - The welcome, microphone and interview steps sit under a stepper.
+  - The live stage has an orb, a turn pill, a microphone meter and a side transcript.
+  - Every terminal state (expired link, interrupted, microphone lost, saving, done,
+    ended early) uses one card style.
+  - Every id the script uses is kept.
+- **Display-only JS.**
+  - Body classes `sarah-speaking` and `clarifying` drive the pill, orb colour and meter.
+  - The microphone step shows a "We can hear you clearly" line.
+  - The header shows the interview language.
+  - "Finish the interview" now asks for confirmation inline (`askFinish`/`cancelFinish`)
+    before calling the unchanged `finishInterview()`.
+- **Pre-existing bug fixed: the live transcript only ever showed the latest turn.** To
+  clear the placeholder, `renderLiveTranscriptEvent` emptied the list whenever it held a
+  single `<p>`. Transcript lines are `<p>` too, so every change of speaker wiped the
+  previous line. It now removes only the `.live-transcript-placeholder` element.
+
+**Verified:**
+- Rendered with Playwright (Edge, fake microphone) against a static server.
+  - `GET /api/interview/{token}` and `/prepare` were stubbed, so no interview or email
+    was created.
+  - The states that need a live session were driven through the page's own functions
+    (`showStep`, `setSpeaking`, `renderLiveTranscriptEvent`, `askFinish`).
+  - Checked at desktop and 390px width: consent, microphone ready, Sarah speaking, your
+    turn, clarifying, finish confirmation, retry, microphone lost, finalizing, done,
+    terminated, and an expired link through the real 410 path.
+  - No page errors. The full five-turn transcript now stays visible.
+- **Not exercised:**
+  - A real Gemini Live session.
+  - A rebuild of the VoiceHR container. Docker was not running; the image copies
+    `frontend/`, so it needs a rebuild before the change is live on :8000.
 
 ## [NEXT]
 
