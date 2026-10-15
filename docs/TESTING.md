@@ -1,7 +1,7 @@
 # TESTING.md
 
 Every test suite in this repository, the exact command to run it, and what passing looks
-like. All counts below were produced by actually running each command on 2026-10-01 — if a
+like. All counts below were produced by actually running each command on 2026-10-16 — if a
 number here disagrees with what you see, trust what you see and update this file.
 
 Two things this file deliberately records, because both have cost real time:
@@ -24,7 +24,7 @@ python scripts/run_tests.py --containers # also check the running stack's LLM fa
 python scripts/run_tests.py --python-only -v   # skip the frontend, stream full output
 ```
 
-**Expected: `836 passed, 7 skipped across 8 suites`, exit 0.** It runs every suite in this
+**Expected: `856 passed, 7 skipped across 7 suites`, exit 0.** It runs every suite in this
 file except `tests/integration` (§7 — deliberately excluded, it can destroy demo data),
 reports each one as it finishes, and exits non-zero if any fail. It also warns when a
 suite's count drifts from the number documented below, so this file and the runner cannot
@@ -46,7 +46,7 @@ python -m pytest tests/unit -q \
   ; cd services/recruitment-workflow/frontend ; npm test
 ```
 
-Expected totals: **783 Python tests passed, 7 skipped** + **15 frontend component tests**.
+Expected totals: **795 Python tests passed, 7 skipped** + **27 frontend component tests**.
 This does *not* include the two `node --test` files ([§6](#6-frontend)), the cross-service
 integration suite ([§7](#7-cross-service-integration--read-the-warning-first)), or the
 container checks ([§8](#8-container-checks--what-the-suites-structurally-cannot-see)).
@@ -54,12 +54,12 @@ container checks ([§8](#8-container-checks--what-the-suites-structurally-cannot
 | # | Suite | Command (from repo root unless noted) | Expected |
 |---|---|---|---|
 | 1 | Shared unit | `python -m pytest tests/unit -q` | 174 passed, 15 subtests |
-| 2 | Recruitment Workflow | `cd services/recruitment-workflow && python -m pytest tests -q` | 224 passed |
+| 2 | Recruitment Workflow | `cd services/recruitment-workflow && python -m pytest tests -q` | 236 passed |
 | 3 | Resume Intelligence | `cd services/resume-intelligence && python -m pytest tests -q` | 89 passed, 6 skipped |
 | 4 | Second Brain | `cd services/second-brain && python -m pytest tests -q` | 8 passed |
 | 5 | VoiceHR | `cd services/voicehr && python -m pytest tests -q` | 288 passed, 1 skipped |
 | 6a | Frontend pure logic | see [§6](#6-frontend) — per file, not per directory | 34 passed (13 + 21) |
-| 6b | Frontend components | `cd services/recruitment-workflow/frontend && npm test` | 15 passed, 2 files |
+| 6b | Frontend components | `cd services/recruitment-workflow/frontend && npm test` | 27 passed, 3 files |
 | 7 | Cross-service integration | **read [§7](#7-cross-service-integration--read-the-warning-first) first** | never been green |
 | 8 | Container checks | `python scripts/check_llm_fallback.py --generate` | exit 0 |
 
@@ -102,7 +102,7 @@ the working directory.
 cd services/recruitment-workflow && python -m pytest tests -q
 ```
 
-**Expected: `224 passed`.**
+**Expected: `236 passed`.**
 
 The largest behavioural surface: matching, the immutable `MatchResult`, recruiter auth,
 the webhook receiver and its delivery-id dedup, and `language_gate.py`. The
@@ -173,7 +173,7 @@ for f in src/constants/*.test.js; do echo "--- $f"; node --test "$f"; done
 npm test
 ```
 
-**Expected: 6a → `13 passed` + `21 passed` = 34. 6b → `2 passed (2 files)`, `15 passed`.**
+**Expected: 6a → `13 passed` + `21 passed` = 34. 6b → `3 passed (3 files)`, `27 passed`.**
 
 Why 6a runs per file: `node --test` on a directory does not reliably pick these up here.
 The CI job uses the same loop with `set -e` so any failing file fails the job. These need
@@ -241,8 +241,8 @@ python scripts/reconcile_orphans.py --older-than-days 90    # dry run, exit 0, d
 ```
 
 Not a test, but safe to run and a useful sanity check that the volume and DB agree.
-**Never add `--apply` without reading `handoff.md` first** — the imported recording archive
-is indistinguishable from abandoned files.
+**Never add `--apply` blindly** — recordings placed into `storage/` by hand (an imported archive)
+are indistinguishable from abandoned files, so the sweep would delete them.
 
 ## 9. What CI runs
 

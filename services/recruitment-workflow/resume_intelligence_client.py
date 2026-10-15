@@ -4,7 +4,7 @@ Thin HTTP client for RWS -> Resume Intelligence calls.
 get_contact: a pre-flight check before inviting a candidate to interview, since
 VoiceHR needs a name and email. The response is PII-bearing and must be used
 transiently -- RWS passes it straight to VoiceHR and never persists it (see
-CLAUDE.md: ContactLookupResponse is used transiently by RWS, never stored).
+docs/ARCHITECTURE_DECISIONS.md: ContactLookupResponse is used transiently by RWS, never stored).
 
 upload_resume: forwards a recruiter's uploaded resume file to Resume Intelligence's
 own service-key-protected POST /v1/resumes. This is the only way a resume reaches

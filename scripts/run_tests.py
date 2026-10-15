@@ -276,7 +276,7 @@ def build_suites(python_only: bool) -> list[Suite]:
         Suite("Shared unit", [sys.executable, "-m", "pytest", "tests/unit", "-q"],
               ROOT, "174 passed"),
         Suite("Recruitment Workflow", py, ROOT / "services" / "recruitment-workflow",
-              "224 passed"),
+              "236 passed"),
         Suite("Resume Intelligence", py, ROOT / "services" / "resume-intelligence",
               "89 passed, 6 skipped"),
         Suite("Second Brain", py, ROOT / "services" / "second-brain", "8 passed"),
@@ -293,7 +293,7 @@ def build_suites(python_only: bool) -> list[Suite]:
                             commands=[[node, "--test", f"src/constants/{f}"]
                                       for f in test_files]))
         suites.append(Suite("Frontend components (vitest)",
-                            "npm test", rws_fe, "15 passed", shell=True))
+                            "npm test", rws_fe, "27 passed", shell=True))
     else:
         reason = "node_modules missing -- run `npm ci`" if test_files else "no test files"
         for name in ("Frontend logic (node --test)", "Frontend components (vitest)"):

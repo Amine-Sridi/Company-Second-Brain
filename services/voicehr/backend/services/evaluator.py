@@ -9,7 +9,7 @@ from backend.services import sufficiency
 
 logger = logging.getLogger(__name__)
 
-# Gemini is the sole evaluation provider for this project (see CLAUDE.md). Lazily
+# Gemini is the sole evaluation provider for this project (see docs/ARCHITECTURE_DECISIONS.md). Lazily
 # constructed on first use so the module still imports without a configured key.
 gemini_client = None
 
@@ -268,7 +268,7 @@ async def _evaluate_with_local_model(prompt: str) -> dict:
     # above -- no `$ref`, no `$defs`, no `maxLength`, and it already declares `required`
     # for every field a verdict depends on. Running it through the adapter would be a
     # no-op purchased with a cross-service dependency this service does not otherwise
-    # have (CLAUDE.md: duplication across the three services beats a premature shared
+    # have (docs/ARCHITECTURE_DECISIONS.md: duplication across the three services beats a premature shared
     # abstraction, and VoiceHR stays standalone).
     base_url = getattr(settings, "local_llm_base_url", "http://ollama:11434")
     url = f"{base_url.rstrip('/')}/api/generate"
@@ -491,7 +491,7 @@ def _insufficient_evidence_result(
     inconclusive: bool,
     reason: str | None = None,
 ) -> dict:
-    """The 'not enough to grade' path (CLAUDE.md/handoff.md: never force a confident
+    """The 'not enough to grade' path (docs/ARCHITECTURE_DECISIONS.md/handoff.md: never force a confident
     CEFR grade from too little evidence). overall_score/cefr_level are None here by
     construction (normalize_result's insufficient=True); dimension scores are still
     passed through best-effort for the recruiter's own reading. This is what lets

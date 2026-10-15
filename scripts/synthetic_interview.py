@@ -168,7 +168,7 @@ def _load_repo_env() -> None:
     The ElevenLabs key belongs here, not in any service's .env: this harness runs on the
     host and no service calls ElevenLabs. Putting it in services/voicehr/.env would ship
     a third-party credential into a container that has no use for it, and would imply
-    VoiceHR depends on a second AI provider -- which it does not (CLAUDE.md: Gemini is
+    VoiceHR depends on a second AI provider -- which it does not (docs/ARCHITECTURE_DECISIONS.md: Gemini is
     the sole provider). The repo-root .env is already gitignored (*.env).
     """
     path = Path(__file__).resolve().parents[1] / ".env"

@@ -155,7 +155,7 @@ class ScoringConfig(Base):
 
 
 class MatchResult(Base):
-    """Immutable -- never updated after insert. See CLAUDE.md: a later candidate
+    """Immutable -- never updated after insert. See docs/ARCHITECTURE_DECISIONS.md: a later candidate
     enrichment must never change an existing MatchResult."""
 
     __tablename__ = "match_results"
@@ -313,8 +313,8 @@ class InterviewRound(Base):
 
     interviewer_name is free text, not a foreign key to a user/interviewer table:
     this project has exactly one seeded recruiter account and no interviewer
-    directory or auth system (CLAUDE.md's non-negotiable decisions) -- inventing one
-    here would be exactly the kind of speculative infrastructure CLAUDE.md's code
+    directory or auth system (docs/ARCHITECTURE_DECISIONS.md's non-negotiable decisions) -- inventing one
+    here would be exactly the kind of speculative infrastructure docs/ARCHITECTURE_DECISIONS.md's code
     style rules warn against. created_by *is* a real FK to recruiters, the same
     audit pattern already used by Application.selected_by/decided_by.
     interviewer_email is the same free-text treatment, for the same reason -- it is
@@ -714,7 +714,7 @@ def list_all_match_results(db: Session) -> list[tuple[MatchResult, str]]:
     lookup -- the exact same shape as list_all_applications. Qualified and
     disqualified matches are both returned, unfiltered: the graph is a read of the
     full audit trail already implied by "every scored candidate gets an immutable
-    MatchResult row, regardless of qualification outcome" (CLAUDE.md), not a
+    MatchResult row, regardless of qualification outcome" (docs/ARCHITECTURE_DECISIONS.md), not a
     second-guessing of it.
     """
     rows = (

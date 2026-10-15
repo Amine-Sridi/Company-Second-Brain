@@ -5,7 +5,7 @@ RWS owns this decision end to end -- Gemini/VoiceHR only ever produce the *asses
 language and CEFR level (see shared/schemas.InterviewAssessment); nothing here calls an
 LLM, and nothing here reads or writes MatchResult/final_score. This is a second-stage
 screening signal, evaluated after resume matching already qualified the candidate, per
-CLAUDE.md's "the LLM never determines... threshold comparisons" rule extended to this
+docs/ARCHITECTURE_DECISIONS.md's "the LLM never determines... threshold comparisons" rule extended to this
 second gate the same way it already applies to the first one (scoring.py).
 
 compute_language_gate is a pure function: same five inputs always produce the same

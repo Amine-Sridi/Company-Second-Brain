@@ -5,7 +5,7 @@ A small in-process sliding-window rate limiter.
 
 Why hand-rolled rather than SlowAPI: this project has exactly two endpoints that need
 limiting (an unauthenticated login and, in VoiceHR, some unauthenticated bearer-token
-routes), the deployment is single-instance, and `CLAUDE.md`'s amended constraint scopes
+routes), the deployment is single-instance, and `docs/ARCHITECTURE_DECISIONS.md`'s amended constraint scopes
 Redis to resume ingestion only. A dependency that brings its own middleware, storage
 abstraction and config surface would be more machinery than the problem justifies. This
 is ~60 lines with no new dependency and the same shape as the `_resend_cooldowns` dicts

@@ -464,7 +464,7 @@ free. A chained pipeline also adds each stage's latency in series, where Live st
 concurrently; a voice interview that stutters is not a degraded interview, it is a
 failed one.
 
-CLAUDE.md's rule that VoiceHR's interview-conduct engine is never rewritten applies
+docs/ARCHITECTURE_DECISIONS.md's rule that VoiceHR's interview-conduct engine is never rewritten applies
 directly, and the honest engineering answer is that **there is no fallback for interview
 conduct.** If Gemini Live is unavailable, the interview cannot start, and that is
 reported as such. Pretending otherwise — for instance by having a text model generate
@@ -557,14 +557,14 @@ out of the running container to confirm they arrived clean.
 
 Ollama runs on the **host**, not as a Compose service — it was already installed, needs
 no new container, and the default base URL is the Docker host gateway. This satisfies
-CLAUDE.md's "what concrete problem does this solve" test without adding infrastructure.
+docs/ARCHITECTURE_DECISIONS.md's "what concrete problem does this solve" test without adding infrastructure.
 
 ### 10.4 What was deliberately not built
 
 - **No retry loop in `OllamaProvider`.** It is only reached because the primary already
   failed; retrying a local model that is down adds latency to a request already failing.
 - **No provider health checks or circuit breaker.** No concrete caller needs one, and
-  CLAUDE.md forbids speculative abstraction.
+  docs/ARCHITECTURE_DECISIONS.md forbids speculative abstraction.
 - **No change to scoring.** The fallback substitutes only text and structured
   extraction. `final_score`, `qualified`, thresholds, workflow state and recruiter
   decisions remain deterministic code, exactly as before — the LLM boundary did not move.

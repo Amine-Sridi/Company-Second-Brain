@@ -3,7 +3,7 @@ services/resume-intelligence/jobs.py
 -------------------------------------
 The ARQ worker that runs resume ingestion off the request path.
 
-Why this exists (see CLAUDE.md's amended constraint and
+Why this exists (see docs/ARCHITECTURE_DECISIONS.md's amended constraint and
 SCALING_AND_FUTURE_IMPROVEMENTS.md): `POST /v1/resumes` `await`ed the whole extraction
 pipeline -- a ~10s Gemini call -- *inside the HTTP request*, holding one worker per CV.
 Against the stated target of 100,000 CVs/day (~3.5/s over a working day) that ceiling is

@@ -16,7 +16,7 @@ application untouched by this feature.
 (db.create_application) rather than read live from `jobs` on every request -- `jobs`'
 requirement is mutable (see the new PATCH .../language-requirement endpoint), so an
 old application's already-reported gate result must not silently change if a job's
-requirement is edited after the fact (see CLAUDE.md's reproducibility rule, applied
+requirement is edited after the fact (see docs/ARCHITECTURE_DECISIONS.md's reproducibility rule, applied
 here the same way MatchResult already snapshots candidate/threshold data).
 
 The *assessed* language/CEFR are not new columns: they already live inside

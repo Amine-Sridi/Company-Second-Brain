@@ -4,14 +4,14 @@ backend/core/rate_limit.py
 A small in-process sliding-window rate limiter.
 
 A deliberate copy of `shared/rate_limit.py`, not an import of it. VoiceHR is
-self-contained by design -- it imports nothing from `shared/` -- and `CLAUDE.md` is
+self-contained by design -- it imports nothing from `shared/` -- and `docs/ARCHITECTURE_DECISIONS.md` is
 explicit that duplication across these independent services is acceptable and often
 preferable to a premature shared abstraction. Sixty lines duplicated is cheaper than
 making VoiceHR depend on the shared package for the first time.
 
 Why hand-rolled rather than SlowAPI: this project has exactly two endpoints that need
 limiting (an unauthenticated login and, in VoiceHR, some unauthenticated bearer-token
-routes), the deployment is single-instance, and `CLAUDE.md`'s amended constraint scopes
+routes), the deployment is single-instance, and `docs/ARCHITECTURE_DECISIONS.md`'s amended constraint scopes
 Redis to resume ingestion only. A dependency that brings its own middleware, storage
 abstraction and config surface would be more machinery than the problem justifies. This
 is ~60 lines with no new dependency and the same shape as the `_resend_cooldowns` dicts

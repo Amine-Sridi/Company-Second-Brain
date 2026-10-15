@@ -1,0 +1,31 @@
+1
+00:00:00,400 --> 00:00:07,410
+Hiring runs on documents and judgment. This platform organizes the documents, and leaves the judgment to the recruiter.
+
+2
+00:00:08,000 --> 00:00:15,060
+A recruiter signs in and uploads a resume. Gemini extracts the profile, and only an anonymous version moves forward.
+
+3
+00:00:20,533 --> 00:00:30,053
+Then a job description. Gemini structures it, and a deterministic engine ranks every candidate. The model never decides who qualifies; it only explains.
+
+4
+00:00:31,500 --> 00:00:37,580
+The recruiter selects the best match and sends an invitation. The candidate receives a secure link by email.
+
+5
+00:00:48,067 --> 00:00:56,237
+Sarah, a voice interviewer, asks about the candidate's experience and follows up when an answer is thin. Everything is transcribed live.
+
+6
+00:00:58,800 --> 00:01:07,720
+Once the interview ends, the assessment returns to the workflow: a language level from the transcript, with strengths and concerns. The recruiter makes the final decision.
+
+7
+00:01:09,700 --> 00:01:15,500
+Every match lives in a knowledge graph, in two dimensions or three, and every step stays auditable.
+
+8
+00:01:17,200 --> 00:01:20,360
+From resume to decision, the recruiter always decides.

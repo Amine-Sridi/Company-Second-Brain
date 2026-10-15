@@ -221,7 +221,7 @@ service's own `alembic/env.py` in this platform.
   with its own service-key credential. That workflow itself is explicitly not implemented.
 - **No skill taxonomy or synonym resolution.** Skills are deduped only by exact
   (case-insensitive) match — "JS" and "Javascript" are kept as distinct entries. This is a
-  deliberate scope boundary (see the project's own CLAUDE.md), not an oversight.
+  deliberate scope boundary (see the project's own docs/ARCHITECTURE_DECISIONS.md), not an oversight.
 - **No fuzzy candidate deduplication.** Dedup is exact-normalized-email only. A candidate
   who reapplies with a different email is never merged with their existing record —
   intentional, to avoid ever incorrectly combining two different people.

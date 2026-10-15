@@ -9,7 +9,7 @@ currently doesn't." Runs immediately after Gemini's JD structuring
 matched -- normalizes the extraction for storage/display, then flags (never
 blocks) anything that looks unreliable.
 
-Deliberately narrow, per CLAUDE.md's "no infra ahead of demonstrated need": this
+Deliberately narrow, per docs/ARCHITECTURE_DECISIONS.md's "no infra ahead of demonstrated need": this
 module never calls Gemini itself, never re-scores anything, and never
 determines `final_score`/`qualified`/threshold comparisons -- `scoring.py`
 remains the only place those are decided, unchanged and untouched by this

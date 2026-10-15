@@ -1112,7 +1112,7 @@ def accept_application(
     proceed to the state-machine transition below. This is deliberately checked only
     here, never in reject_application -- a recruiter can always say no regardless of
     the gate, and this is a resume-scoring-independent second-stage screen, not a
-    change to MatchResult/qualified (see CLAUDE.md, this module's own scoring rules).
+    change to MatchResult/qualified (see docs/ARCHITECTURE_DECISIONS.md, this module's own scoring rules).
     """
     application = get_application(db, application_id)
     if application is None:
@@ -1449,7 +1449,7 @@ async def cancel_interview_round_endpoint(
 
 
 # In-memory per-round cooldown for explicit interview-round notification resends --
-# a single-instance deployment need (no Redis, per CLAUDE.md's infra constraints),
+# a single-instance deployment need (no Redis, per docs/ARCHITECTURE_DECISIONS.md's infra constraints),
 # the same pattern _resend_cooldowns already uses for POST .../resend-invite. Guards
 # against a double-click triggering more than one real Resend send in quick
 # succession; the 'scheduled'-only status check below is the real authority on
@@ -1853,7 +1853,7 @@ async def invite_application(
 
 
 # In-memory per-application cooldown for explicit resend requests -- a single-instance
-# deployment need (no Redis, per CLAUDE.md's infra constraints), not a persisted field
+# deployment need (no Redis, per docs/ARCHITECTURE_DECISIONS.md's infra constraints), not a persisted field
 # or new workflow status. Guards against a double-click (or an impatient repeated
 # click) triggering more than one real provider send in quick succession; RWS's own
 # 'invited'-only status check above is the real authority on *whether* a resend is
@@ -1942,7 +1942,7 @@ async def refresh_interview_result(
     recruiter can reach is the negative one, with nothing on screen explaining why.
     This is the way out, and it is deliberately a manual, recruiter-triggered action
     rather than a retry queue or reconciliation poller (both explicitly out of scope
-    per CLAUDE.md).
+    per docs/ARCHITECTURE_DECISIONS.md).
 
     Also the delivery path for a *corrected* result after an admin re-evaluation in
     VoiceHR (see db.record_interview_result on why an already-'interviewed'

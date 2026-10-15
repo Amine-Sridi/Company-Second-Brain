@@ -22,7 +22,7 @@ services:
       timeout: 5s
       retries: 10
 
-  # Queue broker for resume ingestion only (see CLAUDE.md's amended constraint).
+  # Queue broker for resume ingestion only (see docs/ARCHITECTURE_DECISIONS.md's amended constraint).
   # Deliberately NOT a source of truth and it never holds PII: jobs carry an opaque job
   # id, durable job state lives in Postgres (resume_intel.ingest_jobs), and the uploaded
   # file stays on a volume only Resume Intelligence and its worker mount. A flushed Redis

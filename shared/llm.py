@@ -387,7 +387,7 @@ class OllamaProvider(LLMProvider):
 
     Chosen as the runtime because it was already installed on the target machine and
     needs no new service in docker-compose: it runs on the host, and containers reach
-    it through the host gateway. That satisfies CLAUDE.md's "what concrete problem
+    it through the host gateway. That satisfies docs/ARCHITECTURE_DECISIONS.md's "what concrete problem
     does this solve" test without adding infrastructure.
 
     generate_structured passes the Pydantic model's JSON Schema to Ollama's `format`,

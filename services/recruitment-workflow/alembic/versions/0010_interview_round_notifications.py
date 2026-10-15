@@ -7,7 +7,7 @@ Create Date: 2026-09-21
 Phase 1 of automating human interview scheduling (see handoff.md): adds the fields
 needed to notify a candidate and an interviewer by email once a recruiter schedules
 a technical/managerial round, without inventing an interviewer user-management
-system (CLAUDE.md non-negotiable) -- interviewer_email is plain text on the round
+system (docs/ARCHITECTURE_DECISIONS.md non-negotiable) -- interviewer_email is plain text on the round
 itself, exactly like interviewer_name already is, not a foreign key to a directory
 that doesn't exist.
 

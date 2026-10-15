@@ -6,7 +6,7 @@ target stops being an estimate.
 
 Every scaling threshold written in SCALING_AND_FUTURE_IMPROVEMENTS.md is currently
 *reasoned*, not measured -- the document says so in its own caveats section. This script
-replaces the most important one with a number, and `CLAUDE.md` now makes that number the
+replaces the most important one with a number, and `docs/ARCHITECTURE_DECISIONS.md` now makes that number the
 precondition for adding Prometheus at all ("deferred until there is a throughput number
 worth tuning").
 

@@ -333,7 +333,7 @@ async def resend_rws_result(
     leaving reject available. That is a silently one-sided outcome with no in-product
     way out. This endpoint is the way out, and is deliberately the whole fix rather
     than a retry queue or a reconciliation poller (both explicitly out of scope per
-    CLAUDE.md): the data is already here, so re-sending it is a single call.
+    docs/ARCHITECTURE_DECISIONS.md): the data is already here, so re-sending it is a single call.
 
     Costs no Gemini quota -- the assessment is rebuilt from the stored `reports` row
     (rws_client.scores_from_report_row), never re-evaluated. Use the admin retry

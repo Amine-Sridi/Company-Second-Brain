@@ -9,7 +9,7 @@ hiring pipeline, rather than the ones that merely make it work on a good day:
   * a CV is never lost because Redis was down -- the durable row is written and
     committed BEFORE anything is enqueued;
   * only an opaque job id crosses into Redis -- never the file, never any extracted
-    field (CLAUDE.md's PII boundary);
+    field (docs/ARCHITECTURE_DECISIONS.md's PII boundary);
   * job state is read from Postgres, not from the broker;
   * the queue is at-least-once, so a redelivered job must not re-pay for a Gemini call.
 

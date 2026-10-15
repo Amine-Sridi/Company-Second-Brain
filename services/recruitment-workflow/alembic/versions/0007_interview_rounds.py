@@ -16,7 +16,7 @@ for jobs_language_requirement_paired_check: a round only has a pass/fail/needs_r
 verdict once it's `completed`; `scheduled`/`cancelled` rounds always have a NULL
 outcome. `interviewer_name` is a plain TEXT column, not a foreign key -- this project
 has exactly one seeded recruiter account and no interviewer/user directory
-(CLAUDE.md's non-negotiable decisions), so there is no table to reference.
+(docs/ARCHITECTURE_DECISIONS.md's non-negotiable decisions), so there is no table to reference.
 """
 from typing import Sequence, Union
 

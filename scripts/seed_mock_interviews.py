@@ -243,11 +243,9 @@ def interviewable() -> list[dict]:
     candidate_name/candidate_email is this project's one documented PII exception, because
     it owns sending the candidate their link and greeting them by name.
     """
-    # Mock-titled jobs are excluded deliberately, and not just for tidiness: creating an
-    # application against one would make
-    # scripts/sql/clean_mock_graph_data.sql skip it, because that script spares any job
-    # that has applications. Interviewing on a smoke-test job would therefore pin it into
-    # the graph permanently -- the two scripts would quietly fight each other.
+    # Mock-titled jobs are excluded deliberately, and not just for tidiness: an application
+    # against a smoke-test job would pin that job into the demo data and the graph, where
+    # it could no longer be removed without also deleting application history.
     rows = psql("""
         SELECT DISTINCT ON (m.candidate_id)
                m.candidate_id::text, m.id::text, j.id::text, j.title,

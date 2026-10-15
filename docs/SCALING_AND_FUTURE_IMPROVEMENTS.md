@@ -3,7 +3,7 @@
 ## How to read this document
 
 This is **not** a wishlist, and it is deliberately not a list of technologies to adopt.
-`CLAUDE.md` sets the rule this document obeys: every piece of infrastructure must answer
+`docs/ARCHITECTURE_DECISIONS.md` sets the rule this document obeys: every piece of infrastructure must answer
 *"what concrete problem does this solve in this project"*, and "it's more scalable" is not
 an answer. Adding Kafka to a system with 8 candidates would be a defect, not an
 improvement.
@@ -76,7 +76,7 @@ complaint, or workers saturating under concurrent uploads.
 
 ### What to add
 
-**A real job queue.** The honest recommendation here is the one `CLAUDE.md` currently
+**A real job queue.** The honest recommendation here is the one `docs/ARCHITECTURE_DECISIONS.md` currently
 forbids, and it is forbidden *correctly* for now:
 
 - **Recommended: [ARQ](https://arq-docs.helpmanual.io/) or Celery + Redis.** ARQ is the
@@ -265,7 +265,7 @@ usability floor, including a 7 B model).
 
 ## 7. VoiceHR — the least scalable component
 
-This is the honest weak point, and it is weak by deliberate decision (`CLAUDE.md` forbids
+This is the honest weak point, and it is weak by deliberate decision (`docs/ARCHITECTURE_DECISIONS.md` forbids
 migrating it), so the goal here is to name the ceiling rather than pretend it is not there.
 
 ### SQLite
@@ -504,7 +504,7 @@ why you *didn't* add something is often the stronger answer.
 - **Current volumes are tiny** (8 candidates, 110 match results). Nothing here is urgent.
   The purpose is to make the *order* of work clear when it becomes urgent, and to record
   the cheap-now/expensive-later items — the embedding versioning being the clearest.
-- **The VoiceHR recommendations conflict with `CLAUDE.md`'s rule** that its persistence is
+- **The VoiceHR recommendations conflict with `docs/ARCHITECTURE_DECISIONS.md`'s rule** that its persistence is
   never migrated. That rule is correct for the project as scoped; §7 describes what would
   have to change if that scope ever changes, and should be treated as a conditional, not a
   proposal to act on now.
@@ -626,4 +626,4 @@ matches cheaply (partition drop is O(1); `DELETE` of millions of rows is not).
 
 Until then the honest engineering answer is that this table needs nothing: it is small,
 correctly indexed, and growing slowly. Adding the complexity now would be exactly the
-"it's more scalable" reasoning `CLAUDE.md` rejects.
+"it's more scalable" reasoning `docs/ARCHITECTURE_DECISIONS.md` rejects.

@@ -2,7 +2,7 @@
 
 VoiceHR is a pre-existing, working AI voice-interview application. Its interview engine
 (`backend/services/gemini_live.py`) and SQLite persistence are **not** owned by this monorepo
-and are not rewritten or redesigned here — per `CLAUDE.md`'s standing rule, only its API
+and are not rewritten or redesigned here — per `docs/ARCHITECTURE_DECISIONS.md`'s standing rule, only its API
 surface is extended for integration with the Recruitment Workflow Service (RWS). VoiceHR
 originally shipped with more than this needed: an alternate local Whisper/Ollama/Kokoro
 interview-conduct pipeline, a Vapi phone-call integration, Anthropic/Ollama evaluator options,
@@ -10,7 +10,7 @@ and an admin-UI interview-creation flow that duplicated (and could not safely re
 own service-key-protected `POST /api/invite` call. None of these were part of the Company
 Second Brain architecture (Gemini is this project's sole AI provider; RWS is the sole trigger
 for interview creation), and all were removed as dead weight across two repository cleanup
-passes — see `handoff.md` for that history. Everything documented below
+passes (see the git history). Everything documented below
 reflects the actual current implementation in `backend/`, not a plan.
 
 ## Role inside Company Second Brain
@@ -140,7 +140,7 @@ link points to.
 - **Failure is loud, not silent**: `deliver_invitation_email()` raises on any failure (provider
   rejection, network error/timeout, `RESEND_API_KEY` unset) and that exception becomes this
   endpoint's own response — RWS's caller (`voicehr_client.invite_candidate`) sees a non-2xx and
-  never marks the application invited (see `handoff.md`). `invite_email_error` is persisted
+  never marks the application invited. `invite_email_error` is persisted
   purely as VoiceHR's own internal diagnostic (cleared on the next successful send); it is never
   included in the email itself or returned to RWS/the browser.
 - **One implementation, two call sites**: the same `deliver_invitation_email()` also backs the
@@ -212,7 +212,7 @@ changed that model (no expiry has been added to `report_token`; see Known limita
 
 These are deliberately separate routes, not one route with a query parameter — they used to
 collide (both registered at `/health`, with `main.py`'s trivial one silently shadowing the
-richer one) until that was fixed; see `handoff.md`.
+richer one) until that was fixed.
 
 ## Resend email configuration
 
@@ -266,10 +266,11 @@ See `.env.example` for the full, authoritative list with defaults. Grouped by co
   (`backend/api/routes/interview.py`) still exists as an explicit, unauthenticated,
   always-resends primitive, now backed by the same delivery implementation as the automatic
   path above, but is not currently called from any frontend.
-- **`RESEND_API_KEY` is not configured in this environment** (checked during the session that
-  added automatic delivery, above). Without it, every `POST /api/invite` call now fails
-  (`500`, `_send_email` raises immediately) — a real, current gap, not a hypothetical one; see
-  `handoff.md`'s Known Limitations for the demo-readiness impact.
+- **Invitation email delivery depends on Resend.** Without `RESEND_API_KEY`, `POST /api/invite`
+  fails with a `500`. With a key but no verified sending domain, Resend's sandbox only delivers to
+  the address its own account is registered under, so an invitation to any other candidate address
+  is rejected and the invite fails with a clean `502` (see "Resend email configuration" above).
+  Verifying a sending domain is the fix; it is an account setting, not a code change.
 - **VoiceHR's own logging stays plain-text**, with no correlation IDs and no JSON formatting —
   unlike the other three services in this project. Deliberate: VoiceHR's architecture is kept
   unchanged, and `shared/observability.py` isn't importable here (VoiceHR's Docker image

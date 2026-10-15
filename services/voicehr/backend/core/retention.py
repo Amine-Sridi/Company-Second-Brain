@@ -4,7 +4,7 @@ backend/core/retention.py
 Age-based removal of candidate PII, keeping the recruiter's decision record.
 
 This is **retention / data minimisation, not GDPR erasure-on-request**, which
-`CLAUDE.md` explicitly defers. It acts on age, never on a named candidate, so it needs
+`docs/ARCHITECTURE_DECISIONS.md` explicitly defers. It acts on age, never on a named candidate, so it needs
 none of the cross-service identity resolution a right-to-be-forgotten flow requires.
 Nothing schedules it: `scripts/retention_sweep.py` invokes it, dry-run by default.
 

@@ -51,6 +51,7 @@ are driven from inside the containers.
 """
 from __future__ import annotations
 
+import os
 import argparse
 import glob
 import hashlib
@@ -273,7 +274,7 @@ def pseudonymise(candidates: list[Candidate], verified_email: str | None,
     # Its NAME is overridden to match, not left as a pseudonym. This is the one identity
     # in the set that is deliberately real -- the project owner's own address, used so the
     # invite is deliverable -- and pairing a generated name with it
-    # ("Aurélie Blanc <aminesridi58@gmail.com>") reads as a data-integrity bug on screen,
+    # ("Aurélie Blanc <owner@example.org>") reads as a data-integrity bug on screen,
     # which is the opposite of what a demo should show.
     if verified_email and candidates:
         candidates[0].alias_email = verified_email
@@ -672,12 +673,15 @@ def main() -> int:
                          "of the automatic skill-overlap selection; useful when the demo "
                          "needs a specific, legible job on screen")
     ap.add_argument("--top-k", type=int, default=20, help="top_k per job submission")
-    ap.add_argument("--verified-email", default="aminesridi58@gmail.com",
-                    help="given to the strongest candidate so the live Invite works; "
-                         "pass '' to skip")
-    ap.add_argument("--verified-name", default="Amine Sridi",
+    ap.add_argument("--verified-email", default=os.environ.get("DEMO_VERIFIED_EMAIL", ""),
+                    help="an address the email provider can deliver to (for Resend without a "
+                         "verified domain: the account owner's own address), given to the "
+                         "strongest candidate so the live Invite works; also read from "
+                         "DEMO_VERIFIED_EMAIL; empty skips it")
+    ap.add_argument("--verified-name", default=os.environ.get("DEMO_VERIFIED_NAME", ""),
                     help="the name paired with --verified-email, so the one deliberately "
-                         "real identity is internally consistent on screen")
+                         "real identity is internally consistent on screen; also read from "
+                         "DEMO_VERIFIED_NAME")
     ap.add_argument("--show", type=int, default=2,
                     help="print this many generated CVs in full (pseudonymised)")
     args = ap.parse_args()
@@ -745,8 +749,6 @@ def main() -> int:
 
     if not args.apply:
         print("\n  Nothing was created. Re-run with --apply to seed.")
-        print("  Run the cleanup first if the benchmark rows are still present:")
-        print("    scripts/sql/clean_benchmark_rows.sql")
         return 0
 
     api_key = env_value(ROOT / "services" / "resume-intelligence" / ".env", "SERVICE_API_KEY")

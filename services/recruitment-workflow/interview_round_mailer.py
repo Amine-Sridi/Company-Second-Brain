@@ -9,7 +9,7 @@ POST to Resend, no retry/circuit-breaker machinery) rather than sharing code wit
 it: VoiceHR's mailer is scoped to its own secure-interview-link email; this module
 is scoped to interview_rounds' own scheduling/interviewer content -- two different
 concerns owned by two different services. Duplicating ~30 lines here is the
-CLAUDE.md-sanctioned choice over a shared abstraction with exactly one caller each.
+docs/ARCHITECTURE_DECISIONS.md-sanctioned choice over a shared abstraction with exactly one caller each.
 
 Never persists a candidate's email/name -- the caller (main.py) fetches it fresh
 from Resume Intelligence per send and passes it straight through as plain function
@@ -203,7 +203,7 @@ async def _send_email(
     raises is persisted verbatim by main.py into
     `recruitment.interview_rounds.notification_error` and returned in the API
     response -- and when `to` is the candidate, that would put candidate PII into
-    RWS's own database, which CLAUDE.md forbids ("Candidate PII lives only in
+    RWS's own database, which docs/ARCHITECTURE_DECISIONS.md forbids ("Candidate PII lives only in
     Resume Intelligence"). Resend's own rejection bodies echo the recipient
     address back too, so the body cannot be included either. The HTTP status code
     is enough to tell the real cases apart (403 = sender/recipient not permitted

@@ -1,5 +1,10 @@
 # Company Second Brain — Project Audit & Improvement Proposal
 
+> **Note on references.** This audit predates the repository cleanup. The `CLAUDE.md`, `handoff.md`
+> and `FRONTEND_HANDOFF.md` files it cites were removed: the design rules of `CLAUDE.md` now live in
+> [ARCHITECTURE_DECISIONS.md](ARCHITECTURE_DECISIONS.md), and the two status journals remain in the git
+> history. Finding ids such as `M2` and `M13` are cited from source comments.
+
 > ## Implementation status
 >
 > **Phase 1 (Integrity & privacy) — DONE, 2026-09-23.** See `handoff.md`'s

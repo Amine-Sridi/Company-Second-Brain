@@ -52,7 +52,7 @@ class Settings(BaseSettings):
     service_api_key: str = "changeme-resume-intelligence-key"
     log_level: str = "INFO"
 
-    # Gemini is the sole AI provider for this project (see CLAUDE.md).
+    # Gemini is the sole AI provider for this project (see docs/ARCHITECTURE_DECISIONS.md).
     gemini_api_key: str = ""
     gemini_model: str = "gemini-3.6-flash"
 
@@ -69,7 +69,7 @@ class Settings(BaseSettings):
     local_llm_text_model: str = "granite4.1:3b"
     local_llm_structured_model: str = "granite4.1:3b"
 
-    # Queue broker for ingestion (see CLAUDE.md's amended constraint). Redis is a broker
+    # Queue broker for ingestion (see docs/ARCHITECTURE_DECISIONS.md's amended constraint). Redis is a broker
     # and cache only -- never a source of truth and it never receives PII.
     redis_url: str = "redis://redis:6379"
     # Raw uploads (PII) land here while queued. Mounted only by this service and its
@@ -351,7 +351,7 @@ async def enqueue_resume(
         pool = await create_pool(RedisSettings.from_dsn(settings.redis_url))
         try:
             # Only the opaque job id crosses into Redis -- never the file, never any
-            # extracted field. See CLAUDE.md's amended constraint.
+            # extracted field. See docs/ARCHITECTURE_DECISIONS.md's amended constraint.
             await pool.enqueue_job("ingest_resume_job", str(job.id))
         finally:
             await pool.close()

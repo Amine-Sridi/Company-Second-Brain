@@ -3,7 +3,7 @@ scripts/retention_sweep.py
 ---------------------------
 Removes aged candidate PII from VoiceHR while keeping the recruiter's decision record.
 
-**Read this before running it.** `CLAUDE.md` explicitly defers "GDPR erasure automation",
+**Read this before running it.** `docs/ARCHITECTURE_DECISIONS.md` explicitly defers "GDPR erasure automation",
 and this deliberately is not that:
 
 * It is **retention / data minimisation**, not erasure-on-request. It acts on *age*, not

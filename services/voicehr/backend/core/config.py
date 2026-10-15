@@ -6,7 +6,7 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 
-    # Gemini is the sole AI provider for this project (see CLAUDE.md) -- both for
+    # Gemini is the sole AI provider for this project (see docs/ARCHITECTURE_DECISIONS.md) -- both for
     # interview evaluation and for the Gemini Live interview-conduct pipeline.
     gemini_api_key: Optional[str] = None
     gemini_model: str = "gemini-2.5-flash"
